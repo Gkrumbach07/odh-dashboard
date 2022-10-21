@@ -1,0 +1,9 @@
+check:
+  - thoth-build
+build:
+  build-stratergy: Dockerfile # Allowed values: Source, Dockerfile, Containerfile (default: Source)
+  dockerfile-path: Dockerfile
+  registry: "quay.io"
+  registry-org: "thoth-station"
+  registry-project: "odh-dashboard"
+  registry-secret: "thoth-station-thoth-pusher-secret"

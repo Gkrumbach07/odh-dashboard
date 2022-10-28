@@ -45,7 +45,7 @@ $ npm run make:login
   $ npm run test
   ```
 
-You can apply lint auto-fixes with 
+You can apply lint auto-fixes with
   ```
   $ npm run test:fix
   ```

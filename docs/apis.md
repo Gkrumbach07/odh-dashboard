@@ -41,7 +41,7 @@ The backend for the dashboard is node REST server that performs k8s calls on beh
 
 **GET** - Retrieves a specific notebook by it's id.  This returns a single [notebook object](https://github.com/opendatahub-io/odh-dashboard/blob/bf49dc23cd4b5477111ad4590e401a423186fa54/backend/src/types.ts#L259)
 
-**DELETE** - Deletes a specific notebook image using it's notebook id.  
+**DELETE** - Deletes a specific notebook image using it's notebook id.
 
 **PUT** - Updates a specific notebook by it's id.  The payload should be the updated fields as shown in a [notebook object](https://github.com/opendatahub-io/odh-dashboard/blob/bf49dc23cd4b5477111ad4590e401a423186fa54/backend/src/types.ts#L259)
 
@@ -63,4 +63,4 @@ The backend for the dashboard is node REST server that performs k8s calls on beh
 
 ### /validate-isv/results
 
-**GET** - Retrieves the current status of an ISV. 
+**GET** - Retrieves the current status of an ISV.

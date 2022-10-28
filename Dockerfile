@@ -43,5 +43,3 @@ ENV NPM_CONFIG_NODEDIR=/usr
 RUN /usr/libexec/s2i/assemble
 
 CMD /usr/libexec/s2i/run
-
-

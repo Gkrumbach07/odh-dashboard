@@ -1,6 +1,6 @@
 # Dashboard
 
-The Open Data Hub Dashboard component installs a UI which 
+The Open Data Hub Dashboard component installs a UI which
 
 - Shows what's installed
 - Show's what's available for installation

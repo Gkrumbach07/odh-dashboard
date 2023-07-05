@@ -45,6 +45,9 @@ jobs:
       - name: Install Playwright Browsers
         working-directory: ./frontend
         run: npx playwright install --with-deps
+      - name: Install @esbuild/linux-x64
+        working-directory: ./frontend
+        run: npm i @esbuild/linux-x64
       - name: Test
         if: ${{ success() }}
         run: npm run test

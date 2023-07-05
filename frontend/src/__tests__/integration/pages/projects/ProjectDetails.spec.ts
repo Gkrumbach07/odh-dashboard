@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('Empty project', async ({ page }) => {
+test('Empty project test', async ({ page }) => {
   await page.goto(
     './iframe.html?args=&id=tests-integration-pages-projects-projectdetails--empty-details-page&viewMode=story',
   );

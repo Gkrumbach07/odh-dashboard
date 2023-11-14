@@ -1,10 +1,14 @@
 import * as fs from 'fs';
 import fp from 'fastify-plugin';
-import { FastifyInstance } from 'fastify';
+import fastify, { FastifyInstance } from 'fastify';
 import * as jsYaml from 'js-yaml';
 import * as k8s from '@kubernetes/client-node';
 import { DEV_MODE } from '../utils/constants';
-import { cleanupGPU, initializeWatchedResources } from '../utils/resourceUtils';
+import {
+  cleanupGPU,
+  cleanupOldAcceleratorProfileVersion,
+  initializeWatchedResources,
+} from '../utils/resourceUtils';
 import { User } from '@kubernetes/client-node/dist/config_types';
 
 const CONSOLE_CONFIG_YAML_FIELD = 'console-config.yaml';
@@ -86,6 +90,14 @@ export default fp(async (fastify: FastifyInstance) => {
   initializeWatchedResources(fastify);
 
   cleanupGPU(fastify).catch((e) =>
+    fastify.log.error(
+      `Unable to fully convert GPU to use accelerator profiles. ${
+        e.response?.body?.message || e.message || e
+      }`,
+    ),
+  );
+
+  cleanupOldAcceleratorProfileVersion(fastify).catch((e) =>
     fastify.log.error(
       `Unable to fully convert GPU to use accelerator profiles. ${
         e.response?.body?.message || e.message || e

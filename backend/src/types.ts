@@ -128,6 +128,27 @@ export type K8sResourceBase = {
   kind?: string;
 };
 
+export type K8sCustomResourceDefinition = K8sResourceCommon & {
+  spec: {
+    group: string;
+    scope: string
+    names: {
+      plural: string
+      kind: string
+    }
+    versions: {
+      name: string;
+      served: boolean;
+      storage: boolean;
+      deprecated?: boolean;
+    }[]
+  };
+  status?: {
+    storedVersions: string[];
+  };
+}
+
+
 export type K8sResourceCommon = {
   metadata?: {
     name?: string;

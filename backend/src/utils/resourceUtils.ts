@@ -8,6 +8,7 @@ import {
   BuildStatus,
   ConsoleLinkKind,
   DashboardConfig,
+  K8sCustomResourceDefinition,
   K8sResourceCommon,
   KfDefApplication,
   KfDefResource,
@@ -631,6 +632,62 @@ export const getBuildStatuses = (): BuildStatus[] => {
 
 export const getConsoleLinks = (): ConsoleLinkKind[] => {
   return consoleLinksWatcher.getResources();
+};
+
+/**
+ *  Removes AcceleratorProfile version v1alpha1 from the CRD if v1 is detected
+ */
+export const cleanupOldAcceleratorProfileVersion = async (
+  fastify: KubeFastifyInstance,
+): Promise<void> => {
+  try {
+    // Fetch the current CRD to check if both versions exist
+    const crdResponse = await fastify.kube.customObjectsApi.getClusterCustomObject(
+      'apiextensions.k8s.io',
+      'v1',
+      'customresourcedefinitions',
+      'acceleratorprofiles.dashboard.opendatahub.io',
+    );
+    const crd = crdResponse.body as K8sCustomResourceDefinition;
+
+    const v1Exists = crd.spec.versions.some((v: { name: string }) => v.name === 'v1');
+    const v1alphaExists = crd.spec.versions.some((v: { name: string }) => v.name === 'v1alpha');
+
+    if (!v1Exists) {
+      fastify.log.info(
+        "Accelerator Profile CRD version v1alpha migration: The 'v1' version does not exist on the CRD. No action taken.",
+      );
+    }
+
+    if (v1alphaExists) {
+      // Now remove the 'v1alpha' version from spec.versions
+      const versions = crd.spec.versions.filter((v: { name: string }) => v.name !== 'v1alpha');
+      await fastify.kube.customObjectsApi.patchClusterCustomObject(
+        'apiextensions.k8s.io',
+        'v1',
+        'customresourcedefinitions',
+        'acceleratorprofiles.dashboard.opendatahub.io',
+        { spec: { versions } },
+        undefined,
+        undefined,
+        undefined,
+        { headers: { 'Content-Type': 'application/merge-patch+json' } },
+      );
+
+      fastify.log.info(
+        'Accelerator Profile CRD version v1alpha migration: Successfully converted all v1alpha CRs to v1 and removed v1alpha version from CRD.',
+      );
+    } else {
+      fastify.log.info(
+        'Accelerator Profile CRD version v1alpha migration: No v1alpha version found on the CRD. No action taken.',
+      );
+    }
+  } catch (error) {
+    throw new Error(
+      'Accelerator Profile CRD version v1alpha migration: Failed to convert CRs or update CRD. ' +
+        error.message,
+    );
+  }
 };
 
 /**

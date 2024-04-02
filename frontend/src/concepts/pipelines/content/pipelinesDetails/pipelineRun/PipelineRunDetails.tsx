@@ -36,6 +36,14 @@ import { usePipelineTaskTopology } from '~/concepts/pipelines/topology';
 import { PipelineRunType } from '~/pages/pipelines/global/runs/types';
 import { routePipelineRunsNamespace } from '~/routes';
 import PipelineJobReferenceName from '~/concepts/pipelines/content/PipelineJobReferenceName';
+import { usePipelineRunMlmdContext } from '~/concepts/pipelines/apiHooks/mlmd/usePipelineRunMlmdContext';
+import { useArtifactsByContext } from '~/concepts/pipelines/apiHooks/mlmd/useArtifactsByContext';
+import { useArtifactTypes } from '~/concepts/pipelines/apiHooks/mlmd/useArtifactTypes';
+import {
+  buildRocCurveConfig,
+  getClassificationMetricsArtifacts,
+} from '~/concepts/pipelines/content/artifacts/metrics/utils';
+import ROCCurve from '~/concepts/pipelines/content/artifacts/metrics/ROCCurve';
 
 const PipelineRunDetails: PipelineCoreDetailsPageComponent = ({ breadcrumbPath, contextPath }) => {
   const { runId } = useParams();
@@ -54,6 +62,17 @@ const PipelineRunDetails: PipelineCoreDetailsPageComponent = ({ breadcrumbPath, 
   const { taskMap, nodes } = usePipelineTaskTopology(
     version?.pipeline_spec,
     runResource ?? undefined,
+  );
+
+  const [context] = usePipelineRunMlmdContext(runId);
+  const [artifacts] = useArtifactsByContext(context);
+  const [artifactTypes] = useArtifactTypes();
+  const classificationMetricsArtifacts = getClassificationMetricsArtifacts(
+    artifacts,
+    artifactTypes,
+  );
+  const rocConfigs = classificationMetricsArtifacts.map((artifact) =>
+    buildRocCurveConfig(artifact),
   );
 
   const loaded = versionLoaded && runLoaded;
@@ -81,6 +100,7 @@ const PipelineRunDetails: PipelineCoreDetailsPageComponent = ({ breadcrumbPath, 
 
   return (
     <>
+      <ROCCurve configs={rocConfigs} />
       <Drawer isExpanded={!!selectedId}>
         <DrawerContent
           panelContent={

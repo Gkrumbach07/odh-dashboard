@@ -5,15 +5,9 @@ import {
   PipelineRunKFv2,
 } from '~/concepts/pipelines/kfTypes';
 import {
-  mockStatus,
-  mockDashboardConfig,
-  mockDataSciencePipelineApplicationK8sResource,
-  mockRouteK8sResource,
-  mockK8sResourceList,
   buildMockRunKF,
   buildMockPipelineV2,
   buildMockPipelineVersionV2,
-  mockProjectK8sResource,
   buildMockJobKF,
   buildMockExperimentKF,
 } from '~/__mocks__';
@@ -29,6 +23,7 @@ import {
 import { verifyRelativeURL } from '~/__tests__/cypress/cypress/utils/url.cy';
 
 import { getCorePipelineSpec } from '~/concepts/pipelines/getCorePipelineSpec';
+import { configIntercept, dspaIntercepts, projectsIntercept, statusIntercept } from './intercepts';
 
 const projectName = 'test-project-name';
 const mockPipeline = buildMockPipelineV2();
@@ -68,10 +63,10 @@ describe('Pipeline create runs', () => {
 
   it('renders the page with scheduled and active runs table data', () => {
     pipelineRunsGlobal.findSchedulesTab().click();
-    pipelineRunJobTable.getRowByName('Test job');
+    pipelineRunJobTable.getRowByName('Test job').find().should('exist');
 
     pipelineRunsGlobal.findActiveRunsTab().click();
-    activeRunsTable.getRowByName('Test run');
+    activeRunsTable.getRowByName('Test run').find().should('exist');
   });
 
   describe('Runs', () => {
@@ -85,6 +80,20 @@ describe('Pipeline create runs', () => {
           experiment,
         );
       });
+    });
+
+    it('switches to scheduled runs from triggered', () => {
+      // Mock experiments, pipelines & versions for form select dropdowns
+      createRunPage.mockGetExperiments(mockExperiments);
+      createRunPage.mockGetPipelines([mockPipeline]);
+      createRunPage.mockGetPipelineVersions([mockPipelineVersion], mockPipelineVersion.pipeline_id);
+
+      // Navigate to the 'Create run' page
+      pipelineRunsGlobal.findCreateRunButton().click();
+      verifyRelativeURL(`/pipelineRuns/${projectName}/pipelineRun/create`);
+      createRunPage.find();
+      createRunPage.findRunTypeSwitchLink().click();
+      cy.url().should('include', '?runType=scheduled');
     });
 
     it('creates an active run', () => {
@@ -477,6 +486,23 @@ describe('Pipeline create runs', () => {
       pipelineRunsGlobal.findSchedulesTab().click();
     });
 
+    it('switches to scheduled runs from triggered', () => {
+      // Mock experiments, pipelines & versions for form select dropdowns
+      createSchedulePage.mockGetExperiments(mockExperiments);
+      createSchedulePage.mockGetPipelines([mockPipeline]);
+      createSchedulePage.mockGetPipelineVersions(
+        [mockPipelineVersion],
+        mockPipelineVersion.pipeline_id,
+      );
+
+      // Navigate to the 'Create run' page
+      pipelineRunsGlobal.findScheduleRunButton().click();
+      verifyRelativeURL(`/pipelineRuns/${projectName}/pipelineRun/create?runType=scheduled`);
+      createSchedulePage.find();
+      createSchedulePage.findRunTypeSwitchLink().click();
+      cy.url().should('include', '?runType=active');
+    });
+
     it('creates a schedule', () => {
       const createRecurringRunParams: Partial<PipelineRunJobKFv2> = {
         display_name: 'New job',
@@ -708,18 +734,10 @@ describe('Pipeline create runs', () => {
 });
 
 const initIntercepts = () => {
-  cy.intercept('/api/status', mockStatus());
-  cy.intercept('/api/config', mockDashboardConfig({ disablePipelineExperiments: false }));
-  mockDspaIntercepts();
-
-  cy.intercept(
-    {
-      pathname: '/api/k8s/apis/project.openshift.io/v1/projects',
-    },
-    mockK8sResourceList([
-      mockProjectK8sResource({ k8sName: projectName, displayName: 'Test project filters' }),
-    ]),
-  );
+  statusIntercept();
+  configIntercept();
+  dspaIntercepts(projectName);
+  projectsIntercept([{ k8sName: projectName, displayName: 'Test project' }]);
 
   cy.intercept(
     {
@@ -735,39 +753,5 @@ const initIntercepts = () => {
       pathname: '/api/proxy/apis/v2beta1/runs',
     },
     { runs: initialMockRuns, total_size: initialMockRuns.length },
-  );
-};
-
-const mockDspaIntercepts = () => {
-  cy.intercept(
-    {
-      pathname: `/api/k8s/apis/datasciencepipelinesapplications.opendatahub.io/v1alpha1/namespaces/${projectName}/datasciencepipelinesapplications/pipelines-definition`,
-    },
-    mockDataSciencePipelineApplicationK8sResource({ namespace: projectName }),
-  );
-
-  cy.intercept(
-    {
-      pathname: `/api/k8s/apis/datasciencepipelinesapplications.opendatahub.io/v1alpha1/namespaces/${projectName}/datasciencepipelinesapplications`,
-    },
-    mockK8sResourceList([mockDataSciencePipelineApplicationK8sResource({})]),
-  );
-
-  cy.intercept(
-    {
-      method: 'GET',
-      pathname: `/api/k8s/apis/datasciencepipelinesapplications.opendatahub.io/v1alpha1/namespaces/${projectName}/datasciencepipelinesapplications/dspa`,
-    },
-    mockDataSciencePipelineApplicationK8sResource({}),
-  );
-
-  cy.intercept(
-    {
-      pathname: `/api/k8s/apis/route.openshift.io/v1/namespaces/${projectName}/routes/ds-pipeline-dspa`,
-    },
-    mockRouteK8sResource({
-      notebookName: 'ds-pipeline-pipelines-definition',
-      namespace: projectName,
-    }),
   );
 };

@@ -1,25 +1,41 @@
 import * as React from 'react';
-import { Bullseye, Flex, FlexItem, Spinner } from '@patternfly/react-core';
+import {
+  Bullseye,
+  EmptyState,
+  EmptyStateBody,
+  EmptyStateHeader,
+  EmptyStateIcon,
+  Spinner,
+  Stack,
+  StackItem,
+} from '@patternfly/react-core';
+import { WrenchIcon } from '@patternfly/react-icons';
+import { useUser } from '~/redux/selectors';
 import { DistributedWorkloadsContext } from '~/concepts/distributedWorkloads/DistributedWorkloadsContext';
 import EmptyStateErrorMessage from '~/components/EmptyStateErrorMessage';
-import { ResourceUsage } from './sections/ResourceUsage';
+import { RequestedResources } from './sections/RequestedResources';
 import { TopResourceConsumingWorkloads } from './sections/TopResourceConsumingWorkloads';
-import { WorkloadResourceMetrics } from './sections/WorkloadResourceMetrics';
+import { WorkloadResourceMetricsTable } from './sections/WorkloadResourceMetricsTable';
 import { DWSectionCard } from './sections/DWSectionCard';
 
 const GlobalDistributedWorkloadsProjectMetricsTab: React.FC = () => {
-  const { projectCurrentMetrics } = React.useContext(DistributedWorkloadsContext);
+  const { isAdmin } = useUser();
 
-  if (projectCurrentMetrics.error) {
+  const { clusterQueue, localQueues } = React.useContext(DistributedWorkloadsContext);
+  const requiredFetches = [clusterQueue, localQueues];
+  const error = requiredFetches.find((f) => !!f.error)?.error;
+  const loaded = requiredFetches.every((f) => f.loaded);
+
+  if (error) {
     return (
       <EmptyStateErrorMessage
-        title="Error loading workload metrics"
-        bodyText={projectCurrentMetrics.error.message}
+        title="Error loading distributed workload metrics"
+        bodyText={error.message}
       />
     );
   }
 
-  if (!projectCurrentMetrics.loaded) {
+  if (!loaded) {
     return (
       <Bullseye style={{ minHeight: 150 }}>
         <Spinner />
@@ -27,44 +43,48 @@ const GlobalDistributedWorkloadsProjectMetricsTab: React.FC = () => {
     );
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { getWorkloadCurrentUsage, topResourceConsumingWorkloads } = projectCurrentMetrics;
-  // eslint-disable-next-line no-console
-  console.log({ topResourceConsumingWorkloads });
-
-  //TODO: need 'no quota' logic
-  // if (false) {
-  //   return (
-  //     <EmptyState>
-  //       <EmptyStateHeader
-  //         titleText="Quota is not set"
-  //         headingLevel="h4"
-  //         icon={<EmptyStateIcon icon={WrenchIcon} />}
-  //       />
-  //       <EmptyStateBody>Select another project or set the quota for this project.</EmptyStateBody>
-  //     </EmptyState>
-  //   );
-  // }
+  // clusterQueue.data will only be defined here if it has spec.resourceGroups (see DistributedWorkloadsContext)
+  if (!clusterQueue.data || localQueues.data.length === 0) {
+    return (
+      <EmptyState>
+        <EmptyStateHeader
+          titleText="Quota is not set"
+          headingLevel="h4"
+          icon={<EmptyStateIcon icon={WrenchIcon} />}
+        />
+        <EmptyStateBody>Select another project or set the quota for this project.</EmptyStateBody>
+      </EmptyState>
+    );
+  }
 
   return (
     <>
-      <Flex direction={{ default: 'column' }} gap={{ default: 'gapMd' }}>
-        <FlexItem>
-          <DWSectionCard title="Resource Usage" content={<ResourceUsage />} />
-        </FlexItem>
-        <FlexItem>
+      <Stack hasGutter>
+        <StackItem>
+          <DWSectionCard
+            title="Requested resources"
+            helpTooltip={
+              isAdmin
+                ? undefined
+                : 'In this section, all projects refers to all of the projects that share the specified resource. You might not have access to all of these projects.'
+            }
+            content={<RequestedResources />}
+          />
+        </StackItem>
+        <StackItem>
           <DWSectionCard
             title="Top resource-consuming distributed workloads"
             content={<TopResourceConsumingWorkloads />}
           />
-        </FlexItem>
-        <FlexItem>
+        </StackItem>
+        <StackItem>
           <DWSectionCard
             title="Distributed workload resource metrics"
-            content={<WorkloadResourceMetrics />}
+            hasDivider={false}
+            content={<WorkloadResourceMetricsTable />}
           />
-        </FlexItem>
-      </Flex>
+        </StackItem>
+      </Stack>
     </>
   );
 };

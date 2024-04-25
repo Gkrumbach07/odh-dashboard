@@ -16,6 +16,7 @@ spec:
     disableHome: false
     disableProjects: false
     disablePipelines: false
+    disablePipelineExperiments: false
     disableModelServing: false
     disableProjectSharing: false
     disableCustomServingRuntimes: false

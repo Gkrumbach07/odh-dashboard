@@ -13,10 +13,10 @@ spec:
     disableSupport: false
     disableTracking: true
     enablement: true
-    disableHome: true
-    disableProjects: true
-    disablePipelines: true
-    disablePipelineExperiments: true
+    disableHome: false
+    disableProjects: false
+    disablePipelines: false
+    disablePipelineExperiments: false
     disableModelServing: true
     disableProjectSharing: true
     disableCustomServingRuntimes: true

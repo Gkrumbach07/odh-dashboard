@@ -1,9 +1,7 @@
-import { DEV_MODE } from '../../../../utils/constants';
 import { DSPipelineKind } from '../../../../types';
 import { proxyService } from '../../../../utils/proxy';
 
-export default DEV_MODE
-  ? proxyService<DSPipelineKind>(
+export default proxyService<DSPipelineKind>(
       {
         apiGroup: 'datasciencepipelinesapplications.opendatahub.io',
         apiVersion: 'v1alpha1',
@@ -27,7 +25,3 @@ export default DEV_MODE
         ),
       false,
     )
-  : async () => {
-      // do nothing
-      // service is only registered in DEV_MODE
-    };

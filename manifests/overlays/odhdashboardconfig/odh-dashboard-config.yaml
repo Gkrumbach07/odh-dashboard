@@ -14,7 +14,7 @@ spec:
     disableTracking: true
     enablement: true
     disableProjects: true
-    disablePipelines: true
+    disablePipelines: false
     disablePipelineExperiments: true
     disableModelServing: true
     disableProjectSharing: true

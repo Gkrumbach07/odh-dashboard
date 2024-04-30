@@ -22,7 +22,7 @@ resources:
   - fetch-accelerators.rbac.yaml
 images:
   - name: odh-dashboard
-    newName: quay.io/opendatahub/odh-dashboard
+    newName: quay.io/gkrumbach07/odh-dashboard-testing
     newTag: main
   - name: oauth-proxy
     newName: registry.redhat.io/openshift4/ose-oauth-proxy

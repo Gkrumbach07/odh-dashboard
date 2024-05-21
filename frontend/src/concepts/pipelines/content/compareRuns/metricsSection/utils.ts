@@ -1,4 +1,4 @@
-import { ArtifactType, Event, Execution } from '~/third_party/mlmd';
+import { Artifact, ArtifactType, Event, Execution } from '~/third_party/mlmd';
 
 import {
   FullArtifactPath,
@@ -113,6 +113,18 @@ export const filterRunArtifactsByType = (
     }
   }
   return typeRuns;
+};
+
+export const filterArtifactsByType = (
+  artifacts: Artifact[],
+  artifactTypes: ArtifactType[],
+  metricsType: MetricsType,
+): Artifact[] => {
+  const metricsFilter = metricsTypeToFilter(metricsType);
+  const artifactTypeIds = artifactTypes
+    .filter((artifactType) => artifactType.getName() === metricsFilter)
+    .map((artifactType) => artifactType.getId());
+  return artifacts.filter((x) => artifactTypeIds.includes(x.getTypeId()));
 };
 
 // general utils

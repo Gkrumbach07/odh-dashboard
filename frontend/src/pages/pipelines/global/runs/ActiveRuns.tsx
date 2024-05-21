@@ -19,6 +19,7 @@ import { usePipelineActiveRunsTable } from '~/concepts/pipelines/content/tables/
 import { PipelineRunSearchParam } from '~/concepts/pipelines/content/types';
 import { createRunRoute } from '~/routes';
 import { SupportedArea, useIsAreaAvailable } from '~/concepts/areas';
+import useScalarMetrics from '~/concepts/pipelines/content/compareRuns/metricsSection/useScalarMetrics';
 import { PipelineRunTabTitle, PipelineRunType } from './types';
 
 export const ActiveRuns: React.FC = () => {
@@ -27,6 +28,8 @@ export const ActiveRuns: React.FC = () => {
   const [[{ items: runs, totalSize }, loaded, error], { initialLoaded, ...tableProps }] =
     usePipelineActiveRunsTable({ experimentId });
   const isExperimentsAvailable = useIsAreaAvailable(SupportedArea.PIPELINE_EXPERIMENTS).status;
+
+  useScalarMetrics(runs);
 
   if (error) {
     return (

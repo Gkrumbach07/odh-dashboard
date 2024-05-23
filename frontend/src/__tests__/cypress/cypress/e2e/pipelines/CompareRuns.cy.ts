@@ -23,6 +23,11 @@ import {
   compareRunParamsTable,
 } from '~/__tests__/cypress/cypress/pages/pipelines/compareRuns';
 import { mockCancelledGoogleRpcStatus } from '~/__mocks__/mockGoogleRpcStatusKF';
+import { mockGetArtifactTypes } from '~/__mocks__/mlmd/mockGetArtifactTypes';
+import { mockGetContextByTypeAndName } from '~/__mocks__/mlmd/mockGetContextByTypeAndName';
+import { mockGetArtifactsByContext } from '~/__mocks__/mlmd/mockGetArtifactsByContext';
+import { mockGetExecutionsByContext } from '~/__mocks__/mlmd/mockGetExecutionsByContext';
+import { mockGetEventsByExecutionIDs } from '~/__mocks__/mlmd/mockGetEventsByExecutionIDs';
 
 const projectName = 'test-project-name';
 const initialMockPipeline = buildMockPipelineV2({ display_name: 'Test pipeline' });
@@ -192,6 +197,53 @@ describe('Compare runs', () => {
       compareRunParamsTable.findParamName('paramOne').should('exist');
       compareRunParamsTable.findParamName('paramTwo').should('not.exist');
       compareRunParamsTable.findParamName('paramThree').should('exist');
+    });
+  });
+
+  describe('Metrics', () => {
+    beforeEach(() => {
+      cy.visit(
+        `/experiments/${projectName}/${mockExperiment.experiment_id}/compareRuns?runs=${mockRun.run_id}`,
+      );
+
+      cy.intercept(
+        {
+          pathname: `/api/service/mlmd/${projectName}/dspa/ml_metadata.MetadataStoreService/GetArtifactTypes`,
+          method: 'POST',
+        },
+        mockGetArtifactTypes(),
+      );
+
+      cy.intercept(
+        {
+          pathname: `/api/service/mlmd/${projectName}/dspa/ml_metadata.MetadataStoreService/GetContextByTypeAndName`,
+          method: 'POST',
+        },
+        mockGetContextByTypeAndName(mockRun.run_id),
+      );
+      cy.intercept(
+        {
+          pathname: `/api/service/mlmd/${projectName}/dspa/ml_metadata.MetadataStoreService/GetArtifactsByContext`,
+        },
+        mockGetArtifactsByContext(),
+      );
+      cy.intercept(
+        {
+          pathname: `/api/service/mlmd/${projectName}/dspa/ml_metadata.MetadataStoreService/GetExecutionsByContext`,
+        },
+        mockGetExecutionsByContext(),
+      );
+      cy.intercept(
+        {
+          pathname: `/api/service/mlmd/${projectName}/dspa/ml_metadata.MetadataStoreService/GetEventsByExecutionIDs`,
+        },
+        mockGetEventsByExecutionIDs(),
+      );
+    });
+
+    it.only('shows empty state when the Runs list has no selections', () => {
+      compareRunsListTable.findSelectAllCheckbox().click();
+      compareRunParamsTable.findEmptyState().should('exist');
     });
   });
 });

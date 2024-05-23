@@ -20,8 +20,9 @@ import MarkdownCompare from '~/concepts/pipelines/content/compareRuns/metricsSec
 
 export const CompareRunMetricsSection: React.FunctionComponent = () => {
   const { runs, selectedRuns } = useCompareRuns();
-  const [mlmdPackages, mlmdPackagesLoaded] = useMlmdPackagesForPipelineRuns(runs);
-  const [artifactTypes, artifactTypesLoaded] = useGetArtifactTypes();
+  const [mlmdPackages, mlmdPackagesLoaded, error2] = useMlmdPackagesForPipelineRuns(runs);
+  const [artifactTypes, artifactTypesLoaded, error] = useGetArtifactTypes();
+  console.log(error, error2);
   const [isSectionOpen, setIsSectionOpen] = React.useState(true);
   const [activeTabKey, setActiveTabKey] = React.useState<string | number>(
     MetricSectionTabLabels.SCALAR,

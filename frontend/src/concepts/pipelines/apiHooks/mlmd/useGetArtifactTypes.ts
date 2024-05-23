@@ -8,9 +8,8 @@ export const useGetArtifactTypes = (): FetchState<ArtifactType[]> => {
 
   const call = React.useCallback<FetchStateCallbackPromise<ArtifactType[]>>(async () => {
     const request = new GetArtifactTypesRequest();
-
     const res = await metadataStoreServiceClient.getArtifactTypes(request);
-
+    console.log(res);
     return res.getArtifactTypesList();
   }, [metadataStoreServiceClient]);
 

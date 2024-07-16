@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { K8sAPIOptions } from '~/k8sTypes';
+import { useCache } from './CacheContext';
 
 /**
  * Allows "I'm not ready" rejections if you lack a lazy provided prop
@@ -101,6 +102,10 @@ export type FetchOptions = {
    * Note: This is only read as initial value; changes do nothing.
    */
   initialPromisePurity: boolean;
+  /**
+   * A cache key to use for the fetch. If the cache key changes, the fetch will be re-triggered.
+   */
+  cacheKey?: string;
 };
 
 /**
@@ -118,7 +123,7 @@ const useFetchState = <Type>(
    */
   initialDefaultState: Type,
   /** Configurable features */
-  { refreshRate = 0, initialPromisePurity = false }: Partial<FetchOptions> = {},
+  { refreshRate = 0, initialPromisePurity = false, cacheKey }: Partial<FetchOptions> = {},
 ): FetchState<Type> => {
   const initialDefaultStateRef = React.useRef(initialDefaultState);
   const [result, setResult] = React.useState<Type>(initialDefaultState);
@@ -126,6 +131,8 @@ const useFetchState = <Type>(
   const [loadError, setLoadError] = React.useState<Error | undefined>(undefined);
   const abortCallbackRef = React.useRef<() => void>(() => undefined);
   const changePendingRef = React.useRef(true);
+
+  const { getCache, setCache } = useCache();
 
   /** Setup on initial hook a singular reset function. DefaultState & resetDataOnNewPromise are initial render states. */
   const cleanupRef = React.useRef(() => {
@@ -178,6 +185,9 @@ const useFetchState = <Type>(
 
           setResult(r);
           setLoaded(true);
+          if (cacheKey) {
+            setCache(cacheKey, r);
+          }
 
           return r;
         })
@@ -205,7 +215,7 @@ const useFetchState = <Type>(
     };
 
     return [doRequest(), unload];
-  }, [fetchCallbackPromise]);
+  }, [fetchCallbackPromise, cacheKey, setCache]);
 
   // Use a memmo to update the `changePendingRef` immediately on change.
   React.useMemo(() => {
@@ -218,9 +228,17 @@ const useFetchState = <Type>(
     let interval: ReturnType<typeof setInterval>;
 
     const callAndSave = () => {
-      const [, unload] = call();
-      abortCallbackRef.current = unload;
+      if (cacheKey && getCache(cacheKey) !== undefined) {
+        setLoaded(true);
+        setLoadError(undefined);
+        // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+        setResult(getCache(cacheKey) as Type);
+      } else {
+        const [, unload] = call();
+        abortCallbackRef.current = unload;
+      }
     };
+
     callAndSave();
 
     if (refreshRate > 0) {
@@ -234,7 +252,7 @@ const useFetchState = <Type>(
       clearInterval(interval);
       abortCallbackRef.current();
     };
-  }, [call, refreshRate]);
+  }, [cacheKey, call, getCache, refreshRate]);
 
   // Use a reference for `call` to ensure a stable reference to `refresh` is always returned
   const callRef = React.useRef(call);

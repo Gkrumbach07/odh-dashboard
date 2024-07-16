@@ -21,6 +21,7 @@ import ProjectsContextProvider from '~/concepts/projects/ProjectsContext';
 import { ModelRegistrySelectorContextProvider } from '~/concepts/modelRegistry/context/ModelRegistrySelectorContext';
 import useStorageClasses from '~/concepts/k8s/useStorageClasses';
 import AreaContextProvider from '~/concepts/areas/AreaContext';
+import { CacheProvider } from '~/utilities/CacheContext';
 import useDevFeatureFlags from './useDevFeatureFlags';
 import Header from './Header';
 import AppRoutes from './AppRoutes';
@@ -107,36 +108,38 @@ const App: React.FC = () => {
         </Bullseye>
       ) : (
         <AppContext.Provider value={contextValue}>
-          <Page
-            className="odh-dashboard"
-            isManagedSidebar
-            header={
-              <Header onNotificationsClick={() => setNotificationsOpen(!notificationsOpen)} />
-            }
-            sidebar={isAllowed ? <NavSidebar /> : undefined}
-            notificationDrawer={
-              <AppNotificationDrawer onClose={() => setNotificationsOpen(false)} />
-            }
-            isNotificationDrawerExpanded={notificationsOpen}
-            mainContainerId={DASHBOARD_MAIN_CONTAINER_ID}
-            data-testid={DASHBOARD_MAIN_CONTAINER_ID}
-          >
-            <ErrorBoundary>
-              <DevFeatureFlagsBanner
-                dashboardConfig={dashboardConfig.spec.dashboardConfig}
-                {...devFeatureFlagsProps}
-              />
-              <ProjectsContextProvider>
-                <ModelRegistrySelectorContextProvider>
-                  <QuickStarts>
-                    <AppRoutes />
-                  </QuickStarts>
-                </ModelRegistrySelectorContextProvider>
-              </ProjectsContextProvider>
-              <ToastNotifications />
-              <TelemetrySetup />
-            </ErrorBoundary>
-          </Page>
+          <CacheProvider>
+            <Page
+              className="odh-dashboard"
+              isManagedSidebar
+              header={
+                <Header onNotificationsClick={() => setNotificationsOpen(!notificationsOpen)} />
+              }
+              sidebar={isAllowed ? <NavSidebar /> : undefined}
+              notificationDrawer={
+                <AppNotificationDrawer onClose={() => setNotificationsOpen(false)} />
+              }
+              isNotificationDrawerExpanded={notificationsOpen}
+              mainContainerId={DASHBOARD_MAIN_CONTAINER_ID}
+              data-testid={DASHBOARD_MAIN_CONTAINER_ID}
+            >
+              <ErrorBoundary>
+                <DevFeatureFlagsBanner
+                  dashboardConfig={dashboardConfig.spec.dashboardConfig}
+                  {...devFeatureFlagsProps}
+                />
+                <ProjectsContextProvider>
+                  <ModelRegistrySelectorContextProvider>
+                    <QuickStarts>
+                      <AppRoutes />
+                    </QuickStarts>
+                  </ModelRegistrySelectorContextProvider>
+                </ProjectsContextProvider>
+                <ToastNotifications />
+                <TelemetrySetup />
+              </ErrorBoundary>
+            </Page>
+          </CacheProvider>
         </AppContext.Provider>
       )}
     </AreaContextProvider>

@@ -21,7 +21,7 @@ const useExperimentById = (experimentId?: string): FetchState<ExperimentKFv2 | n
     [api, experimentId],
   );
 
-  return useFetchState(call, null);
+  return useFetchState(call, null, { cacheKey: experimentId });
 };
 
 export default useExperimentById;

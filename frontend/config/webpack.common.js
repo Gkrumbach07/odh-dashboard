@@ -1,8 +1,8 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const CopyPlugin = require('copy-webpack-plugin');
-const { setupWebpackDotenvFilesForEnv } = require('./dotenv');
 const MonacoWebpackPlugin = require('monaco-editor-webpack-plugin');
+const { setupWebpackDotenvFilesForEnv } = require('./dotenv');
 
 const RELATIVE_DIRNAME = process.env._ODH_RELATIVE_DIRNAME;
 const IS_PROJECT_ROOT_DIR = process.env._ODH_IS_PROJECT_ROOT_DIR;
@@ -29,6 +29,7 @@ module.exports = (env) => {
   return {
     entry: {
       app: path.join(SRC_DIR, 'index.tsx'),
+      serviceWorker: path.join(SRC_DIR, 'service-worker.ts'),
     },
     module: {
       rules: [
@@ -221,6 +222,21 @@ module.exports = (env) => {
             from: path.join(SRC_DIR, 'robots.txt'),
             to: path.join(DIST_DIR),
             noErrorOnMissing: true,
+          },
+          {
+            from: path.join(SRC_DIR, 'service-worker.ts'),
+            to: path.join(DIST_DIR, 'service-worker.js'),
+            transform(content) {
+              // Transpile TypeScript to JavaScript
+              const ts = require('typescript');
+              const result = ts.transpileModule(content.toString(), {
+                compilerOptions: {
+                  module: ts.ModuleKind.CommonJS,
+                  target: ts.ScriptTarget.ES5,
+                },
+              });
+              return result.outputText;
+            },
           },
         ],
       }),

@@ -9,6 +9,27 @@ import { BrowserStorageContextProvider } from './components/browserStorage/Brows
 import ErrorBoundary from './components/error/ErrorBoundary';
 import { ReduxContext } from './redux/context';
 
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/service-worker.js')
+      .then(
+        (registration) => {
+          // eslint-disable-next-line no-console
+          console.log('Service Worker registered with scope:', registration.scope);
+        },
+        (error) => {
+          // eslint-disable-next-line no-console
+          console.log('Service Worker registration failed:', error);
+        },
+      )
+      .catch((error) => {
+        // eslint-disable-next-line no-console
+        console.log('Service Worker registration failed:', error);
+      });
+  });
+}
+
 /**
 /**
  * Main function

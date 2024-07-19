@@ -9,7 +9,11 @@ const cachedRequests: { matcher: RegExp; maxAge: number }[] = [
 
 const inFlightRequests = new Map<
   string,
-  { promise: Promise<Response>; controller: AbortController }
+  {
+    promise: Promise<Response>;
+    controller: AbortController;
+    resolvers: { resolve: Function; reject: Function }[];
+  }
 >();
 
 self.addEventListener('fetch', (event: FetchEvent) => {
@@ -26,8 +30,6 @@ async function handleCacheRequest(request: Request, maxAge: number): Promise<Res
   const cache = await caches.open(CACHE_NAME);
   const cachedResponse = await cache.match(request);
   if (cachedResponse) {
-    console.log('cache hit');
-
     const cachedTime = cachedResponse.headers.get('Date')
       ? new Date(cachedResponse.headers.get('Date')!).getTime()
       : null;
@@ -37,6 +39,7 @@ async function handleCacheRequest(request: Request, maxAge: number): Promise<Res
       console.log('cache expired');
       return getOrCreateFetch(request);
     }
+    console.log('cache hit');
     return cachedResponse;
   }
   console.log('cache miss');
@@ -48,40 +51,45 @@ async function getOrCreateFetch(request: Request): Promise<Response> {
 
   if (!inFlightRequests.has(url)) {
     const controller = new AbortController();
-    const fetchPromise = fetchAndUpdateCache(request, controller.signal);
-    inFlightRequests.set(url, { promise: fetchPromise, controller });
 
-    fetchPromise
-      .catch((error) => {
-        // Handle fetch errors by deleting from in-flight requests
-        inFlightRequests.delete(url);
-        throw error;
-      })
-      .finally(() => inFlightRequests.delete(url));
+    const fetchPromise = fetchAndUpdateCache(request, controller.signal).finally(() => {
+      inFlightRequests.delete(url);
+    });
+
+    inFlightRequests.set(url, { promise: fetchPromise, controller, resolvers: [] });
   }
 
-  const { promise, controller } = inFlightRequests.get(url)!;
+  const { promise, controller, resolvers } = inFlightRequests.get(url)!;
 
-  // Listen to the original request's abort signal
+  const newPromise = new Promise<Response>((resolve, reject) => {
+    resolvers.push({ resolve, reject });
+  });
+
   request.signal.addEventListener('abort', () => {
+    console.log('abort', controller.signal);
     if (!controller.signal.aborted) {
-      // Remove from in-flight requests if the original request was aborted
       if (inFlightRequests.has(url)) {
+        const { resolvers: abortResolvers } = inFlightRequests.get(url)!;
+        abortResolvers.forEach(({ reject }) => {
+          reject(new DOMException('The user aborted a request.', 'AbortError'));
+        });
         inFlightRequests.delete(url);
-        // Reject the promise that we returned for the request
-        promise.catch(() => {}); // suppress unhandled promise rejection warning
-        throw new DOMException('The user aborted a request.', 'AbortError');
       }
     }
   });
 
-  console.log('in flight --> redirecting');
+  promise
+    .then((response) => {
+      resolvers.forEach(({ resolve }) => resolve(response));
+    })
+    .catch((error) => {
+      resolvers.forEach(({ reject }) => reject(error));
+    });
 
-  return promise;
+  return newPromise;
 }
 
 async function fetchAndUpdateCache(request: Request, signal: AbortSignal): Promise<Response> {
-  console.log('update cache');
   const response = await fetch(request, { signal });
   if (!response.ok) {
     throw new Error('Network response was not ok');
@@ -90,3 +98,16 @@ async function fetchAndUpdateCache(request: Request, signal: AbortSignal): Promi
   cache.put(request.url, response.clone());
   return response;
 }
+
+/**
+ * 
+ req1 -> check cache -> miss -> create promise -> add promise to inflight cache -> create fetch -> on fetch success resolve promise
+     -> abort -> reject promise, leave fetch alone
+
+req2 -> check cache -> hit -> return cache
+                    -> inflight -> create promise -> add promise to inflight cache -> wait for fetch promise -> resolve all inflight promises
+     -> abort -> reject promise
+---
+async -> fetch success -> add to cache -> resolve all inflight promises -> delete inflight promises
+      -> fetch failed -> reject all inflight promises -> delete inflight promises
+ */

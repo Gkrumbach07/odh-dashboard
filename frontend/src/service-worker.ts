@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 const CACHE_NAME = 'api-cache';
 
 const cachedRequests: { matcher: RegExp; maxAge: number }[] = [
@@ -10,9 +11,8 @@ const cachedRequests: { matcher: RegExp; maxAge: number }[] = [
 const inFlightRequests = new Map<
   string,
   {
-    promise: Promise<Response>;
-    controller: AbortController;
-    resolvers: { resolve: Function; reject: Function }[];
+    promise: Promise<void>;
+    resolvers: { resolve: (value: Response) => void; reject: (reason?: unknown) => void }[];
   }
 >();
 
@@ -50,55 +50,45 @@ async function getOrCreateFetch(request: Request): Promise<Response> {
   const { url } = request;
 
   if (!inFlightRequests.has(url)) {
-    const controller = new AbortController();
+    console.log('creating new fetch request');
 
-    const fetchPromise = fetchAndUpdateCache(request, controller.signal).finally(() => {
-      inFlightRequests.delete(url);
-    });
+    const fetchPromise = fetch(request, { signal: new AbortController().signal })
+      .then(async (response) => {
+        console.log('resolving promise');
+        const cache = await caches.open(CACHE_NAME);
+        cache.put(request.url, response.clone());
+        resolvers.forEach(({ resolve }) => resolve(response));
+      })
+      .catch((error) => {
+        console.log('rejecting promise');
+        resolvers.forEach(({ reject }) => reject(error));
+      })
+      .finally(() => {
+        console.log('fetch complete');
+        inFlightRequests.delete(url);
+      });
 
-    inFlightRequests.set(url, { promise: fetchPromise, controller, resolvers: [] });
+    inFlightRequests.set(url, { promise: fetchPromise, resolvers: [] });
   }
 
-  const { promise, controller, resolvers } = inFlightRequests.get(url)!;
+  const { resolvers } = inFlightRequests.get(url)!;
+  console.log('adding new promise to resolvers', inFlightRequests.get(url));
 
   const newPromise = new Promise<Response>((resolve, reject) => {
     resolvers.push({ resolve, reject });
   });
 
   request.signal.addEventListener('abort', () => {
-    console.log('abort', controller.signal);
-    if (!controller.signal.aborted) {
-      if (inFlightRequests.has(url)) {
-        const { resolvers: abortResolvers } = inFlightRequests.get(url)!;
-        abortResolvers.forEach(({ reject }) => {
-          reject(new DOMException('The user aborted a request.', 'AbortError'));
-        });
-        inFlightRequests.delete(url);
-      }
+    console.log('aborting event');
+    if (inFlightRequests.has(url)) {
+      const { resolvers: abortResolvers } = inFlightRequests.get(url)!;
+      console.log('aborting fetch request from resolvers with length', abortResolvers.length);
+      abortResolvers.splice(0, 1);
     }
   });
 
-  promise
-    .then((response) => {
-      resolvers.forEach(({ resolve }) => resolve(response));
-    })
-    .catch((error) => {
-      resolvers.forEach(({ reject }) => reject(error));
-    });
-
   return newPromise;
 }
-
-async function fetchAndUpdateCache(request: Request, signal: AbortSignal): Promise<Response> {
-  const response = await fetch(request, { signal });
-  if (!response.ok) {
-    throw new Error('Network response was not ok');
-  }
-  const cache = await caches.open(CACHE_NAME);
-  cache.put(request.url, response.clone());
-  return response;
-}
-
 /**
  * 
  req1 -> check cache -> miss -> create promise -> add promise to inflight cache -> create fetch -> on fetch success resolve promise

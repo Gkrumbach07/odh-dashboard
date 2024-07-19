@@ -7,7 +7,10 @@ const cachedRequests: { matcher: RegExp; maxAge: number }[] = [
   },
 ];
 
-const inFlightRequests = new Map<string, Promise<Response>>();
+const inFlightRequests = new Map<
+  string,
+  { promise: Promise<Response>; controller: AbortController }
+>();
 
 self.addEventListener('fetch', (event: FetchEvent) => {
   const { request } = event;
@@ -44,8 +47,10 @@ async function getOrCreateFetch(request: Request): Promise<Response> {
   const { url } = request;
 
   if (!inFlightRequests.has(url)) {
-    const fetchPromise = fetchAndUpdateCache(request);
-    inFlightRequests.set(url, fetchPromise);
+    const controller = new AbortController();
+    const fetchPromise = fetchAndUpdateCache(request, controller.signal);
+    inFlightRequests.set(url, { promise: fetchPromise, controller });
+
     fetchPromise
       .catch((error) => {
         // Handle fetch errors by deleting from in-flight requests
@@ -55,14 +60,32 @@ async function getOrCreateFetch(request: Request): Promise<Response> {
       .finally(() => inFlightRequests.delete(url));
   }
 
+  const { promise, controller } = inFlightRequests.get(url)!;
+
+  // Listen to the original request's abort signal
+  request.signal.addEventListener('abort', () => {
+    if (!controller.signal.aborted) {
+      // Remove from in-flight requests if the original request was aborted
+      if (inFlightRequests.has(url)) {
+        inFlightRequests.delete(url);
+        // Reject the promise that we returned for the request
+        promise.catch(() => {}); // suppress unhandled promise rejection warning
+        throw new DOMException('The user aborted a request.', 'AbortError');
+      }
+    }
+  });
+
   console.log('in flight --> redirecting');
 
-  return inFlightRequests.get(url)!;
+  return promise;
 }
 
-async function fetchAndUpdateCache(request: Request): Promise<Response> {
+async function fetchAndUpdateCache(request: Request, signal: AbortSignal): Promise<Response> {
   console.log('update cache');
-  const response = await fetch(request);
+  const response = await fetch(request, { signal });
+  if (!response.ok) {
+    throw new Error('Network response was not ok');
+  }
   const cache = await caches.open(CACHE_NAME);
   cache.put(request.url, response.clone());
   return response;

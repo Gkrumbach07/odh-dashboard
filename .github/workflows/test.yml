@@ -70,9 +70,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: set-groups
+        shell: bash
         run: |
-          GROUPS=$(ls frontend/src/__tests__/cypress/cypress/tests/mocked/ | jq -R -s -c 'split("\n")[:-1]')
-          echo "groups=$GROUPS" >> $GITHUB_OUTPUT
+          if [ -d "frontend/src/__tests__/cypress/cypress/tests/mocked" ]; then
+            GROUPS=$(ls frontend/src/__tests__/cypress/cypress/tests/mocked/ | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            echo "groups=$GROUPS" >> $GITHUB_OUTPUT
+          else
+            echo "groups=['default']" >> $GITHUB_OUTPUT
+          fi
 
   Cypress-Tests:
     needs: [Setup, Get-Test-Groups]
@@ -93,7 +98,12 @@ jobs:
             ${{ github.workspace }}/frontend/node_modules
           key: ${{ runner.os }}-18.x-modules-${{ hashFiles('**/package-lock.json') }}
       - name: Run Cypress tests
-        run: npm run test:cypress -- --spec "frontend/src/__tests__/cypress/cypress/tests/mocked/${{ matrix.test-group }}/**/*"
+        run: |
+          if [ "${{ matrix.test-group }}" == "default" ]; then
+            npm run test:cypress
+          else
+            npm run test:cypress -- --spec "frontend/src/__tests__/cypress/cypress/tests/mocked/${{ matrix.test-group }}/**/*"
+          fi
       - name: Upload coverage reports to Codecov
         if: matrix.test-group == 'pipelines'
         uses: codecov/codecov-action@v4.6.0

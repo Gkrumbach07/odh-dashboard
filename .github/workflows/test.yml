@@ -80,13 +80,13 @@ jobs:
           if [ -d "frontend/src/__tests__/cypress/cypress/tests/mocked" ]; then
             echo "Found mocked tests directory"
             
-            # Get directories and create JSON array
+            # Get directories and create JSON array - force compact output with -c
             DIRS=$(cd frontend/src/__tests__/cypress/cypress/tests/mocked && \
                   find . -maxdepth 1 -mindepth 1 -type d -printf "%f\n" | \
-                  jq -R . | jq -s .)
+                  jq -R . | jq -c -s .)
             
-            # Properly escape the JSON for GitHub Actions output
-            echo "test-groups=${DIRS}" >> "$GITHUB_OUTPUT"
+            # Output in the correct format for GitHub Actions
+            echo "test-groups=$DIRS" >> "$GITHUB_OUTPUT"
             
             echo "Generated test groups:"
             cat "$GITHUB_OUTPUT"

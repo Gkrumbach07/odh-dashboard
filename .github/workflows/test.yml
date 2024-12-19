@@ -81,10 +81,10 @@ jobs:
             ls -la frontend/src/__tests__/cypress/cypress/tests/mocked/
             
             echo "Generating test groups..."
-            GROUPS=$(ls frontend/src/__tests__/cypress/cypress/tests/mocked/ | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            GROUPS=$(find frontend/src/__tests__/cypress/cypress/tests/mocked/ -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | jq -R -s -c 'split("\n") | map(select(length > 0))')
             echo "Generated groups: $GROUPS"
             
-            if [ -z "$GROUPS" ]; then
+            if [ -z "$GROUPS" ] || [ "$GROUPS" == "[]" ]; then
               echo "Warning: No test groups found, falling back to default"
               GROUPS='["default"]'
             fi

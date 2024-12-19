@@ -72,12 +72,33 @@ jobs:
       - id: set-groups
         shell: bash
         run: |
+          echo "Checking directory structure..."
+          ls -la frontend/src/__tests__/cypress/cypress/tests/ || echo "Base test directory not found"
+          
+          echo "Looking for mocked tests directory..."
           if [ -d "frontend/src/__tests__/cypress/cypress/tests/mocked" ]; then
+            echo "Found mocked tests directory. Contents:"
+            ls -la frontend/src/__tests__/cypress/cypress/tests/mocked/
+            
+            echo "Generating test groups..."
             GROUPS=$(ls frontend/src/__tests__/cypress/cypress/tests/mocked/ | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            echo "Generated groups: $GROUPS"
+            
+            if [ -z "$GROUPS" ]; then
+              echo "Warning: No test groups found, falling back to default"
+              GROUPS='["default"]'
+            fi
+            
             echo "groups=$GROUPS" >> $GITHUB_OUTPUT
           else
+            echo "Warning: Mocked tests directory not found at expected location:"
+            echo "frontend/src/__tests__/cypress/cypress/tests/mocked"
+            echo "Falling back to default group"
             echo "groups=['default']" >> $GITHUB_OUTPUT
           fi
+          
+          echo "Final output:"
+          cat $GITHUB_OUTPUT
 
   Cypress-Tests:
     needs: [Setup, Get-Test-Groups]

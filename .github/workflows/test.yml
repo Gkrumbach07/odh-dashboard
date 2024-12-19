@@ -66,7 +66,7 @@ jobs:
   Get-Test-Groups:
     runs-on: ubuntu-latest
     outputs:
-      test-groups: ${{ steps.set-groups.outputs.groups }}
+      test-groups: ${{ steps.set-groups.outputs.test-groups }}
     steps:
       - uses: actions/checkout@v4
       - id: set-groups
@@ -77,37 +77,23 @@ jobs:
           echo "Checking directory structure..."
           ls -la frontend/src/__tests__/cypress/cypress/tests/ || echo "Base test directory not found"
           
-          echo "Looking for mocked tests directory..."
           if [ -d "frontend/src/__tests__/cypress/cypress/tests/mocked" ]; then
-            echo "Found mocked tests directory. Contents:"
-            ls -la frontend/src/__tests__/cypress/cypress/tests/mocked/
+            echo "Found mocked tests directory"
             
-            echo "Generating test groups..."
-            # Create JSON array in a simpler way
-            cd frontend/src/__tests__/cypress/cypress/tests/mocked
+            # Get directories and create JSON array
+            DIRS=$(cd frontend/src/__tests__/cypress/cypress/tests/mocked && \
+                  find . -maxdepth 1 -mindepth 1 -type d -printf "%f\n" | \
+                  jq -R . | jq -s .)
             
-            # Create JSON array directly with jq
-            GROUPS=$(find . -maxdepth 1 -mindepth 1 -type d -printf "%f\n" | jq -R -s 'split("\n") - [""]')
+            # Properly escape the JSON for GitHub Actions output
+            echo "test-groups=${DIRS}" >> "$GITHUB_OUTPUT"
             
-            # Escape the JSON for GitHub Actions
-            ESCAPED_GROUPS=$(echo "$GROUPS" | jq -c .)
-            
-            echo "Generated groups: $ESCAPED_GROUPS"
-            
-            if [ -z "$ESCAPED_GROUPS" ] || [ "$ESCAPED_GROUPS" == "[]" ]; then
-              echo "Warning: No test groups found, falling back to default"
-              ESCAPED_GROUPS='["default"]'
-            fi
-            
-            # Write to GitHub output
-            echo "groups=${ESCAPED_GROUPS}" >> "$GITHUB_OUTPUT"
+            echo "Generated test groups:"
+            cat "$GITHUB_OUTPUT"
           else
-            echo "Warning: Mocked tests directory not found"
-            echo "groups=[\"default\"]" >> "$GITHUB_OUTPUT"
+            echo "No mocked tests directory found, using default"
+            echo "test-groups=[\"default\"]" >> "$GITHUB_OUTPUT"
           fi
-          
-          echo "Final output:"
-          cat "$GITHUB_OUTPUT"
 
   Cypress-Tests:
     needs: [Setup, Get-Test-Groups]

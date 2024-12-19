@@ -81,7 +81,12 @@ jobs:
             ls -la frontend/src/__tests__/cypress/cypress/tests/mocked/
             
             echo "Generating test groups..."
-            GROUPS=$(ls -l frontend/src/__tests__/cypress/cypress/tests/mocked/ | grep '^d' | awk '{print $NF}' | jq -R -s 'split("\n") | map(select(length > 0))')
+            GROUPS=$(cd frontend/src/__tests__/cypress/cypress/tests/mocked && \
+                    find . -maxdepth 1 -mindepth 1 -type d | \
+                    sed 's|^./||' | \
+                    jq -R . | \
+                    jq -s .)
+            
             echo "Generated groups: $GROUPS"
             
             if [ -z "$GROUPS" ] || [ "$GROUPS" == "[]" ]; then

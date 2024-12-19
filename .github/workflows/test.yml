@@ -43,8 +43,8 @@ jobs:
             ${{ github.workspace }}/backend/node_modules
             ${{ github.workspace }}/frontend/node_modules
           key: ${{ runner.os }}-18.x-modules-${{ hashFiles('**/package-lock.json') }}
-      - name: Run linting
-        run: npm run lint
+      - name: Run linting and formatting checks
+        run: npm run test:fix
 
   Unit-Tests:
     needs: Setup
@@ -116,9 +116,9 @@ jobs:
       - name: Run Cypress tests
         run: |
           if [ "${{ matrix.test-group }}" == "default" ]; then
-            npm run test:cypress
+            npm run test:cypress-ci
           else
-            npm run test:cypress -- --spec "frontend/src/__tests__/cypress/cypress/tests/mocked/${{ matrix.test-group }}/**/*"
+            npm run test:cypress-ci -- --spec "frontend/src/__tests__/cypress/cypress/tests/mocked/${{ matrix.test-group }}/**/*"
           fi
       - name: Upload coverage reports to Codecov
         if: matrix.test-group == 'pipelines'

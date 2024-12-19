@@ -118,19 +118,6 @@ jobs:
           if [ "${{ matrix.test-group }}" == "default" ]; then
             npm run test:cypress-ci
           else
-            npm run test:cypress-ci -- --spec "frontend/src/__tests__/cypress/cypress/tests/mocked/${{ matrix.test-group }}/**/*"
+            npm run test:cypress-ci -- --spec "src/__tests__/cypress/cypress/tests/mocked/${{ matrix.test-group }}/**/*"
           fi
-      - name: Upload coverage reports to Codecov
-        if: matrix.test-group == 'pipelines'
-        uses: codecov/codecov-action@v4.6.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-          name: frontend
-          directory: ./frontend/coverage
-          verbose: true
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: cypress-results-${{ matrix.test-group }}
-          path: ./frontend/src/__tests__/cypress/results/
+        working-directory: ./frontend

@@ -1,7 +1,8 @@
 name: Test
 on: [push, pull_request]
+
 jobs:
-  Tests:
+  Setup:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -12,42 +13,89 @@ jobs:
         uses: actions/setup-node@v4.1.0
         with:
           node-version: ${{ matrix.node-version }}
-      - name: Node.js modules cache, repository
+      - name: Node.js modules cache
         uses: actions/cache@v4
-        id: repo-cache
-        with:
-          path: ${{ github.workspace }}/node_modules
-          key: ${{ runner.os }}-${{ matrix.node-version }}-modules-repo-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.node-version }}-modules-repo
-      - name: Node.js modules cache, backend
-        uses: actions/cache@v4
-        id: backend-cache
-        with:
-          path: ${{ github.workspace }}/backend/node_modules
-          key: ${{ runner.os }}-${{ matrix.node-version }}-modules-backend-${{ hashFiles('**/backend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.node-version }}-modules-backend
-      - name: Node.js modules cache, frontend
-        uses: actions/cache@v4
-        id: frontend-cache
+        id: modules-cache
         with:
           path: |
             ~/.cache/Cypress
+            ${{ github.workspace }}/node_modules
+            ${{ github.workspace }}/backend/node_modules
             ${{ github.workspace }}/frontend/node_modules
-          key: ${{ runner.os }}-${{ matrix.node-version }}-modules-frontend-${{ hashFiles('**/frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.node-version }}-modules-frontend
-      - name: Install Node.js packages
-        if: ${{ steps.repo-cache.outputs.cache-hit != 'true' || steps.backend-cache.outputs.cache-hit != 'true' || steps.frontend-cache.outputs.cache-hit != 'true' }}
+          key: ${{ runner.os }}-${{ matrix.node-version }}-modules-${{ hashFiles('**/package-lock.json') }}
+      - name: Install dependencies
+        if: steps.modules-cache.outputs.cache-hit != 'true'
         run: npm install
       - name: Check for uncomitted changes
+        run: git diff --exit-code
+
+  Lint:
+    needs: Setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/Cypress
+            ${{ github.workspace }}/node_modules
+            ${{ github.workspace }}/backend/node_modules
+            ${{ github.workspace }}/frontend/node_modules
+          key: ${{ runner.os }}-18.x-modules-${{ hashFiles('**/package-lock.json') }}
+      - name: Run linting
+        run: npm run lint
+
+  Unit-Tests:
+    needs: Setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/Cypress
+            ${{ github.workspace }}/node_modules
+            ${{ github.workspace }}/backend/node_modules
+            ${{ github.workspace }}/frontend/node_modules
+          key: ${{ runner.os }}-18.x-modules-${{ hashFiles('**/package-lock.json') }}
+      - name: Run unit tests
+        run: npm run test:unit
+
+  Get-Test-Groups:
+    runs-on: ubuntu-latest
+    outputs:
+      test-groups: ${{ steps.set-groups.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set-groups
         run: |
-          git diff --exit-code
-      - name: Test backend & test frontend with code coverage
-        if: ${{ success() }}
-        run: npm run test:backend && npm run test:frontend:coverage
+          GROUPS=$(ls frontend/src/__tests__/cypress/cypress/tests/mocked/ | jq -R -s -c 'split("\n")[:-1]')
+          echo "groups=$GROUPS" >> $GITHUB_OUTPUT
+
+  Cypress-Tests:
+    needs: [Setup, Get-Test-Groups]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.Get-Test-Groups.outputs.test-groups) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/Cypress
+            ${{ github.workspace }}/node_modules
+            ${{ github.workspace }}/backend/node_modules
+            ${{ github.workspace }}/frontend/node_modules
+          key: ${{ runner.os }}-18.x-modules-${{ hashFiles('**/package-lock.json') }}
+      - name: Run Cypress tests
+        run: npm run test:cypress -- --spec "frontend/src/__tests__/cypress/cypress/tests/mocked/${{ matrix.test-group }}/**/*"
       - name: Upload coverage reports to Codecov
+        if: matrix.test-group == 'pipelines'
         uses: codecov/codecov-action@v4.6.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -56,7 +104,7 @@ jobs:
           directory: ./frontend/coverage
           verbose: true
       - uses: actions/upload-artifact@v4
-        if: ${{ always() }}
+        if: always()
         with:
-          name: cypress-results
+          name: cypress-results-${{ matrix.test-group }}
           path: ./frontend/src/__tests__/cypress/results/

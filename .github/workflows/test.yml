@@ -72,6 +72,8 @@ jobs:
       - id: set-groups
         shell: bash
         run: |
+          set -x  # Enable debug mode to see each command
+          
           echo "Checking directory structure..."
           ls -la frontend/src/__tests__/cypress/cypress/tests/ || echo "Base test directory not found"
           
@@ -81,19 +83,30 @@ jobs:
             ls -la frontend/src/__tests__/cypress/cypress/tests/mocked/
             
             echo "Generating test groups..."
-            GROUPS=$(cd frontend/src/__tests__/cypress/cypress/tests/mocked && \
-                    find . -maxdepth 1 -mindepth 1 -type d | \
+            echo "Step 1: Changing directory and running find..."
+            cd frontend/src/__tests__/cypress/cypress/tests/mocked || exit 1
+            
+            echo "Step 2: Running find command..."
+            find . -maxdepth 1 -mindepth 1 -type d
+            
+            echo "Step 3: Processing with sed..."
+            find . -maxdepth 1 -mindepth 1 -type d | sed 's|^./||'
+            
+            echo "Step 4: Creating JSON array..."
+            GROUPS=$(find . -maxdepth 1 -mindepth 1 -type d | \
                     sed 's|^./||' | \
                     jq -R . | \
                     jq -s .)
             
-            echo "Generated groups: $GROUPS"
+            echo "Step 5: Generated groups:"
+            echo "$GROUPS"
             
             if [ -z "$GROUPS" ] || [ "$GROUPS" == "[]" ]; then
               echo "Warning: No test groups found, falling back to default"
               GROUPS='["default"]'
             fi
             
+            echo "Step 6: Writing to output..."
             echo "groups=$GROUPS" >> $GITHUB_OUTPUT
           else
             echo "Warning: Mocked tests directory not found at expected location:"

@@ -3,7 +3,7 @@ import * as React from 'react';
 import { ProjectModel, SelfSubjectAccessReviewModel } from '~/api/models';
 import { AccessReviewResourceAttributes, SelfSubjectAccessReviewKind } from '~/k8sTypes';
 
-const checkAccess = ({
+export const checkAccess = ({
   group,
   resource,
   subresource,

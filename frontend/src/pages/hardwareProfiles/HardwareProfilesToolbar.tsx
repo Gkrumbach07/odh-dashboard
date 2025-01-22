@@ -9,6 +9,7 @@ import {
   hardwareProfileFilterOptions,
 } from '~/pages/hardwareProfiles/const';
 import SimpleSelect from '~/components/SimpleSelect';
+import { useCanIAccess } from '~/app/AccessReviewContext';
 
 type HardwareProfilesToolbarProps = {
   filterData: HardwareProfileFilterDataType;
@@ -20,6 +21,11 @@ const HardwareProfilesToolbar: React.FC<HardwareProfilesToolbarProps> = ({
   onFilterUpdate,
 }) => {
   const navigate = useNavigate();
+  const [canCreate] = useCanIAccess({
+    group: 'dashboard.opendatahub.io',
+    resource: 'hardwareprofiles',
+    verb: 'create',
+  });
 
   return (
     <FilterToolbar<keyof typeof hardwareProfileFilterOptions>
@@ -53,14 +59,16 @@ const HardwareProfilesToolbar: React.FC<HardwareProfilesToolbarProps> = ({
       onFilterUpdate={onFilterUpdate}
     >
       <ToolbarGroup>
-        <ToolbarItem>
-          <Button
-            data-testid="create-hardware-profile"
-            onClick={() => navigate('/hardwareProfiles/create')}
-          >
-            Create hardware profile
-          </Button>
-        </ToolbarItem>
+        {canCreate && (
+          <ToolbarItem>
+            <Button
+              data-testid="create-hardware-profile"
+              onClick={() => navigate('/hardwareProfiles/create')}
+            >
+              Create hardware profile
+            </Button>
+          </ToolbarItem>
+        )}
       </ToolbarGroup>
     </FilterToolbar>
   );

@@ -16,6 +16,7 @@ import NodeResourceTable from '~/pages/hardwareProfiles/nodeResource/NodeResourc
 import NodeSelectorTable from '~/pages/hardwareProfiles/nodeSelector/NodeSelectorTable';
 import TolerationTable from '~/pages/hardwareProfiles/toleration/TolerationTable';
 import { isHardwareProfileOOTB } from '~/pages/hardwareProfiles/utils';
+import { useCanIAccessForKebabAction } from '~/app/AccessReviewContext';
 
 type HardwareProfilesTableRowProps = {
   rowIndex: number;
@@ -33,7 +34,6 @@ const HardwareProfilesTableRow: React.FC<HardwareProfilesTableRowProps> = ({
   const modifiedDate = hardwareProfile.metadata.annotations?.['opendatahub.io/modified-date'];
   const [isExpanded, setExpanded] = React.useState(false);
   const navigate = useNavigate();
-
   return (
     <Tbody isExpanded={isExpanded}>
       <Tr>
@@ -84,11 +84,20 @@ const HardwareProfilesTableRow: React.FC<HardwareProfilesTableRowProps> = ({
                         navigate(`/hardwareProfiles/edit/${hardwareProfile.metadata.name}`),
                     },
                   ]),
-              {
-                title: 'Duplicate',
-                onClick: () =>
-                  navigate(`/hardwareProfiles/duplicate/${hardwareProfile.metadata.name}`),
-              },
+              ...useCanIAccessForKebabAction(
+                [
+                  {
+                    title: 'Duplicate',
+                    onClick: () =>
+                      navigate(`/hardwareProfiles/duplicate/${hardwareProfile.metadata.name}`),
+                  },
+                ],
+                {
+                  group: 'dashboard.opendatahub.io',
+                  resource: 'hardwareprofiles',
+                  verb: 'update',
+                },
+              ),
               ...(isHardwareProfileOOTB(hardwareProfile)
                 ? []
                 : [

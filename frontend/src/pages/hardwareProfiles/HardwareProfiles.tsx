@@ -16,6 +16,7 @@ import ApplicationsPage from '~/pages/ApplicationsPage';
 import { useDashboardNamespace } from '~/redux/selectors';
 import { ODH_PRODUCT_NAME } from '~/utilities/const';
 import HardwareProfilesTable from '~/pages/hardwareProfiles/HardwareProfilesTable';
+import { useCanIAccess } from '~/app/AccessReviewContext';
 import useHardwareProfiles from './useHardwareProfiles';
 
 const description = `Manage hardware profile settings for users in your organization.`;
@@ -24,6 +25,12 @@ const HardwareProfiles: React.FC = () => {
   const { dashboardNamespace } = useDashboardNamespace();
   const [hardwareProfiles, loaded, loadError, refresh] = useHardwareProfiles(dashboardNamespace);
   const navigate = useNavigate();
+
+  const [canCreate] = useCanIAccess({
+    group: 'dashboard.opendatahub.io',
+    resource: 'hardwareprofiles',
+    verb: 'create',
+  });
 
   const isEmpty = hardwareProfiles.length === 0;
 
@@ -43,15 +50,17 @@ const HardwareProfiles: React.FC = () => {
           profiles in {ODH_PRODUCT_NAME}.
         </EmptyStateBody>
         <EmptyStateFooter>
-          <EmptyStateActions>
-            <Button
-              data-testid="display-hardware-modal-button"
-              variant={ButtonVariant.primary}
-              onClick={() => navigate('/hardwareProfiles/create')}
-            >
-              Add new hardware profile
-            </Button>
-          </EmptyStateActions>
+          {canCreate && (
+            <EmptyStateActions>
+              <Button
+                data-testid="display-hardware-modal-button"
+                variant={ButtonVariant.primary}
+                onClick={() => navigate('/hardwareProfiles/create')}
+              >
+                Add new hardware profile
+              </Button>
+            </EmptyStateActions>
+          )}
         </EmptyStateFooter>
       </EmptyState>
     </PageSection>

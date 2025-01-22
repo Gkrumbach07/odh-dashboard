@@ -1,5 +1,7 @@
 import * as React from 'react';
+import { useAccessReview } from '~/api';
 import { SupportedArea, useIsAreaAvailable } from '~/concepts/areas';
+import { AccessReviewResourceAttributes } from '~/k8sTypes';
 import { useUser } from '~/redux/selectors';
 import {
   artifactsRootPath,
@@ -32,8 +34,27 @@ export const isNavDataHref = (navData: NavDataItem): navData is NavDataHref => '
 export const isNavDataGroup = (navData: NavDataItem): navData is NavDataGroup =>
   'children' in navData;
 
-const useAreaCheck = <T,>(area: SupportedArea, success: T[]): T[] =>
-  useIsAreaAvailable(area).status ? success : [];
+const useAreaCheck = <T,>(
+  area: SupportedArea,
+  success: T[],
+  resourceAttributes?: AccessReviewResourceAttributes,
+): T[] => {
+  const [allowList, accessReviewLoaded] = useAccessReview(
+    resourceAttributes || { verb: '*' },
+    !!resourceAttributes,
+  );
+  const isAvailable = useIsAreaAvailable(area).status;
+
+  if (!resourceAttributes) {
+    return isAvailable ? success : [];
+  }
+
+  if (!accessReviewLoaded) {
+    return [];
+  }
+
+  return allowList && isAvailable ? success : [];
+};
 
 const useApplicationsNav = (): NavDataItem[] => {
   const isHomeAvailable = useIsAreaAvailable(SupportedArea.HOME).status;
@@ -198,13 +219,22 @@ const useAcceleratorProfilesNav = (): NavDataHref[] =>
   ]);
 
 const useHardwareProfilesNav = (): NavDataHref[] =>
-  useAreaCheck<NavDataHref>(SupportedArea.HARDWARE_PROFILES, [
+  useAreaCheck<NavDataHref>(
+    SupportedArea.HARDWARE_PROFILES,
+    [
+      {
+        id: 'settings-hardware-profiles',
+        label: 'Hardware profiles',
+        href: '/hardwareProfiles',
+      },
+    ],
     {
-      id: 'settings-hardware-profiles',
-      label: 'Hardware profiles',
-      href: '/hardwareProfiles',
+      group: 'dashboard.opendatahub.io',
+      resource: 'hardwareprofiles',
+      namespace: 'opendatahub',
+      verb: 'list',
     },
-  ]);
+  );
 
 const useSettingsNav = (): NavDataGroup[] => {
   const settingsNavs: NavDataHref[] = [

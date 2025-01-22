@@ -37,6 +37,7 @@ import DevFeatureFlagsBanner from './DevFeatureFlagsBanner';
 import SessionExpiredModal from './SessionExpiredModal';
 
 import './App.scss';
+import { AccessReviewProvider } from './AccessReviewContext';
 
 const App: React.FC = () => {
   const [notificationsOpen, setNotificationsOpen] = React.useState(false);
@@ -139,15 +140,17 @@ const App: React.FC = () => {
             }
           >
             <ErrorBoundary>
-              <NimContextProvider>
-                <ProjectsContextProvider>
-                  <ModelRegistrySelectorContextProvider>
-                    <QuickStarts>
-                      <AppRoutes />
-                    </QuickStarts>
-                  </ModelRegistrySelectorContextProvider>
-                </ProjectsContextProvider>
-              </NimContextProvider>
+              <AccessReviewProvider>
+                <NimContextProvider>
+                  <ProjectsContextProvider>
+                    <ModelRegistrySelectorContextProvider>
+                      <QuickStarts>
+                        <AppRoutes />
+                      </QuickStarts>
+                    </ModelRegistrySelectorContextProvider>
+                  </ProjectsContextProvider>
+                </NimContextProvider>
+              </AccessReviewProvider>
               <ToastNotifications />
               <TelemetrySetup />
             </ErrorBoundary>

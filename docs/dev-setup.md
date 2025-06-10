@@ -76,6 +76,481 @@ Steps to Configure:
 
 Replace your-custom-domain.com with the specific domain for your OpenShift console
 
+## Setting Up Specific Dashboard Areas for Development
+
+The dashboard contains multiple areas that can be individually enabled/disabled via feature flags and component configurations. Each area may have dependencies on other areas, specific OpenShift operators, or cluster capabilities. This section provides detailed setup instructions for each area.
+
+### Prerequisites for All Area Setups
+
+- OpenShift cluster with cluster-admin access
+- OpenShift CLI (`oc`) installed and authenticated
+- Dashboard development environment set up (see above sections)
+
+### Data Science Pipelines
+
+**Feature Flag:** `disablePipelines` (set to `false` to enable)  
+**Required Components:** `data-science-pipelines-operator`  
+**Dependencies:** None
+
+#### Setup Instructions
+
+1. **Install OpenShift Pipelines Operator**
+   ```bash
+   oc apply -f - <<EOF
+   apiVersion: operators.coreos.com/v1alpha1
+   kind: Subscription
+   metadata:
+     name: openshift-pipelines-operator
+     namespace: openshift-operators
+   spec:
+     channel: pipelines-1.10
+     name: openshift-pipelines-operator-rh
+     source: redhat-operators
+     sourceNamespace: openshift-marketplace
+   EOF
+   ```
+
+2. **Install Data Science Pipelines Operator**
+   ```bash
+   oc apply -f - <<EOF
+   apiVersion: operators.coreos.com/v1alpha1
+   kind: Subscription
+   metadata:
+     name: data-science-pipelines-operator
+     namespace: openshift-operators
+   spec:
+     channel: stable
+     name: data-science-pipelines-operator
+     source: community-operators
+     sourceNamespace: openshift-marketplace
+   EOF
+   ```
+
+3. **Create a Data Science Project and Pipeline Server**
+   ```bash
+   # Create a test project
+   oc new-project test-ds-pipelines
+   
+   # Create a DataSciencePipelinesApplication
+   oc apply -f - <<EOF
+   apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
+   kind: DataSciencePipelinesApplication
+   metadata:
+     name: sample-pipeline
+     namespace: test-ds-pipelines
+   spec:
+     objectStorage:
+       minio:
+         deploy: true
+         image: 'quay.io/opendatahub/minio:RELEASE.2019-08-14T20-37-41Z-license-compliance'
+     database:
+       mariaDB:
+         deploy: true
+   EOF
+   ```
+
+4. **Enable Feature Flag**
+   - Via dev flags modal: Set `disablePipelines = false`
+   - Via DSC config: Ensure `datasciencepipelines.managementState = Managed`
+
+#### Verification
+- Navigate to Data Science Projects → Create pipeline
+- Verify pipeline server is visible and functional
+- Check that pipeline imports work correctly
+
+---
+
+### KServe (Single Model Serving)
+
+**Feature Flag:** `disableKServe` (set to `false` to enable)  
+**Required Components:** `kserve`  
+**Dependencies:** OpenShift Serverless, Service Mesh
+
+#### Setup Instructions
+
+1. **Install OpenShift Serverless Operator**
+   ```bash
+   oc apply -f - <<EOF
+   apiVersion: operators.coreos.com/v1alpha1
+   kind: Subscription
+   metadata:
+     name: serverless-operator
+     namespace: openshift-serverless
+   spec:
+     channel: stable
+     name: serverless-operator
+     source: redhat-operators
+     sourceNamespace: openshift-marketplace
+   EOF
+   ```
+
+2. **Create Knative Serving Instance**
+   ```bash
+   oc apply -f - <<EOF
+   apiVersion: operator.knative.dev/v1beta1
+   kind: KnativeServing
+   metadata:
+     name: knative-serving
+     namespace: knative-serving
+   spec: {}
+   EOF
+   ```
+
+3. **Install Service Mesh Operator**
+   ```bash
+   oc apply -f - <<EOF
+   apiVersion: operators.coreos.com/v1alpha1
+   kind: Subscription
+   metadata:
+     name: servicemeshoperator
+     namespace: openshift-operators
+   spec:
+     channel: stable
+     name: servicemeshoperator
+     source: redhat-operators
+     sourceNamespace: openshift-marketplace
+   EOF
+   ```
+
+4. **Create Service Mesh Instance**
+   ```bash
+   oc apply -f - <<EOF
+   apiVersion: maistra.io/v2
+   kind: ServiceMeshControlPlane
+   metadata:
+     name: data-science-smcp
+     namespace: istio-system
+   spec:
+     version: v2.4
+     tracing:
+       type: Jaeger
+       sampling: 10000
+     addons:
+       jaeger:
+         name: jaeger
+       kiali:
+         enabled: true
+         name: kiali
+       grafana:
+         enabled: true
+   EOF
+   ```
+
+5. **Enable KServe Component**
+   ```bash
+   oc patch datasciencecluster default-dsc --type='merge' -p='{"spec":{"components":{"kserve":{"managementState":"Managed"}}}}'
+   ```
+
+#### Verification
+- Check Model Serving page appears in dashboard
+- Verify ability to deploy a test model
+- Confirm KServe resources are created properly
+
+---
+
+### Model Registry
+
+**Feature Flag:** `disableModelRegistry` (set to `false` to enable)  
+**Required Components:** `model-registry-operator`  
+**Required Capabilities:** Service Mesh, Service Mesh Authorization  
+**Dependencies:** KServe setup (above)
+
+#### Setup Instructions
+
+1. **Install Authorino Operator**
+   ```bash
+   oc apply -f - <<EOF
+   apiVersion: operators.coreos.com/v1alpha1
+   kind: Subscription
+   metadata:
+     name: authorino-operator
+     namespace: openshift-operators
+   spec:
+     channel: stable
+     name: authorino-operator
+     source: community-operators
+     sourceNamespace: openshift-marketplace
+   EOF
+   ```
+
+2. **Enable Model Registry Component**
+   ```bash
+   oc patch datasciencecluster default-dsc --type='merge' -p='{"spec":{"components":{"modelregistry":{"managementState":"Managed"}}}}'
+   ```
+
+3. **Verify Service Mesh Authorization is Enabled**
+   ```bash
+   oc patch dscinitialization default-dsci --type='merge' -p='{"spec":{"serviceMesh":{"auth":{"audiences":["https://kubernetes.default.svc"]}}}}'
+   ```
+
+#### Verification
+- Model Registry option appears in dashboard navigation
+- Can create and view model registrations
+- Model versions can be registered and retrieved
+
+---
+
+### Distributed Workloads
+
+**Feature Flag:** `disableDistributedWorkloads` (set to `false` to enable)  
+**Required Components:** `kueue`  
+**Dependencies:** None
+
+#### Setup Instructions
+
+1. **Enable Kueue Component**
+   ```bash
+   oc patch datasciencecluster default-dsc --type='merge' -p='{"spec":{"components":{"kueue":{"managementState":"Managed"}}}}'
+   ```
+
+2. **Enable CodeFlare Component**
+   ```bash
+   oc patch datasciencecluster default-dsc --type='merge' -p='{"spec":{"components":{"codeflare":{"managementState":"Managed"}}}}'
+   ```
+
+#### Verification
+- Distributed Workloads section appears in project details
+- Can create and submit distributed training jobs
+- Job queues and resource quotas are manageable
+
+---
+
+### Workbenches
+
+**Required Components:** `workbenches`  
+**Dependencies:** Data Science Projects enabled
+
+#### Setup Instructions
+
+1. **Enable Workbenches Component**
+   ```bash
+   oc patch datasciencecluster default-dsc --type='merge' -p='{"spec":{"components":{"workbenches":{"managementState":"Managed"}}}}'
+   ```
+
+2. **Ensure Notebook Images are Available**
+   ```bash
+   # Check available notebook images
+   oc get imagestreams -n redhat-ods-applications
+   ```
+
+#### Verification
+- Workbenches tab appears in data science projects
+- Can create and start notebook servers
+- JupyterLab interface is accessible
+
+---
+
+### TrustyAI (Bias Metrics)
+
+**Feature Flag:** `disableTrustyBiasMetrics` (set to `false` to enable)  
+**Required Components:** `trustyai`  
+**Dependencies:** Model Serving enabled
+
+#### Setup Instructions
+
+1. **Enable TrustyAI Component**
+   ```bash
+   oc patch datasciencecluster default-dsc --type='merge' -p='{"spec":{"components":{"trustyai":{"managementState":"Managed"}}}}'
+   ```
+
+#### Verification
+- Bias metrics options appear in model serving interfaces
+- TrustyAI service pods are running
+- Bias detection jobs can be configured
+
+---
+
+### Accelerator Profiles
+
+**Feature Flag:** `disableAcceleratorProfiles` (set to `false` to enable)  
+**Dependencies:** None (but GPU operators recommended for full functionality)
+
+#### Setup Instructions
+
+1. **Enable Feature Flag**
+   - Via dev flags modal: Set `disableAcceleratorProfiles = false`
+
+2. **Optional: Install NVIDIA GPU Operator for Real GPU Support**
+   ```bash
+   oc apply -f - <<EOF
+   apiVersion: operators.coreos.com/v1alpha1
+   kind: Subscription
+   metadata:
+     name: gpu-operator-certified
+     namespace: openshift-operators
+   spec:
+     channel: stable
+     name: gpu-operator-certified
+     source: certified-operators
+     sourceNamespace: openshift-marketplace
+   EOF
+   ```
+
+#### Verification
+- Accelerator profiles management appears in Settings
+- Can create and modify accelerator profiles
+- Profiles are selectable in workbench creation
+
+---
+
+### Storage Classes
+
+**Feature Flag:** `disableStorageClasses` (set to `false` to enable)  
+**Dependencies:** None
+
+#### Setup Instructions
+
+1. **Enable Feature Flag**
+   - Via dev flags modal: Set `disableStorageClasses = false`
+
+#### Verification
+- Storage classes management appears in Settings
+- Can view and modify storage class configurations
+- Storage classes are available for PVC creation
+
+---
+
+### Model Serving Runtime Parameters
+
+**Feature Flag:** `disableServingRuntimeParams` (set to `false` to enable)  
+**Dependencies:** KServe and Model Serving enabled
+
+#### Setup Instructions
+
+1. **Ensure KServe is Setup** (see KServe section above)
+
+2. **Enable Feature Flag**
+   - Via dev flags modal: Set `disableServingRuntimeParams = false`
+
+#### Verification
+- Advanced serving runtime parameters are configurable
+- Custom runtime parameters can be set during model deployment
+- Runtime configurations are persistent
+
+---
+
+### User Management
+
+**Feature Flag:** `disableUserManagement` (set to `false` to enable)  
+**Dependencies:** Cluster admin permissions
+
+#### Setup Instructions
+
+1. **Enable Feature Flag**
+   - Via dev flags modal: Set `disableUserManagement = false`
+
+2. **Ensure Proper RBAC Setup**
+   ```bash
+   # Verify cluster role bindings exist
+   oc get clusterrolebinding | grep odh
+   ```
+
+#### Verification
+- User management appears in Settings
+- Can view and manage user groups
+- User access controls are functional
+
+---
+
+### Custom Serving Runtimes
+
+**Feature Flag:** `disableCustomServingRuntimes` (set to `false` to enable)  
+**Dependencies:** Model Serving enabled
+
+#### Setup Instructions
+
+1. **Ensure Model Serving is Setup**
+
+2. **Enable Feature Flag**
+   - Via dev flags modal: Set `disableCustomServingRuntimes = false`
+
+#### Verification
+- Custom serving runtimes management appears
+- Can create and deploy custom serving runtime templates
+- Custom runtimes are available for model deployment
+
+---
+
+## Quick Setup Scripts
+
+For rapid development environment setup, here are some helper scripts:
+
+### Enable All Core Features
+```bash
+#!/bin/bash
+echo "Enabling all core OpenShift AI features..."
+
+# Enable all core components
+oc patch datasciencecluster default-dsc --type='merge' -p='{
+  "spec": {
+    "components": {
+      "dashboard": {"managementState": "Managed"},
+      "workbenches": {"managementState": "Managed"},
+      "datasciencepipelines": {"managementState": "Managed"},
+      "kserve": {"managementState": "Managed"},
+      "modelmeshserving": {"managementState": "Managed"}
+    }
+  }
+}'
+```
+
+### Create Test Data Science Project
+```bash
+#!/bin/bash
+PROJECT_NAME="test-development"
+
+oc new-project $PROJECT_NAME
+oc label namespace $PROJECT_NAME opendatahub.io/dashboard=true
+
+# Create a basic DSPA for pipelines
+oc apply -f - <<EOF
+apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
+kind: DataSciencePipelinesApplication
+metadata:
+  name: test-pipelines
+  namespace: $PROJECT_NAME
+spec:
+  objectStorage:
+    minio:
+      deploy: true
+      image: 'quay.io/opendatahub/minio:RELEASE.2019-08-14T20-37-41Z-license-compliance'
+  database:
+    mariaDB:
+      deploy: true
+EOF
+```
+
+## Troubleshooting Common Setup Issues
+
+### Component Not Appearing in Dashboard
+1. Check if feature flag is properly disabled: `disableX = false`
+2. Verify component is managed: `managementState = Managed`
+3. Check component pods are running: `oc get pods -n redhat-ods-applications`
+4. Review operator logs: `oc logs -n redhat-ods-operator deployment/rhods-operator`
+
+### KServe Setup Issues
+1. Verify Serverless and Service Mesh operators are installed
+2. Check Knative Serving is ready: `oc get knativeserving -A`
+3. Verify Service Mesh control plane: `oc get smcp -A`
+4. Review KServe controller logs: `oc logs -n redhat-ods-applications deployment/kserve-controller-manager`
+
+### Pipeline Server Creation Fails
+1. Ensure OpenShift Pipelines operator is installed
+2. Check for sufficient cluster resources
+3. Verify storage classes are available: `oc get storageclass`
+4. Review DSPA status: `oc describe dspa -n <project>`
+
+### Performance and Resource Considerations
+
+When setting up multiple areas for development:
+
+- **Minimum Resources**: 8 CPUs, 32GB RAM across worker nodes
+- **Recommended**: 16 CPUs, 64GB RAM for full feature testing
+- **Storage**: Fast SSD storage classes recommended for databases and object storage
+- **Network**: Ensure proper ingress/egress rules for external integrations
+
+This comprehensive setup guide should enable developers to configure and test individual dashboard areas effectively. Each section can be followed independently based on development needs.
+
 ## Deploying the ODH Dashbard
 
 ### Official Image Builds

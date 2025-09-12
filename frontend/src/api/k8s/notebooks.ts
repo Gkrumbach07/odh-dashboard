@@ -326,6 +326,9 @@ export const updateNotebook = (
   oldNotebook.spec.template.spec.affinity = {};
   oldNotebook.spec.template.spec.nodeSelector = {};
   container.resources = {};
+  // clean the volumes and volumeMounts to prevent duplication
+  oldNotebook.spec.template.spec.volumes = [];
+  container.volumeMounts = [];
 
   return k8sUpdateResource<NotebookKind>(
     applyK8sAPIOptions(

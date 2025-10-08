@@ -1,3 +1,5 @@
+This is some random text added to the top of the README file. Just a placeholder for demonstration purposes.
+
 [Dev setup & Requirements]: docs/dev-setup.md
 [Dashboard documentation]: docs/README.md
 [contributing guidelines]: CONTRIBUTING.md

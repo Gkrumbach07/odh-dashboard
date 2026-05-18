@@ -57,6 +57,10 @@ jobs:
               "Stop": [{
                 "matcher": "",
                 "hooks": [{ "type": "command", "command": "which mlflow >/dev/null 2>&1 && mlflow autolog claude stop-hook || true" }]
+              }],
+              "StopFailure": [{
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": "which mlflow >/dev/null 2>&1 && mlflow autolog claude stop-hook || true" }]
               }]
             }
           }

@@ -72,5 +72,9 @@ jobs:
             --max-turns 50 \
             --model claude-haiku-4-5 \
             --disallowedTools "Edit,Write,NotebookEdit" || true
-          echo "=== Claude exited, waiting for hooks to flush ==="
-          sleep 10
+          echo "=== Claude exited ==="
+
+      - name: Flush MLflow traces
+        if: always()
+        run: |
+          mlflow autolog claude stop-hook || echo "Stop hook exit code: $?"

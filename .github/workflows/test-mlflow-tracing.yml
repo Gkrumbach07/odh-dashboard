@@ -1,0 +1,75 @@
+name: Test MLflow Tracing
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      MLFLOW_EXPERIMENT_NAME: ${{ secrets.MLFLOW_EXPERIMENT_NAME }}
+      MLFLOW_TRACKING_TOKEN: ${{ secrets.MLFLOW_TRACKING_TOKEN }}
+      MLFLOW_WORKSPACE: ${{ secrets.MLFLOW_WORKSPACE }}
+      MLFLOW_ENABLE_WORKSPACES: "true"
+      MLFLOW_CLAUDE_TRACING_ENABLED: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and MLflow
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MLflow
+        run: pip install "mlflow[genai]>=3.5"
+
+      - name: Verify MLflow connection
+        run: |
+          echo "=== MLflow version ==="
+          mlflow --version
+          echo ""
+          echo "=== Test MLflow API ==="
+          curl -s -o /dev/null -w "HTTP %{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $MLFLOW_TRACKING_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "X-Mlflow-Workspace: $MLFLOW_WORKSPACE" \
+            -d '{"max_results": 1}' \
+            "$MLFLOW_TRACKING_URI/api/2.0/mlflow/experiments/search"
+          echo ""
+
+      - name: Configure MLflow tracing
+        run: |
+          mkdir -p .claude
+          cat > .claude/settings.local.json << 'SETTINGS'
+          {
+            "env": { "MLFLOW_CLAUDE_TRACING_ENABLED": "true" },
+            "hooks": {
+              "Stop": [{
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": "which mlflow >/dev/null 2>&1 && mlflow autolog claude stop-hook || true" }]
+              }]
+            }
+          }
+          SETTINGS
+          echo "settings.local.json written:"
+          cat .claude/settings.local.json
+
+      - name: Run Claude (direct API, no action wrapper)
+        run: |
+          npx @anthropic-ai/claude-code -p "Say hello and list the files in the current directory" \
+            --max-turns 3 \
+            --model claude-sonnet-4-6
+          echo ""
+          echo "=== Claude exited ==="
+
+      - name: Run stop hook manually
+        run: |
+          echo "=== Running stop hook ==="
+          mlflow autolog claude stop-hook 2>&1 || echo "Stop hook failed with exit code $?"
+          echo "=== Done ==="

@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: opendatahub-io/odh-dashboard
-          ref: 4fb8e9bcb5fafc1f116b7e5a33a3f41e5f5f7d67
+          ref: fix/RHOAIENG-58475
           fetch-depth: 0
 
       - name: Set up Python and MLflow

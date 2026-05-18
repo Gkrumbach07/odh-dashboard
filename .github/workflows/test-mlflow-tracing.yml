@@ -70,7 +70,7 @@ jobs:
         run: |
           npx @anthropic-ai/claude-code -p "Run /preflight 7603 --skip-review coderabbit to check this PR. You are in agent-check-only mode — do NOT modify files, commit, or push. Run preflight once, then post a summary PR comment via gh pr comment 7603. The comment must have a Preflight Agent Report header, verdict with mode, the results table with status emojis, an expandable Tracing section, and a footer linking to this workflow run." \
             --max-turns 50 \
-            --model claude-sonnet-4-6 \
-            --disallowedTools "Edit,Write,NotebookEdit"
-          echo ""
-          echo "=== Claude exited ==="
+            --model claude-haiku-4-5 \
+            --disallowedTools "Edit,Write,NotebookEdit" || true
+          echo "=== Claude exited, waiting for hooks to flush ==="
+          sleep 10

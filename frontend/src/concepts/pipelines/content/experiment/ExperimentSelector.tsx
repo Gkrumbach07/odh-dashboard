@@ -54,76 +54,71 @@ const InnerExperimentSelector: React.FC<
         }
         searchHelpText={`Type a name to search your ${totalSize} run groups.`}
         isDisabled={totalSize === 0}
+        footer={
+          loaded
+            ? ({ menuClose }) => (
+                <div className="pf-v6-c-menu__footer pf-v6-u-box-shadow-sm-top">
+                  <Divider />
+                  <Button
+                    variant="link"
+                    icon={<PlusCircleIcon />}
+                    onClick={() => {
+                      menuClose();
+                      setIsModalOpen(true);
+                    }}
+                    style={{ paddingLeft: '20px' }}
+                  >
+                    Create new run group
+                  </Button>
+                </div>
+              )
+            : undefined
+        }
       >
         {({ menuClose }) => (
-          <>
-            <div className="pf-v6-c-menu__content">
-              <TableBase
-                itemCount={fetchedSize}
-                loading={!loaded}
-                emptyTableView={
-                  <DashboardEmptyTableView
-                    hasIcon={false}
-                    onClearFilters={onSearchClear}
-                    variant={EmptyStateVariant.xs}
-                  />
-                }
-                data-testid={`${dataTestId}-table-list`}
-                borders={false}
-                variant={TableVariant.compact}
-                columns={experimentSelectorColumns}
-                data={experiments}
-                rowRenderer={(row) => (
-                  <PipelineSelectorTableRow
-                    key={row.experiment_id}
-                    obj={row}
-                    onClick={() => {
-                      onSelect(row);
-                      menuClose();
-                    }}
-                  />
-                )}
-                getColumnSort={getTableColumnSort({
-                  columns: experimentSelectorColumns,
-                  ...sortProps,
-                })}
-                footerRow={() =>
-                  loaded ? (
-                    <PipelineViewMoreFooterRow
-                      visibleLength={experiments.length}
-                      totalSize={fetchedSize}
-                      errorTitle="Error loading more run groups"
-                      onClick={onLoadMore}
-                      colSpan={2}
-                    />
-                  ) : null
-                }
-              />
-            </div>
-            {loaded && (
-              <div
-                className="pf-v6-c-menu__footer pf-v6-u-box-shadow-sm-top"
-                style={{
-                  position: 'sticky',
-                  bottom: 0,
-                  backgroundColor: 'var(--pf-v6-c-menu--BackgroundColor)',
-                }}
-              >
-                <Divider />
-                <Button
-                  variant="link"
-                  icon={<PlusCircleIcon />}
+          <div className="pf-v6-c-menu__content">
+            <TableBase
+              itemCount={fetchedSize}
+              loading={!loaded}
+              emptyTableView={
+                <DashboardEmptyTableView
+                  hasIcon={false}
+                  onClearFilters={onSearchClear}
+                  variant={EmptyStateVariant.xs}
+                />
+              }
+              data-testid={`${dataTestId}-table-list`}
+              borders={false}
+              variant={TableVariant.compact}
+              columns={experimentSelectorColumns}
+              data={experiments}
+              rowRenderer={(row) => (
+                <PipelineSelectorTableRow
+                  key={row.experiment_id}
+                  obj={row}
                   onClick={() => {
+                    onSelect(row);
                     menuClose();
-                    setIsModalOpen(true);
                   }}
-                  style={{ paddingLeft: '20px' }}
-                >
-                  Create new run group
-                </Button>
-              </div>
-            )}
-          </>
+                />
+              )}
+              getColumnSort={getTableColumnSort({
+                columns: experimentSelectorColumns,
+                ...sortProps,
+              })}
+              footerRow={() =>
+                loaded ? (
+                  <PipelineViewMoreFooterRow
+                    visibleLength={experiments.length}
+                    totalSize={fetchedSize}
+                    errorTitle="Error loading more run groups"
+                    onClick={onLoadMore}
+                    colSpan={2}
+                  />
+                ) : null
+              }
+            />
+          </div>
         )}
       </SearchSelector>
       {isModalOpen && (

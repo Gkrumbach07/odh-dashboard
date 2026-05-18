@@ -28,6 +28,7 @@ type SearchSelectorProps = {
    * Resulting children (React.ReactNode) can be anything that can be rendered inside <MenuList />.
    */
   children: ((opts: ManualSearchSelectorOpts) => React.ReactNode) | React.ReactNode;
+  footer?: ((opts: ManualSearchSelectorOpts) => React.ReactNode) | React.ReactNode;
   isLoading?: boolean;
   isDisabled?: boolean;
   isFullWidth?: boolean;
@@ -46,6 +47,7 @@ type SearchSelectorProps = {
 
 const SearchSelector: React.FC<SearchSelectorProps> = ({
   children,
+  footer,
   dataTestId,
   isLoading,
   isDisabled,
@@ -138,6 +140,8 @@ const SearchSelector: React.FC<SearchSelectorProps> = ({
                 : children}
             </MenuList>
           </MenuContent>
+          {footer &&
+            (typeof footer === 'function' ? footer({ menuClose: () => setIsOpen(false) }) : footer)}
         </Menu>
       }
     />

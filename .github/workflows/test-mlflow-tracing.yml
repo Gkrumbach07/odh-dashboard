@@ -6,7 +6,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -18,8 +18,12 @@ jobs:
       MLFLOW_CLAUDE_TRACING_ENABLED: "true"
 
     steps:
-      - name: Checkout
+      - name: Checkout PR
         uses: actions/checkout@v4
+        with:
+          repository: opendatahub-io/odh-dashboard
+          ref: 4fb8e9bcb5fafc1f116b7e5a33a3f41e5f5f7d67
+          fetch-depth: 0
 
       - name: Set up Python and MLflow
         uses: actions/setup-python@v5
@@ -30,22 +34,22 @@ jobs:
 
       - name: Verify MLflow connection
         run: |
-          echo "=== MLflow version ==="
-          mlflow --version
-          echo ""
-          echo "=== Test MLflow API ==="
-          curl -s -o /dev/null -w "HTTP %{http_code}" \
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
             -H "Authorization: Bearer $MLFLOW_TRACKING_TOKEN" \
             -H "Content-Type: application/json" \
             -H "X-Mlflow-Workspace: $MLFLOW_WORKSPACE" \
             -d '{"max_results": 1}' \
-            "$MLFLOW_TRACKING_URI/api/2.0/mlflow/experiments/search"
-          echo ""
+            "$MLFLOW_TRACKING_URI/api/2.0/mlflow/experiments/search")
+          echo "MLflow API: HTTP $CODE"
+          if [ "$CODE" != "200" ]; then
+            echo "::warning::MLflow API returned $CODE — tracing may not work"
+          fi
 
       - name: Configure MLflow tracing
         run: |
           mkdir -p .claude
+          printf '.claude/settings.local.json\n' >> .git/info/exclude
           cat > .claude/settings.local.json << 'SETTINGS'
           {
             "env": { "MLFLOW_CLAUDE_TRACING_ENABLED": "true" },
@@ -57,19 +61,12 @@ jobs:
             }
           }
           SETTINGS
-          echo "settings.local.json written:"
-          cat .claude/settings.local.json
 
-      - name: Run Claude (direct API, no action wrapper)
+      - name: Preflight check (check-only mode)
         run: |
-          npx @anthropic-ai/claude-code -p "Say hello and list the files in the current directory" \
-            --max-turns 3 \
-            --model claude-sonnet-4-6
+          npx @anthropic-ai/claude-code -p "Run /preflight 7603 --skip-review coderabbit to check this PR. You are in agent-check-only mode — do NOT modify files, commit, or push. Run preflight once, then post a summary PR comment via gh pr comment 7603. The comment must have a Preflight Agent Report header, verdict with mode, the results table with status emojis, an expandable Tracing section, and a footer linking to this workflow run." \
+            --max-turns 50 \
+            --model claude-sonnet-4-6 \
+            --disallowedTools "Edit,Write,NotebookEdit"
           echo ""
           echo "=== Claude exited ==="
-
-      - name: Run stop hook manually
-        run: |
-          echo "=== Running stop hook ==="
-          mlflow autolog claude stop-hook 2>&1 || echo "Stop hook failed with exit code $?"
-          echo "=== Done ==="

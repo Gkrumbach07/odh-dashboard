@@ -84,7 +84,11 @@ jobs:
           github_token: ${{ github.token }}
           use_vertex: "false"
           use_bedrock: "false"
-          claude_args: "--max-turns 120 --model claude-sonnet-4-6 --permission-mode acceptEdits"
+          claude_args: >-
+            --max-turns 120
+            --model claude-sonnet-4-6
+            --permission-mode acceptEdits
+            --append-system-prompt "CRITICAL REQUIREMENT: After completing all preflight checks, you MUST use the Write tool to create preflight-results.json in the repo root. It must be valid JSON with keys: verdict (READY/READY_WITH_WARNINGS/NOT_READY), mode (check-only/managed), commit (short SHA), checks (array of {name, status, details}), findings (array of {severity, file, line, title, description, diff}). Status values: passed/failed/warning/covered/na. Severity values: critical/major/minor/nit. The workflow posts the formatted comment from this file. If you skip this step, no comment is posted."
           show_full_output: true
           prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:

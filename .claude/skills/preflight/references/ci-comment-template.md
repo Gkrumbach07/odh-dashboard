@@ -158,6 +158,10 @@ JSON
 gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json
 ```
 
-## Shell Quoting
+## Writing Files in CI
 
-Always write to temp files and use `--body-file` or `--input`. Never pass markdown as CLI arguments.
+Use the **Write tool** to create `/tmp/preflight-comment.md` and `/tmp/review.json`. Bash file redirects (`>`, `tee`, heredocs) may be blocked by the CI security sandbox. The Write tool always works.
+
+After writing, post with:
+- `gh pr comment PR --body-file /tmp/preflight-comment.md`
+- `gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json`

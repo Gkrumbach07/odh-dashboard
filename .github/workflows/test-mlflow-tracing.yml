@@ -84,7 +84,7 @@ jobs:
           github_token: ${{ github.token }}
           use_vertex: "false"
           use_bedrock: "false"
-          claude_args: "--max-turns 120 --model claude-sonnet-4-6 --disallowedTools Edit,NotebookEdit"
+          claude_args: "--max-turns 120 --model claude-sonnet-4-6"
           show_full_output: true
           prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:

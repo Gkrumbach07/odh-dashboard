@@ -86,6 +86,7 @@ jobs:
           use_bedrock: "false"
           claude_args: "--max-turns 120 --model claude-sonnet-4-6 --permission-mode acceptEdits"
           show_full_output: "true"
+          allowed_tools: "Bash(gh *),Bash(git *),Bash(npm *),Bash(npx *),Bash(jq *),Read,Write,Edit,TaskCreate,TaskUpdate,TaskList,Skill"
           prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}

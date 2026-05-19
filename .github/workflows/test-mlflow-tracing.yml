@@ -1,11 +1,12 @@
 name: Test MLflow Tracing
 
 on:
-  workflow_dispatch:
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   issues: read
   checks: read
 
@@ -13,26 +14,32 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-      MLFLOW_EXPERIMENT_NAME: ${{ secrets.MLFLOW_EXPERIMENT_NAME }}
-      MLFLOW_TRACKING_TOKEN: ${{ secrets.MLFLOW_TRACKING_TOKEN }}
-      MLFLOW_WORKSPACE: ${{ secrets.MLFLOW_WORKSPACE }}
-      MLFLOW_ENABLE_WORKSPACES: "true"
-      MLFLOW_CLAUDE_TRACING_ENABLED: "true"
+    if: >-
+      github.event.issue.pull_request
+      && contains(github.event.comment.body, '@test-agent preflight')
 
     steps:
+      - name: Get PR metadata
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_DATA=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json headRefOid,headRefName)
+          echo "sha=$(echo "$PR_DATA" | jq -r '.headRefOid')" >> "$GITHUB_OUTPUT"
+          echo "ref=$(echo "$PR_DATA" | jq -r '.headRefName')" >> "$GITHUB_OUTPUT"
+
       - name: Checkout PR
         uses: actions/checkout@v4
         with:
-          repository: opendatahub-io/odh-dashboard
-          ref: refs/pull/7603/head
+          ref: ${{ steps.pr.outputs.ref }}
           fetch-depth: 0
 
       - name: Verify MLflow connection
         continue-on-error: true
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_TOKEN: ${{ secrets.MLFLOW_TRACKING_TOKEN }}
+          MLFLOW_WORKSPACE: ${{ secrets.MLFLOW_WORKSPACE }}
         run: |
           CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
@@ -42,9 +49,6 @@ jobs:
             -d '{"max_results": 1}' \
             "$MLFLOW_TRACKING_URI/api/2.0/mlflow/experiments/search")
           echo "MLflow API: HTTP $CODE"
-          if [ "$CODE" != "200" ]; then
-            echo "::warning::MLflow API returned $CODE — tracing may not work"
-          fi
 
       - name: Set up Python and MLflow
         uses: actions/setup-python@v5
@@ -77,13 +81,16 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          use_vertex: "false"
           claude_args: "--max-turns 50 --model claude-haiku-4-5 --disallowedTools Edit,Write,NotebookEdit"
           prompt: >-
-            Run /preflight 7603 --skip-review coderabbit to check this PR.
-            You are in agent-check-only mode — do NOT modify files, commit,
-            or push. Run preflight once, then post a summary PR comment via
-            gh pr comment 7603. The comment must have a Preflight Agent Report
-            header, verdict with mode, the results table with status emojis,
-            an expandable Tracing section, and a footer linking to
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.
+            Run /preflight ${{ github.event.issue.number }} --skip-review coderabbit
+            to check this PR. You are in agent-check-only mode — do NOT modify
+            files, commit, or push. Run preflight once, then post a summary PR
+            comment via gh pr comment ${{ github.event.issue.number }}.
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_EXPERIMENT_NAME: ${{ secrets.MLFLOW_EXPERIMENT_NAME }}
+          MLFLOW_TRACKING_TOKEN: ${{ secrets.MLFLOW_TRACKING_TOKEN }}
+          MLFLOW_WORKSPACE: ${{ secrets.MLFLOW_WORKSPACE }}
+          MLFLOW_ENABLE_WORKSPACES: "true"
+          MLFLOW_CLAUDE_TRACING_ENABLED: "true"

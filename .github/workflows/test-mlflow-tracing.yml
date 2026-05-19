@@ -85,6 +85,7 @@ jobs:
           use_vertex: "false"
           use_bedrock: "false"
           claude_args: "--max-turns 50 --model claude-haiku-4-5 --disallowedTools Edit,Write,NotebookEdit"
+          show_full_output: true
           prompt: >-
             Run /preflight ${{ github.event.issue.number }} --skip-review coderabbit
             to check this PR. You are in agent-check-only mode — do NOT modify

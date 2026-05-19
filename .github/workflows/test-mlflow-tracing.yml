@@ -3,6 +3,12 @@ name: Test MLflow Tracing
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -25,13 +31,6 @@ jobs:
           ref: refs/pull/7603/head
           fetch-depth: 0
 
-      - name: Set up Python and MLflow
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install MLflow
-        run: pip install "mlflow[genai]>=3.5"
-
       - name: Verify MLflow connection
         continue-on-error: true
         run: |
@@ -46,6 +45,13 @@ jobs:
           if [ "$CODE" != "200" ]; then
             echo "::warning::MLflow API returned $CODE — tracing may not work"
           fi
+
+      - name: Set up Python and MLflow
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MLflow
+        run: pip install "mlflow[genai]>=3.5"
 
       - name: Configure MLflow tracing
         run: |
@@ -67,16 +73,16 @@ jobs:
           }
           SETTINGS
 
-      - name: Preflight check (check-only mode)
-        run: |
-          npx @anthropic-ai/claude-code -p "Run /preflight 7603 --skip-review coderabbit to check this PR. You are in agent-check-only mode — do NOT modify files, commit, or push. Run preflight once, then post a summary PR comment via gh pr comment 7603. The comment must have a Preflight Agent Report header, verdict with mode, the results table with status emojis, an expandable Tracing section, and a footer linking to this workflow run." \
-            --max-turns 50 \
-            --model claude-haiku-4-5 \
-            --disallowedTools "Edit,Write,NotebookEdit" \
-            --dangerously-skip-permissions || true
-          echo "=== Claude exited ==="
-
-      - name: Flush MLflow traces
-        if: always()
-        run: |
-          mlflow autolog claude stop-hook || echo "Stop hook exit code: $?"
+      - name: Preflight check
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--max-turns 50 --model claude-haiku-4-5 --disallowedTools Edit,Write,NotebookEdit"
+          prompt: >-
+            Run /preflight 7603 --skip-review coderabbit to check this PR.
+            You are in agent-check-only mode — do NOT modify files, commit,
+            or push. Run preflight once, then post a summary PR comment via
+            gh pr comment 7603. The comment must have a Preflight Agent Report
+            header, verdict with mode, the results table with status emojis,
+            an expandable Tracing section, and a footer linking to
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.

@@ -99,6 +99,13 @@ jobs:
       - name: Format results
         if: always()
         run: |
+          echo "=== Searching for results file ==="
+          find / -name "preflight-results.json" 2>/dev/null || true
+          echo "=== Workspace contents ==="
+          ls -la "${GITHUB_WORKSPACE}/" | head -20
+          echo "=== /tmp contents ==="
+          ls -la /tmp/ | grep preflight 2>/dev/null || echo "nothing in /tmp"
+
           # Check multiple possible locations
           for f in \
             "${GITHUB_WORKSPACE}/preflight-results.json" \

@@ -84,9 +84,16 @@ jobs:
           github_token: ${{ github.token }}
           use_vertex: "false"
           use_bedrock: "false"
-          claude_args: "--max-turns 120 --model claude-sonnet-4-6 --permission-mode acceptEdits"
+          claude_args: >-
+            --max-turns 120
+            --model claude-sonnet-4-6
+            --permission-mode acceptEdits
+            --allowedTools "Bash(gh *)"
+            --allowedTools "Bash(git *)"
+            --allowedTools "Bash(npm *)"
+            --allowedTools "Bash(npx *)"
+            --allowedTools "Bash(jq *)"
           show_full_output: "true"
-          allowed_tools: "Bash(gh *),Bash(git *),Bash(npm *),Bash(npx *),Bash(jq *),Read,Write,Edit,TaskCreate,TaskUpdate,TaskList,Skill"
           prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}

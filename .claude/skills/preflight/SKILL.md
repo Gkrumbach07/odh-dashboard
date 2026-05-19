@@ -154,7 +154,7 @@ Statuses:
 
 Print the results using the format from [references/ci-comment-template.md](references/ci-comment-template.md). This format is used for both terminal output and PR comments. End with a verdict: any ❌ → **NOT READY**, all ✅ with ⚠️ → **READY WITH WARNINGS**, all ✅ → **READY**.
 
-If `--ci` was passed, write results to `/tmp/preflight-results.json` using the **Write tool**. The workflow will handle formatting and posting. Do NOT post comments yourself — the workflow does that after you finish.
+If `--ci` was passed, write results to `preflight-results.json` in the repo root using the **Write tool**. The workflow will handle formatting and posting. Do NOT post comments yourself — the workflow does that after you finish.
 
 The JSON schema is defined in [references/ci-output-schema.json](references/ci-output-schema.json). Example:
 

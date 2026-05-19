@@ -98,9 +98,17 @@ jobs:
       - name: Format results
         if: always()
         run: |
-          if [ -f /tmp/preflight-results.json ]; then
-            echo "Results file found"
-            cat /tmp/preflight-results.json | jq '.verdict'
+          # Check multiple possible locations
+          for f in \
+            "${GITHUB_WORKSPACE}/preflight-results.json" \
+            "/tmp/preflight-results.json" \
+            "${RUNNER_TEMP}/preflight-results.json"; do
+            [ -f "$f" ] && RESULTS="$f" && break
+          done
+
+          if [ -n "${RESULTS:-}" ]; then
+            echo "Results file found at $RESULTS"
+            cat "$RESULTS" | jq '.verdict'
             .claude/skills/preflight/scripts/format-results.sh \
               "${{ github.repository_owner }}" \
               "$(echo '${{ github.repository }}' | cut -d/ -f2)" \

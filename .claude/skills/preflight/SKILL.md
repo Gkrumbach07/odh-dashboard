@@ -154,13 +154,15 @@ Statuses:
 
 Print the results using the format from [references/ci-comment-template.md](references/ci-comment-template.md). This format is used for both terminal output and PR comments. End with a verdict: any ❌ → **NOT READY**, all ✅ with ⚠️ → **READY WITH WARNINGS**, all ✅ → **READY**.
 
-If `--ci` was passed, post results to the PR. **You MUST follow the format in [references/ci-comment-template.md](references/ci-comment-template.md) exactly.** The summary comment must be proper multi-line markdown with tables, headers, and expandable sections — not a single line of text. Write the comment body to a temp file first to preserve formatting.
+If `--ci` was passed, post results to the PR yourself using `gh`. Do NOT rely on the action's auto-posting — it strips formatting. **You MUST follow the format in [references/ci-comment-template.md](references/ci-comment-template.md) exactly**, including emojis (✅❌⚠️⏭️➖), `<details>` sections, and markdown tables.
 
 Posting procedure:
-1. **Write** the full markdown summary to `/tmp/preflight-comment.md` using a heredoc (`cat > /tmp/preflight-comment.md << 'COMMENT' ... COMMENT`). The first line MUST be `<!-- odh-preflight-agent -->`. Then post with `--body-file`.
+1. Use the **Write tool** to create `/tmp/preflight-comment.md` with the full markdown summary. The first line MUST be `<!-- odh-preflight-agent -->`. Include all emojis, tables, and `<details>` sections exactly as shown in the template. Then run `gh pr comment PR --body-file /tmp/preflight-comment.md`.
 2. **Check** for an existing preflight comment and update it, or create new: see "Comment Overwrite" in the template.
-3. **Write** inline review findings to `/tmp/review.json` and submit via `gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json`. Only Critical/Major/Minor get inline comments — Nits go in summary only.
+3. Use the **Write tool** to create `/tmp/review.json` with inline review findings. Then run `gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json`. Only Critical/Major/Minor get inline comments — Nits go in summary only.
 4. Skip Step 4 entirely unless `--fix` was also passed.
+
+**Important:** Do NOT use bash redirects (`>`, `tee`, heredocs) to write these files — they may be blocked in CI. Always use the Write tool.
 
 ## Step 4: Fix
 

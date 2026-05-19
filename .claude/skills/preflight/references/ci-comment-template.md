@@ -14,11 +14,9 @@ Used for terminal output, PR summary comment, and inline review comments in `--c
 ## How to Post (CI mode)
 
 1. Use the **Write tool** to create `preflight-comment.md` in the workspace root (NOT `/tmp/`, NOT `.claude/`).
-2. Post with a single simple command: `gh pr comment PR --body-file preflight-comment.md`
-3. To update an existing comment instead of duplicating, first check: `gh api "repos/OWNER/REPO/issues/PR/comments" --jq '.[] | select(.body | contains("<!-- odh-preflight-agent -->")) | .id'`
-4. If an ID is returned, update it: `gh api "repos/OWNER/REPO/issues/comments/ID" --method PATCH --body-file preflight-comment.md`
-
-**Important:** Run each `gh` command as its own separate Bash call — do NOT combine them with `if/else`, `&&`, or variable assignments in a single call. The CI sandbox blocks multi-line compound commands.
+2. Check for an existing preflight comment: `gh api "repos/OWNER/REPO/issues/PR/comments" --jq '.[] | select(.body | contains("<!-- odh-preflight-agent -->")) | .id'`
+3. If an ID was returned, update it: `gh api "repos/OWNER/REPO/issues/comments/ID" --method PATCH --body-file preflight-comment.md`
+4. Otherwise create new: `gh pr comment PR --body-file preflight-comment.md`
 
 The marker `<!-- odh-preflight-agent -->` MUST be the first line of every summary comment.
 

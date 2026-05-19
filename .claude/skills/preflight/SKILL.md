@@ -1,7 +1,7 @@
 ---
 name: preflight
-description: "Pre-merge readiness check for a PR or local branch. Gathers context, runs reviews and checks, reports a results table. Interactive by default — asks what to review and whether to fix. Supports flags: --fix, --local, --review X,Y, --skip-review X,Y, --help."
-argument-hint: "[PR] [--fix] [--local] [--review X,Y] [--skip-review X,Y] [--help]"
+description: "Pre-merge readiness check for a PR or local branch. Gathers context, runs reviews and checks, reports a results table. Interactive by default — asks what to review and whether to fix. Supports flags: --fix, --local, --review X,Y, --skip-review X,Y, --ci, --help."
+argument-hint: "[PR] [--fix] [--local] [--review X,Y] [--skip-review X,Y] [--ci] [--help]"
 disable-model-invocation: true
 allowed-tools: Bash(gh *) Bash(git *) Bash(npm *) Bash(npx *) Bash(${CLAUDE_SKILL_DIR}/scripts/*)
 ---
@@ -10,7 +10,9 @@ allowed-tools: Bash(gh *) Bash(git *) Bash(npm *) Bash(npx *) Bash(${CLAUDE_SKIL
 
 Pre-merge readiness check. Gather context, review code, run checks, report results. Interactive by default — asks the user before making decisions. Never skip a check silently.
 
-Never push. Never comment on the PR.
+Never push. Never comment on the PR (unless `--ci` flag is passed).
+
+**Efficiency:** Minimize tool call round trips. Combine independent commands into single Bash calls using `&&` or `;`. For example, gather PR metadata, sync status, and changed files in one call rather than separate calls.
 
 ## --help
 
@@ -28,6 +30,8 @@ Flags:
   --review X,Y          Run specific reviewers without asking
                         Options: coderabbit, claude, style, rbac
   --skip-review X,Y     Run all reviewers EXCEPT these (no interactive prompt)
+  --ci                  Non-interactive CI mode: skip all prompts, post results
+                        as a PR comment when done
   --help                Show this help
 
 Examples:
@@ -52,6 +56,7 @@ Parse these from `$ARGUMENTS` before processing:
 - `--local` — ignore PR even if one exists, run everything locally
 - `--review X,Y` — run specific reviewers without asking (options: `coderabbit`, `claude`, `style`, `rbac`)
 - `--skip-review X,Y` — run all reviewers EXCEPT the listed ones, without asking. Mutually exclusive with `--review`.
+- `--ci` — non-interactive CI mode. Skips all interactive prompts (no `AskUserQuestion`). Posts the results as a PR comment using the template in [references/ci-comment-template.md](references/ci-comment-template.md). Overrides "Never comment on the PR".
 - `--help` — print usage and stop
 - No flags — interactive mode: ask the user what to do at decision points
 
@@ -147,13 +152,20 @@ Statuses:
 
 ⏭️ means CI ran this on the exact same commit. If a check can't run (OOM, missing tool), that's ❌ or ⚠️ — never ⏭️. If a check doesn't apply (no PR body because no PR), use ➖.
 
-Print a results table with every check, its status, and details. End with a verdict: any ❌ → **NOT READY**, all ✅ with ⚠️ → **READY WITH WARNINGS**, all ✅ → **READY**.
+Print the results using the format from [references/ci-comment-template.md](references/ci-comment-template.md). This format is used for both terminal output and PR comments. End with a verdict: any ❌ → **NOT READY**, all ✅ with ⚠️ → **READY WITH WARNINGS**, all ✅ → **READY**.
+
+If `--ci` was passed:
+1. Post the summary comment to the PR using `gh pr comment PR --body-file /tmp/preflight-comment.md`
+2. For review findings with specific file/line locations, submit inline PR review comments (see template for format)
+3. Skip Step 4 entirely unless `--fix` was also passed
 
 ## Step 4: Fix
 
+If `--ci` was passed without `--fix`, skip this step.
+
 If `--fix` was passed, proceed directly.
 
-If no `--fix` flag, use AskUserQuestion:
+If no `--fix` and no `--ci` flag, use AskUserQuestion:
 - "Fix failing checks"
 - "Done — just wanted the report"
 

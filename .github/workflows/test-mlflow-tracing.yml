@@ -84,9 +84,9 @@ jobs:
           github_token: ${{ github.token }}
           use_vertex: "false"
           use_bedrock: "false"
-          claude_args: "--max-turns 50 --model claude-haiku-4-5 --disallowedTools Edit,Write,NotebookEdit"
+          claude_args: "--max-turns 120 --model claude-sonnet-4-6 --disallowedTools Edit,Write,NotebookEdit"
           show_full_output: true
-          prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit. Do NOT ask any questions — you are running in CI with no human to answer. Post the results comment immediately when checks complete."
+          prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_EXPERIMENT_NAME: ${{ secrets.MLFLOW_EXPERIMENT_NAME }}
@@ -94,3 +94,10 @@ jobs:
           MLFLOW_WORKSPACE: ${{ secrets.MLFLOW_WORKSPACE }}
           MLFLOW_ENABLE_WORKSPACES: "true"
           MLFLOW_CLAUDE_TRACING_ENABLED: "true"
+
+      - name: Flush MLflow traces
+        if: always()
+        continue-on-error: true
+        run: |
+          sleep 5
+          mlflow autolog claude stop-hook 2>&1 || true

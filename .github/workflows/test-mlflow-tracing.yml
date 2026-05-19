@@ -121,10 +121,14 @@ jobs:
           fi
 
       - name: Post summary comment
-        if: always() && hashFiles('/tmp/preflight-comment.md') != ''
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ ! -f /tmp/preflight-comment.md ]; then
+            echo "No comment file — skipping"; exit 0
+          fi
+
           EXISTING_ID=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments" \
             --jq '.[] | select(.body | contains("<!-- odh-preflight-agent -->")) | .id' 2>/dev/null | head -1)
 
@@ -138,10 +142,13 @@ jobs:
           fi
 
       - name: Post inline review
-        if: always() && hashFiles('/tmp/review.json') != ''
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ ! -f /tmp/review.json ]; then
+            echo "No review file — skipping"; exit 0
+          fi
           echo "Posting inline review"
           gh api "repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/reviews" \
             --input /tmp/review.json || echo "Inline review failed (may need app token)"

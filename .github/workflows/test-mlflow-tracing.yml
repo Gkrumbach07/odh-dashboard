@@ -95,36 +95,50 @@ jobs:
           MLFLOW_ENABLE_WORKSPACES: "true"
           MLFLOW_CLAUDE_TRACING_ENABLED: "true"
 
-      # ── Post-Claude: format and post results ──
-      - name: Format results
+      # ── Post-Claude: extract JSON from output, format, post ──
+      - name: Extract and format results
         if: always()
-        run: |
-          # Check multiple possible locations
-          for f in \
-            "${GITHUB_WORKSPACE}/preflight-results.json" \
-            "/tmp/preflight-results.json" \
-            "${RUNNER_TEMP}/preflight-results.json"; do
-            [ -f "$f" ] && RESULTS="$f" && break
-          done
-
-          if [ -n "${RESULTS:-}" ]; then
-            echo "Results file found at $RESULTS"
-            cat "$RESULTS" | jq '.verdict'
-            .claude/skills/preflight/scripts/format-results.sh \
-              "${{ github.repository_owner }}" \
-              "$(echo '${{ github.repository }}' | cut -d/ -f2)" \
-              "${{ github.event.issue.number }}" \
-              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          else
-            echo "No results file — Claude may not have written it"
-          fi
-
-      - name: Post summary comment
-        if: always() && hashFiles('/tmp/preflight-comment.md') != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          EXISTING_ID=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments" \
+          LOG="${RUNNER_TEMP}/claude-execution-output.json"
+          if [ ! -f "$LOG" ]; then
+            echo "No execution output found"
+            exit 0
+          fi
+
+          # Extract the last JSON object from Claude's text output
+          # The output log contains message objects — find the last assistant text that looks like JSON
+          jq -r '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // empty' "$LOG" > /tmp/raw-output.txt 2>/dev/null
+
+          # Try to extract JSON from the output (it might be wrapped in markdown code fences)
+          sed -n '/^{/,/^}/p' /tmp/raw-output.txt > /tmp/preflight-results.json 2>/dev/null
+          if ! jq empty /tmp/preflight-results.json 2>/dev/null; then
+            # Try extracting from code fences
+            sed -n '/```json/,/```/p' /tmp/raw-output.txt | sed '1d;$d' > /tmp/preflight-results.json 2>/dev/null
+          fi
+
+          if ! jq empty /tmp/preflight-results.json 2>/dev/null; then
+            echo "Could not extract valid JSON from Claude's output"
+            echo "Raw output:"
+            cat /tmp/raw-output.txt | head -20
+            exit 0
+          fi
+
+          echo "Results extracted:"
+          jq '.verdict' /tmp/preflight-results.json
+
+          # Format using the script
+          .claude/skills/preflight/scripts/format-results.sh \
+            "${{ github.repository_owner }}" \
+            "$(echo '${{ github.repository }}' | cut -d/ -f2)" \
+            "$PR_NUMBER" \
+            "$RUN_URL"
+
+          # Post summary comment (find existing or create new)
+          EXISTING_ID=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.body | contains("<!-- odh-preflight-agent -->")) | .id' 2>/dev/null | head -1)
 
           if [ -n "$EXISTING_ID" ]; then
@@ -133,17 +147,15 @@ jobs:
               gh api "repos/${{ github.repository }}/issues/comments/$EXISTING_ID" --method PATCH --input - > /dev/null
           else
             echo "Creating new comment"
-            gh pr comment "${{ github.event.issue.number }}" --body-file /tmp/preflight-comment.md
+            gh pr comment "$PR_NUMBER" --body-file /tmp/preflight-comment.md
           fi
 
-      - name: Post inline review
-        if: always() && hashFiles('/tmp/review.json') != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Posting inline review"
-          gh api "repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/reviews" \
-            --input /tmp/review.json || echo "Inline review failed (may need app token)"
+          # Post inline review if there are findings
+          if [ -f /tmp/review.json ]; then
+            echo "Posting inline review"
+            gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
+              --input /tmp/review.json || echo "Inline review failed"
+          fi
 
       - name: Flush MLflow traces
         if: always()

@@ -3,7 +3,6 @@ name: preflight
 description: "Pre-merge readiness check for a PR or local branch. Gathers context, runs reviews and checks, reports a results table. Interactive by default — asks what to review and whether to fix. Supports flags: --fix, --local, --review X,Y, --skip-review X,Y, --ci, --help."
 argument-hint: "[PR] [--fix] [--local] [--review X,Y] [--skip-review X,Y] [--ci] [--help]"
 disable-model-invocation: true
-allowed-tools: Bash(gh *) Bash(git *) Bash(npm *) Bash(npx *) Bash(${CLAUDE_SKILL_DIR}/scripts/*)
 ---
 
 # Preflight
@@ -59,6 +58,18 @@ Parse these from `$ARGUMENTS` before processing:
 - `--ci` — non-interactive CI mode. Skips all interactive prompts (no `AskUserQuestion`). Posts the results as a PR comment using the template in [references/ci-comment-template.md](references/ci-comment-template.md). Overrides "Never comment on the PR".
 - `--help` — print usage and stop
 - No flags — interactive mode: ask the user what to do at decision points
+
+## Execution
+
+**First, call TaskCreate for each applicable task before running any commands:**
+
+- Task 1: "Gather context" — PR metadata, sync status, changed files, Jira key
+- Task 2: "Run reviews" — fetch existing or run local reviewers
+- Task 3: "Run checks" — CI, lint, type-check, tests, PR body, Jira, coverage
+- Task 4: "Fix failing checks" — ONLY create this task if `--fix` was passed
+- Task 5: "Write results and post comment" — ONLY create this task if `--ci` was passed
+
+Then work through each task in order. Mark each task `in_progress` when starting and `completed` when done. You are not done until TaskList shows all tasks completed.
 
 ## Step 0: Prerequisites
 
@@ -154,38 +165,13 @@ Statuses:
 
 Print the results using the format from [references/ci-comment-template.md](references/ci-comment-template.md). This format is used for both terminal output and PR comments. End with a verdict: any ❌ → **NOT READY**, all ✅ with ⚠️ → **READY WITH WARNINGS**, all ✅ → **READY**.
 
-If `--ci` was passed, your **final output** must be ONLY a JSON object matching [references/ci-output-schema.json](references/ci-output-schema.json). No other text — just the raw JSON. The workflow will format and post the comment.
+If `--ci` was passed, post results to the PR. **You MUST follow the format in [references/ci-comment-template.md](references/ci-comment-template.md) exactly.** The summary comment must be proper multi-line markdown with tables, headers, and expandable sections — not a single line of text. Write the comment body to a temp file first to preserve formatting.
 
-Do NOT post any PR comments yourself. Do NOT use `gh pr comment`. Just output the JSON as your last message.
-
-Example final output:
-```json
-{
-  "verdict": "NOT_READY",
-  "mode": "check-only",
-  "commit": "0b43448",
-  "checks": [
-    {"name": "Conflicts", "status": "passed", "details": "Mergeable"},
-    {"name": "Lint", "status": "covered", "details": "Covered by CI"},
-    {"name": "Jira", "status": "failed", "details": "No key found"}
-  ],
-  "findings": [
-    {
-      "severity": "minor",
-      "file": "src/Foo.tsx",
-      "line": 42,
-      "title": "Use PF token instead of hardcoded value",
-      "description": "Inline style uses hardcoded paddingLeft: 20px",
-      "diff": "- style={{ paddingLeft: '20px' }}\n+ className=\"pf-v6-u-pl-lg\""
-    }
-  ]
-}
-```
-
-Status values: `passed`, `failed`, `warning`, `covered`, `na`.
-Severity values: `critical`, `major`, `minor`, `nit`.
-
-Skip Step 4 entirely unless `--fix` was also passed.
+Posting procedure:
+1. **Write** the full markdown summary to `/tmp/preflight-comment.md` using a heredoc (`cat > /tmp/preflight-comment.md << 'COMMENT' ... COMMENT`). The first line MUST be `<!-- odh-preflight-agent -->`. Then post with `--body-file`.
+2. **Check** for an existing preflight comment and update it, or create new: see "Comment Overwrite" in the template.
+3. **Write** inline review findings to `/tmp/review.json` and submit via `gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json`. Only Critical/Major/Minor get inline comments — Nits go in summary only.
+4. Skip Step 4 entirely unless `--fix` was also passed.
 
 ## Step 4: Fix
 

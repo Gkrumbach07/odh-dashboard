@@ -154,10 +154,13 @@ Statuses:
 
 Print the results using the format from [references/ci-comment-template.md](references/ci-comment-template.md). This format is used for both terminal output and PR comments. End with a verdict: any ❌ → **NOT READY**, all ✅ with ⚠️ → **READY WITH WARNINGS**, all ✅ → **READY**.
 
-If `--ci` was passed:
-1. Post the summary comment to the PR using `gh pr comment PR --body-file /tmp/preflight-comment.md`
-2. For review findings with specific file/line locations, submit inline PR review comments (see template for format)
-3. Skip Step 4 entirely unless `--fix` was also passed
+If `--ci` was passed, post results to the PR. **You MUST follow the format in [references/ci-comment-template.md](references/ci-comment-template.md) exactly.** The summary comment must be proper multi-line markdown with tables, headers, and expandable sections — not a single line of text. Write the comment body to a temp file first to preserve formatting.
+
+Posting procedure:
+1. **Write** the full markdown summary to `/tmp/preflight-comment.md` using a heredoc (`cat > /tmp/preflight-comment.md << 'COMMENT' ... COMMENT`). The first line MUST be `<!-- odh-preflight-agent -->`. Then post with `--body-file`.
+2. **Check** for an existing preflight comment and update it, or create new: see "Comment Overwrite" in the template.
+3. **Write** inline review findings to `/tmp/review.json` and submit via `gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json`. Only Critical/Major/Minor get inline comments — Nits go in summary only.
+4. Skip Step 4 entirely unless `--fix` was also passed.
 
 ## Step 4: Fix
 

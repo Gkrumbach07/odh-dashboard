@@ -85,6 +85,7 @@ jobs:
           use_vertex: "false"
           use_bedrock: "false"
           claude_args: "--max-turns 120 --model claude-sonnet-4-6 --permission-mode acceptEdits"
+          show_full_output: "true"
           prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}

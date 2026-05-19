@@ -86,11 +86,7 @@ jobs:
           use_bedrock: "false"
           claude_args: "--max-turns 50 --model claude-haiku-4-5 --disallowedTools Edit,Write,NotebookEdit"
           show_full_output: true
-          prompt: >-
-            Run /preflight ${{ github.event.issue.number }} --skip-review coderabbit
-            to check this PR. You are in agent-check-only mode — do NOT modify
-            files, commit, or push. Run preflight once, then post a summary PR
-            comment via gh pr comment ${{ github.event.issue.number }}.
+          prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit"
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_EXPERIMENT_NAME: ${{ secrets.MLFLOW_EXPERIMENT_NAME }}

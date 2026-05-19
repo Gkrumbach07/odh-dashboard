@@ -5,9 +5,9 @@ set -euo pipefail
 #   /tmp/preflight-comment.md  — summary PR comment
 #   /tmp/review.json           — inline review comments (if any)
 #
-# Usage: format-results.sh <owner> <repo> <pr_number> <run_url>
+# Usage: format-results.sh <owner> <repo> <pr_number> <run_url> [results_file]
 
-RESULTS="/tmp/preflight-results.json"
+RESULTS="${5:-/tmp/preflight-results.json}"
 if [ ! -f "$RESULTS" ]; then
   echo "No results file found at $RESULTS"
   exit 0

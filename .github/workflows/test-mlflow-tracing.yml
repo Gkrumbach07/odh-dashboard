@@ -95,38 +95,7 @@ jobs:
           MLFLOW_ENABLE_WORKSPACES: "true"
           MLFLOW_CLAUDE_TRACING_ENABLED: "true"
 
-      # ── Post-Claude: format and post results ──
-      - name: Format results
-        if: always()
-        run: |
-          echo "=== Searching for results file ==="
-          find / -name "preflight-results.json" 2>/dev/null || true
-          echo "=== Workspace contents ==="
-          ls -la "${GITHUB_WORKSPACE}/" | head -20
-          echo "=== /tmp contents ==="
-          ls -la /tmp/ | grep preflight 2>/dev/null || echo "nothing in /tmp"
-
-          # Check multiple possible locations
-          for f in \
-            "${GITHUB_WORKSPACE}/preflight-results.json" \
-            "/tmp/preflight-results.json" \
-            "${RUNNER_TEMP}/preflight-results.json"; do
-            [ -f "$f" ] && RESULTS="$f" && break
-          done
-
-          if [ -n "${RESULTS:-}" ]; then
-            echo "Results file found at $RESULTS"
-            cat "$RESULTS" | jq '.verdict'
-            .claude/skills/preflight/scripts/format-results.sh \
-              "${{ github.repository_owner }}" \
-              "$(echo '${{ github.repository }}' | cut -d/ -f2)" \
-              "${{ github.event.issue.number }}" \
-              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-              "$RESULTS"
-          else
-            echo "No results file — Claude may not have written it"
-          fi
-
+      # ── Post-Claude: post results ──
       - name: Post summary comment
         if: always()
         env:

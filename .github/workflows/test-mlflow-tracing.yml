@@ -71,7 +71,8 @@ jobs:
           npx @anthropic-ai/claude-code -p "Run /preflight 7603 --skip-review coderabbit to check this PR. You are in agent-check-only mode — do NOT modify files, commit, or push. Run preflight once, then post a summary PR comment via gh pr comment 7603. The comment must have a Preflight Agent Report header, verdict with mode, the results table with status emojis, an expandable Tracing section, and a footer linking to this workflow run." \
             --max-turns 50 \
             --model claude-haiku-4-5 \
-            --disallowedTools "Edit,Write,NotebookEdit" || true
+            --disallowedTools "Edit,Write,NotebookEdit" \
+            --dangerously-skip-permissions || true
           echo "=== Claude exited ==="
 
       - name: Flush MLflow traces

@@ -86,7 +86,7 @@ jobs:
           use_bedrock: "false"
           claude_args: "--max-turns 50 --model claude-haiku-4-5 --disallowedTools Edit,Write,NotebookEdit"
           show_full_output: true
-          prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit"
+          prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit. Do NOT ask any questions — you are running in CI with no human to answer. Post the results comment immediately when checks complete."
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_EXPERIMENT_NAME: ${{ secrets.MLFLOW_EXPERIMENT_NAME }}

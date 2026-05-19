@@ -11,8 +11,6 @@ Pre-merge readiness check. Gather context, review code, run checks, report resul
 
 Never push. Never comment on the PR (unless `--ci` flag is passed).
 
-**Efficiency:** Minimize tool call round trips. Combine independent commands into single Bash calls using `&&` or `;`.
-
 **CI sandbox constraints (when running in GitHub Actions):**
 - **No `/tmp/` writes** — the sandbox only allows file writes within the workspace directory. Use the Write tool to create files in the workspace root (e.g., `preflight-comment.md`).
 - **No writes to `.claude/`** — this directory is treated as sensitive. Write temp files to the workspace root instead.

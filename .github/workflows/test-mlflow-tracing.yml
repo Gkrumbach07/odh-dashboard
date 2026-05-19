@@ -88,7 +88,11 @@ jobs:
             --max-turns 120
             --model claude-sonnet-4-6
             --permission-mode acceptEdits
-            --allowedTools "Bash(*)"
+            --allowedTools "Bash(gh *)"
+            --allowedTools "Bash(git *)"
+            --allowedTools "Bash(npm *)"
+            --allowedTools "Bash(npx *)"
+            --allowedTools "Bash(bash *)"
           show_full_output: "true"
           prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:

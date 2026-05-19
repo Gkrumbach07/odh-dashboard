@@ -1,10 +1,76 @@
 # Preflight Report Template
 
-This template is used for both terminal output and PR comments. When `--ci` is passed, post this as a PR comment AND submit inline review comments.
+This template is used for terminal output, PR summary comments, and inline review comments. When `--ci` is passed, post the summary as a PR comment AND submit inline review comments for file-specific findings.
+
+## Inline Review Comments
+
+Submit as a single PR review via `gh api`. Each inline comment should follow this format:
+
+```markdown
+⚠️ Potential issue | 🟠 Major | ⚡ Quick win
+
+**<Short title describing the issue.>**
+
+<Description of what's wrong and why it matters. Use `code` formatting for identifiers.>
+
+<details>
+<summary>Proposed fix</summary>
+
+```diff
+- <old code>
++ <new code>
+```
+
+</details>
+```
+
+Severity badges (pick one per comment):
+
+| Severity | Badge | When to use |
+|----------|-------|-------------|
+| Critical | `🔴 Critical` | Security issue, data loss, crash |
+| Major | `🟠 Major` | Bug, incorrect behavior, missing guard |
+| Minor | `🟡 Minor` | Code quality, naming, style |
+| Nit | `🟢 Nit` | Nitpick, preference, optional improvement |
+
+Effort badges (pick one per comment):
+
+| Effort | Badge | When to use |
+|--------|-------|-------------|
+| Quick win | `⚡ Quick win` | One-line or trivial fix |
+| Moderate | `🔧 Moderate` | Requires some thought |
+| Heavy lift | `🏗️ Heavy lift` | Significant refactor |
+
+Format: `⚠️ Potential issue | 🟠 Major | ⚡ Quick win`
+
+Always include a `<details><summary>Proposed fix</summary>` section with a diff when possible. If no concrete fix, explain what to change.
+
+### Submitting Inline Comments
+
+Write the review payload to a JSON file and submit:
+
+```bash
+cat > /tmp/review.json << 'JSON'
+{
+  "event": "COMMENT",
+  "body": "",
+  "comments": [
+    {
+      "path": "src/file.tsx",
+      "line": 42,
+      "body": "⚠️ Potential issue | 🟠 Major | ⚡ Quick win\n\n**Guard `conditions` before reading `.length`.**\n\nLine 42 assumes `conditions` always exists.\n\n<details>\n<summary>Proposed fix</summary>\n\n```diff\n- if (dscStatus.conditions.length === 0) {\n+ const conditions = dscStatus?.conditions;\n+ if (!Array.isArray(conditions) || conditions.length === 0) {\n```\n\n</details>"
+    }
+  ]
+}
+JSON
+gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json
+```
+
+Do NOT set a top-level `body` on the review — leave it as an empty string. The inline comments speak for themselves.
 
 ## Summary Comment
 
-Post as a top-level PR comment via `gh pr comment PR --body-file /tmp/preflight-comment.md`:
+Post as a top-level PR comment via `gh pr comment PR --body-file /tmp/preflight-comment.md`.
 
 ```markdown
 ## Preflight Agent Report
@@ -13,27 +79,46 @@ Post as a top-level PR comment via `gh pr comment PR --body-file /tmp/preflight-
 **Mode:** <check-only | managed>
 **Commit:** `<head SHA>`
 
+### Checks
+
 | Check | Status | Details |
 |-------|--------|---------|
 | Conflicts | <emoji> | <one-line detail> |
-| CI | <emoji> | <pass/fail/pending — list failing check names> |
+| CI | <emoji> | <pass/fail/pending> |
 | Lint | <emoji> | <pass or error count> |
 | Type Check | <emoji> | <pass or error count> |
 | Unit Tests | <emoji> | <pass or error count> |
-| Reviews | <emoji> | <N unresolved threads> |
 | Jira | <emoji> | <key or missing> |
-| Test Coverage | <emoji> | <test files present or missing> |
+| Test Coverage | <emoji> | <files present or missing> |
 | PR Body | <emoji> | <complete or missing sections> |
 
+### Review Findings
+
 <details>
-<summary>Review Findings (<N> issues)</summary>
+<summary>🟠 Major (N)</summary>
 
-### <Reviewer Name> (<N> findings)
+| File | Finding |
+|------|---------|
+| `path/to/file.tsx:42` | Guard `conditions` before reading `.length` |
+| `path/to/other.tsx:15` | Missing null check on API response |
 
-**<severity>: <title>**
-`<file>:<line>` — <description>
+</details>
 
-*(repeat for each finding)*
+<details>
+<summary>🟡 Minor (N)</summary>
+
+| File | Finding |
+|------|---------|
+| `path/to/file.scss:8` | Use PF token instead of hardcoded color |
+
+</details>
+
+<details>
+<summary>🟢 Nit (N)</summary>
+
+| File | Finding |
+|------|---------|
+| `path/to/file.tsx:20` | Prefer `const` over `let` |
 
 </details>
 
@@ -41,45 +126,10 @@ Post as a top-level PR comment via `gh pr comment PR --body-file /tmp/preflight-
 *Automated by [ODH Dashboard Agent](<workflow run URL>)*
 ```
 
+Only include severity sections that have findings. Omit empty sections. Only include check rows that were evaluated.
+
 Status emojis: ✅ passed · ❌ failed · ⚠️ warning · ⏭️ covered by CI · ➖ not applicable
-
-Only include check rows that were actually evaluated. Omit rows for skipped or inapplicable checks.
-
-## Inline Review Comments
-
-For each finding that has a specific file and line number, submit an inline PR review comment. Use a single review submission with all comments batched:
-
-```bash
-gh api repos/OWNER/REPO/pulls/PR/reviews \
-  --method POST \
-  -f event=COMMENT \
-  -f body="Preflight review — <N> inline findings" \
-  -f 'comments[][path]=<file>' \
-  -f 'comments[][position]=<diff position>' \
-  -f 'comments[][body]=**[<severity>]** <description>'
-```
-
-If the `gh api` review submission is complex, write the review payload to a JSON file and submit:
-
-```bash
-cat > /tmp/review.json << 'JSON'
-{
-  "event": "COMMENT",
-  "body": "Preflight review — N inline findings",
-  "comments": [
-    {
-      "path": "src/file.tsx",
-      "line": 42,
-      "body": "**[warning]** Description of the issue"
-    }
-  ]
-}
-JSON
-gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json
-```
-
-Only submit inline comments for findings with known file paths and line numbers. General observations go in the summary comment only.
 
 ## Shell Quoting
 
-Always write comment bodies to a temp file and use `--body-file` or `--input` to avoid shell escaping issues. Never pass markdown directly as a `-b` argument.
+Always write comment bodies to a temp file and use `--body-file` or `--input`. Never pass markdown directly as a CLI argument.

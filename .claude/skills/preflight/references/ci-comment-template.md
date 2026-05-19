@@ -1,6 +1,6 @@
 # Preflight Report Template
 
-Used for terminal output, PR summary comment, and inline review comments in `--ci` mode.
+Used for terminal output, PR summary comment, and inline review comments in `--ci` mode. Claude posts everything directly using `gh` commands — no intermediate files.
 
 ## What Goes Where
 
@@ -13,7 +13,7 @@ Used for terminal output, PR summary comment, and inline review comments in `--c
 
 ## Comment Overwrite (Sticky Comment)
 
-Update the existing comment instead of creating duplicates:
+Update the existing comment instead of creating duplicates. Use `gh` to find and update:
 
 ```bash
 EXISTING_ID=$(gh api "repos/OWNER/REPO/issues/PR/comments" \
@@ -21,9 +21,9 @@ EXISTING_ID=$(gh api "repos/OWNER/REPO/issues/PR/comments" \
 
 if [ -n "$EXISTING_ID" ]; then
   gh api "repos/OWNER/REPO/issues/comments/$EXISTING_ID" \
-    --method PATCH --input /tmp/preflight-comment.json
+    --method PATCH -f body="$COMMENT_BODY"
 else
-  gh pr comment PR --body-file /tmp/preflight-comment.md
+  gh pr comment PR -b "$COMMENT_BODY"
 fi
 ```
 
@@ -31,7 +31,7 @@ The marker `<!-- odh-preflight-agent -->` MUST be the first line of every summar
 
 ## Summary Comment
 
-Write to `/tmp/preflight-comment.md` then post with `--body-file`:
+Post directly using `gh pr comment` or `gh api`. The comment body must follow this format:
 
 ```markdown
 <!-- odh-preflight-agent -->
@@ -139,10 +139,11 @@ Submit as a **single PR review** via `gh api`. Format for each comment:
 
 ### Submitting the Review
 
-Write to JSON and POST:
+Build the review JSON and POST directly via `gh api`:
 
 ```bash
-cat > /tmp/review.json << 'JSON'
+gh api repos/OWNER/REPO/pulls/PR/reviews \
+  --input - << 'JSON'
 {
   "event": "COMMENT",
   "body": "",
@@ -150,18 +151,9 @@ cat > /tmp/review.json << 'JSON'
     {
       "path": "src/components/Foo.tsx",
       "line": 42,
-      "body": "🟠 Major\n\n**Guard `conditions` before reading `.length`.**\n\nLine 42 assumes `conditions` always exists. A partial API payload without `conditions` will throw.\n\n<details>\n<summary>Proposed fix</summary>\n\n```diff\n- if (dscStatus.conditions.length === 0) {\n+ const conditions = dscStatus?.conditions;\n+ if (!Array.isArray(conditions) || conditions.length === 0) {\n```\n\n</details>"
+      "body": "🟠 Major\n\n**Guard `conditions` before reading `.length`.**\n\n..."
     }
   ]
 }
 JSON
-gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json
 ```
-
-## Writing Files in CI
-
-Use the **Write tool** to create `/tmp/preflight-comment.md` and `/tmp/review.json`. Bash file redirects (`>`, `tee`, heredocs) may be blocked by the CI security sandbox. The Write tool always works.
-
-After writing, post with:
-- `gh pr comment PR --body-file /tmp/preflight-comment.md`
-- `gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json`

@@ -23,8 +23,10 @@ Otherwise: CI results don't apply — need to run checks locally.
 
 Figure out base branch and affected packages:
 ```bash
-base_branch="main"  # or from PR metadata
-git diff --name-only origin/$base_branch | cut -d'/' -f1-2 | sort -u
+# If PR exists, use gh (avoids merge-base issues in CI checkout):
+gh pr diff "$pr_number" --name-only | cut -d'/' -f1-2 | sort -u
+# If no PR, fall back to git:
+git diff --name-only origin/${base_branch:-main} | cut -d'/' -f1-2 | sort -u
 ```
 
 Extract Jira key from PR title/body, branch name, or recent commits:

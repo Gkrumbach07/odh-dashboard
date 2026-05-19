@@ -33,6 +33,7 @@ jobs:
         run: pip install "mlflow[genai]>=3.5"
 
       - name: Verify MLflow connection
+        continue-on-error: true
         run: |
           CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \

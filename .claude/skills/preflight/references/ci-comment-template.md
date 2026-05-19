@@ -11,27 +11,20 @@ Used for terminal output, PR summary comment, and inline review comments in `--c
 | 🟡 Minor | Yes | Yes (expandable) |
 | 🟢 Nit | **No** — nits only in summary | Yes (expandable) |
 
-## Comment Overwrite (Sticky Comment)
+## How to Post (CI mode)
 
-Update the existing comment instead of creating duplicates. Use `gh` to find and update:
+1. Use the **Write tool** to create `preflight-comment.md` in the workspace root (NOT `/tmp/`, NOT `.claude/`).
+2. Post with a single simple command: `gh pr comment PR --body-file preflight-comment.md`
+3. To update an existing comment instead of duplicating, first check: `gh api "repos/OWNER/REPO/issues/PR/comments" --jq '.[] | select(.body | contains("<!-- odh-preflight-agent -->")) | .id'`
+4. If an ID is returned, update it: `gh api "repos/OWNER/REPO/issues/comments/ID" --method PATCH --body-file preflight-comment.md`
 
-```bash
-EXISTING_ID=$(gh api "repos/OWNER/REPO/issues/PR/comments" \
-  --jq '.[] | select(.body | contains("<!-- odh-preflight-agent -->")) | .id' | head -1)
-
-if [ -n "$EXISTING_ID" ]; then
-  gh api "repos/OWNER/REPO/issues/comments/$EXISTING_ID" \
-    --method PATCH -f body="$COMMENT_BODY"
-else
-  gh pr comment PR -b "$COMMENT_BODY"
-fi
-```
+**Important:** Run each `gh` command as its own separate Bash call — do NOT combine them with `if/else`, `&&`, or variable assignments in a single call. The CI sandbox blocks multi-line compound commands.
 
 The marker `<!-- odh-preflight-agent -->` MUST be the first line of every summary comment.
 
 ## Summary Comment
 
-Post directly using `gh pr comment` or `gh api`. The comment body must follow this format:
+The comment body must follow this format:
 
 ```markdown
 <!-- odh-preflight-agent -->
@@ -139,11 +132,12 @@ Submit as a **single PR review** via `gh api`. Format for each comment:
 
 ### Submitting the Review
 
-Build the review JSON and POST directly via `gh api`:
+1. Use the **Write tool** to create `preflight-review.json` in the workspace root.
+2. Post with: `gh api repos/OWNER/REPO/pulls/PR/reviews --input preflight-review.json`
 
-```bash
-gh api repos/OWNER/REPO/pulls/PR/reviews \
-  --input - << 'JSON'
+Example JSON structure:
+
+```json
 {
   "event": "COMMENT",
   "body": "",
@@ -155,5 +149,4 @@ gh api repos/OWNER/REPO/pulls/PR/reviews \
     }
   ]
 }
-JSON
 ```

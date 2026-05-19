@@ -93,6 +93,11 @@ jobs:
             --allowedTools "Bash(npm *)"
             --allowedTools "Bash(npx *)"
             --allowedTools "Bash(jq *)"
+            --allowedTools "Bash(bash *)"
+            --allowedTools "Bash(cat *)"
+            --allowedTools "Bash(which *)"
+            --allowedTools "Bash(grep *)"
+            --allowedTools "Bash(wc *)"
           show_full_output: "true"
           prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:

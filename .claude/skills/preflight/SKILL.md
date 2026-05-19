@@ -154,15 +154,37 @@ Statuses:
 
 Print the results using the format from [references/ci-comment-template.md](references/ci-comment-template.md). This format is used for both terminal output and PR comments. End with a verdict: any ❌ → **NOT READY**, all ✅ with ⚠️ → **READY WITH WARNINGS**, all ✅ → **READY**.
 
-If `--ci` was passed, post results to the PR yourself using `gh`. Do NOT rely on the action's auto-posting — it strips formatting. **You MUST follow the format in [references/ci-comment-template.md](references/ci-comment-template.md) exactly**, including emojis (✅❌⚠️⏭️➖), `<details>` sections, and markdown tables.
+If `--ci` was passed, write results to `/tmp/preflight-results.json` using the **Write tool**. The workflow will handle formatting and posting. Do NOT post comments yourself — the workflow does that after you finish.
 
-Posting procedure:
-1. Use the **Write tool** to create `/tmp/preflight-comment.md` with the full markdown summary. The first line MUST be `<!-- odh-preflight-agent -->`. Include all emojis, tables, and `<details>` sections exactly as shown in the template. Then run `gh pr comment PR --body-file /tmp/preflight-comment.md`.
-2. **Check** for an existing preflight comment and update it, or create new: see "Comment Overwrite" in the template.
-3. Use the **Write tool** to create `/tmp/review.json` with inline review findings. Then run `gh api repos/OWNER/REPO/pulls/PR/reviews --input /tmp/review.json`. Only Critical/Major/Minor get inline comments — Nits go in summary only.
-4. Skip Step 4 entirely unless `--fix` was also passed.
+The JSON schema is defined in [references/ci-output-schema.json](references/ci-output-schema.json). Example:
 
-**Important:** Do NOT use bash redirects (`>`, `tee`, heredocs) to write these files — they may be blocked in CI. Always use the Write tool.
+```json
+{
+  "verdict": "NOT_READY",
+  "mode": "check-only",
+  "commit": "0b43448",
+  "checks": [
+    {"name": "Conflicts", "status": "passed", "details": "Mergeable"},
+    {"name": "Lint", "status": "covered", "details": "Covered by CI"},
+    {"name": "Jira", "status": "failed", "details": "No key found"}
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "src/Foo.tsx",
+      "line": 42,
+      "title": "Use PF token instead of hardcoded value",
+      "description": "Inline style uses hardcoded paddingLeft: 20px",
+      "diff": "- style={{ paddingLeft: '20px' }}\n+ className=\"pf-v6-u-pl-lg\""
+    }
+  ]
+}
+```
+
+Use status values: `passed`, `failed`, `warning`, `covered` (CI ran it), `na` (not applicable).
+Use severity values: `critical`, `major`, `minor`, `nit`.
+
+Skip Step 4 entirely unless `--fix` was also passed.
 
 ## Step 4: Fix
 

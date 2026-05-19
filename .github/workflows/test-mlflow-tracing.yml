@@ -85,7 +85,6 @@ jobs:
           use_vertex: "false"
           use_bedrock: "false"
           claude_args: "--max-turns 120 --model claude-sonnet-4-6"
-          show_full_output: true
           prompt: "/preflight ${{ github.event.issue.number }} --skip-review coderabbit --ci"
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
@@ -94,6 +93,48 @@ jobs:
           MLFLOW_WORKSPACE: ${{ secrets.MLFLOW_WORKSPACE }}
           MLFLOW_ENABLE_WORKSPACES: "true"
           MLFLOW_CLAUDE_TRACING_ENABLED: "true"
+
+      # ── Post-Claude: format and post results ──
+      - name: Format results
+        if: always()
+        run: |
+          if [ -f /tmp/preflight-results.json ]; then
+            echo "Results file found"
+            cat /tmp/preflight-results.json | jq '.verdict'
+            .claude/skills/preflight/scripts/format-results.sh \
+              "${{ github.repository_owner }}" \
+              "$(echo '${{ github.repository }}' | cut -d/ -f2)" \
+              "${{ github.event.issue.number }}" \
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            echo "No results file — Claude may not have written it"
+          fi
+
+      - name: Post summary comment
+        if: always() && hashFiles('/tmp/preflight-comment.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXISTING_ID=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments" \
+            --jq '.[] | select(.body | contains("<!-- odh-preflight-agent -->")) | .id' 2>/dev/null | head -1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            echo "Updating existing comment $EXISTING_ID"
+            jq -Rs '{body: .}' /tmp/preflight-comment.md | \
+              gh api "repos/${{ github.repository }}/issues/comments/$EXISTING_ID" --method PATCH --input - > /dev/null
+          else
+            echo "Creating new comment"
+            gh pr comment "${{ github.event.issue.number }}" --body-file /tmp/preflight-comment.md
+          fi
+
+      - name: Post inline review
+        if: always() && hashFiles('/tmp/review.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Posting inline review"
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/reviews" \
+            --input /tmp/review.json || echo "Inline review failed (may need app token)"
 
       - name: Flush MLflow traces
         if: always()

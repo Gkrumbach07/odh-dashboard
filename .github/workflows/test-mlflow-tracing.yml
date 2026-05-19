@@ -81,6 +81,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          use_vertex: "false"
+          use_bedrock: "false"
           claude_args: "--max-turns 50 --model claude-haiku-4-5 --disallowedTools Edit,Write,NotebookEdit"
           prompt: >-
             Run /preflight ${{ github.event.issue.number }} --skip-review coderabbit

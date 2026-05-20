@@ -292,6 +292,7 @@ jobs:
             --allowedTools "Bash(npm *)"
             --allowedTools "Bash(npx *)"
             --allowedTools "Bash(bash *)"
+          show_full_output: "true"
           prompt: "/preflight ${{ env.PR_NUMBER }} --skip-review coderabbit --ci"
 
       # ── Fix (iterative) ──
@@ -310,6 +311,7 @@ jobs:
             --allowedTools "Bash(npm *)"
             --allowedTools "Bash(npx *)"
             --allowedTools "Bash(bash *)"
+          show_full_output: "true"
           prompt: "/preflight ${{ env.PR_NUMBER }} --fix --skip-review coderabbit --ci"
 
       # ── Report ──

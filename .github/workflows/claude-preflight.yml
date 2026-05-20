@@ -10,8 +10,9 @@ name: ODH Dashboard Agent
 # Cron runs from main — scans labeled PRs for new reviews/CI/comments.
 #
 # Required Secrets:
-#   CLAUDE_APP_ID, CLAUDE_APP_PRIVATE_KEY, GCP_CREDENTIALS_JSON,
-#   GCP_PROJECT_ID, MLFLOW_TRACKING_URI, MLFLOW_TRACKING_TOKEN,
+#   CLAUDE_APP_ID, CLAUDE_APP_PRIVATE_KEY,
+#   GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT, GCP_PROJECT_ID,
+#   MLFLOW_TRACKING_URI, MLFLOW_TRACKING_TOKEN,
 #   MLFLOW_EXPERIMENT_NAME, MLFLOW_WORKSPACE
 
 on:
@@ -227,11 +228,12 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
 
-      - name: Protect GCP credentials from git clean
+      - name: Protect GCP credentials
         run: |
           cp "${{ steps.gcp-auth.outputs.credentials_file_path }}" "${RUNNER_TEMP}/gcp-creds.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp-creds.json" >> "$GITHUB_ENV"
           echo "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=${RUNNER_TEMP}/gcp-creds.json" >> "$GITHUB_ENV"
+          echo "gha-creds-*.json" >> .git/info/exclude
 
       - name: Set up Python and MLflow
         uses: actions/setup-python@v5

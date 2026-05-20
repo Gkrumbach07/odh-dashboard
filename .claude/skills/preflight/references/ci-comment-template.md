@@ -142,6 +142,8 @@ Post as a **single PR review** with inline comments AND the summary body:
 1. Use the **Write tool** to create `preflight-review.json` in the workspace root.
 2. Post with: `gh api repos/OWNER/REPO/pulls/PR/reviews --input preflight-review.json`
 
+**CRITICAL: Post the review exactly ONCE.** Do NOT post test comments, test reviews, or dummy data to verify the API works. Build the complete review JSON first, then post it in a single call. Every `gh api` call to the reviews endpoint creates a permanent, visible review on the PR.
+
 The `body` field is the full report. The `comments` array has the inline findings.
 
 ```json

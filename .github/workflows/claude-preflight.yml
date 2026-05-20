@@ -222,9 +222,16 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Authenticate to Google Cloud
+        id: gcp-auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+
+      - name: Protect GCP credentials from git clean
+        run: |
+          cp "${{ steps.gcp-auth.outputs.credentials_file_path }}" "${RUNNER_TEMP}/gcp-creds.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp-creds.json" >> "$GITHUB_ENV"
+          echo "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=${RUNNER_TEMP}/gcp-creds.json" >> "$GITHUB_ENV"
 
       - name: Set up Python and MLflow
         uses: actions/setup-python@v5

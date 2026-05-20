@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { NavGroup } from '@patternfly/react-core';
-import type { LoadedExtension } from '@openshift/dynamic-plugin-sdk';
+import type { Extension, LoadedExtension } from '@openshift/dynamic-plugin-sdk';
+import './FlatNavSection.scss';
 import {
   NavSectionExtension,
   NavExtension,
@@ -11,8 +12,19 @@ import {
   isNavSectionExtension,
 } from '@odh-dashboard/plugin-core/extension-points';
 import { useExtensions } from '@odh-dashboard/plugin-core';
+import { useAccessReviewExtensions } from '#~/utilities/useAccessReviewExtensions';
 import { NavItem } from './NavItem';
 import { compareNavItemGroups } from './utils';
+
+const getLeafAccessReview = (e: Extension) => {
+  if (isHrefNavItemExtension(e)) {
+    return e.properties.accessReview;
+  }
+  if (isTabRoutePageExtension(e)) {
+    return e.properties.accessReview;
+  }
+  return undefined;
+};
 
 type AnyNavExtension = NavExtension | TabRoutePageExtension;
 
@@ -51,16 +63,18 @@ export const FlatNavSection: React.FC<Props> = ({
     return collectLeaves(id);
   }, [allExtensions, id]);
 
-  if (leafItems.length === 0) {
+  const [allowedLeafItems, isAccessLoaded] = useAccessReviewExtensions(
+    leafItems,
+    getLeafAccessReview,
+  );
+
+  if (!isAccessLoaded || allowedLeafItems.length === 0) {
     return null;
   }
 
   return (
-    <NavGroup
-      title={title}
-      className="odh-flat-nav-section"
-    >
-      {leafItems.map((ext) => (
+    <NavGroup title={title} className="odh-flat-nav-section">
+      {allowedLeafItems.map((ext) => (
         <NavItem key={ext.uid} extension={ext} />
       ))}
     </NavGroup>

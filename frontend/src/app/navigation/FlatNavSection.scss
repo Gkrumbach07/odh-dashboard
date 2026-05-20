@@ -1,19 +1,12 @@
-.flat-nav-section {
-  border-bottom: 1px solid #d2d2d2;
-  padding-bottom: 8px;
-  margin-bottom: 8px;
+.odh-flat-nav-section {
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  padding-bottom: var(--pf-t--global--spacer--sm);
+  margin-bottom: var(--pf-t--global--spacer--sm);
 }
 
-.flat-nav-toggle {
+.odh-flat-nav-toggle {
   display: flex;
   justify-content: flex-end;
-  padding: 4px 16px;
-  font-size: 12px;
-  color: #06c;
-  cursor: pointer;
-}
-
-.flat-nav-toggle:hover {
-  color: #004080;
-  text-decoration: underline;
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  font-size: var(--pf-t--global--font--size--body--sm);
 }

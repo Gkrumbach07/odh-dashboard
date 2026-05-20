@@ -1,5 +1,5 @@
 import React from 'react';
-import { PageSidebar, PageSidebarBody } from '@patternfly/react-core';
+import { Button, PageSidebar, PageSidebarBody } from '@patternfly/react-core';
 import { ExtensibleNav } from './navigation/ExtensibleNav';
 import { useNavLayout } from './navigation/useNavLayout';
 import './navigation/FlatNavSection.scss';
@@ -10,13 +10,14 @@ const NavSidebar: React.FC = () => {
   return (
     <PageSidebar>
       <PageSidebarBody>
-        <div
-          className="flat-nav-toggle"
-          onClick={() => toggleFlatNav()}
+        <Button
+          variant="link"
+          className="odh-flat-nav-toggle"
+          onClick={toggleFlatNav}
           data-testid="nav-layout-toggle"
         >
           {isFlatNav ? 'Nested view' : 'Flat view'}
-        </div>
+        </Button>
         <ExtensibleNav label="Nav" />
       </PageSidebarBody>
     </PageSidebar>

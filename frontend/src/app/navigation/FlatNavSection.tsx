@@ -51,14 +51,14 @@ export const FlatNavSection: React.FC<Props> = ({
     return collectLeaves(id);
   }, [allExtensions, id]);
 
-  if (leafItems.length == 0) {
+  if (leafItems.length === 0) {
     return null;
   }
 
   return (
     <NavGroup
       title={title}
-      style={{ borderBottom: '1px solid #d2d2d2', paddingBottom: '8px', marginBottom: '8px' }}
+      className="odh-flat-nav-section"
     >
       {leafItems.map((ext) => (
         <NavItem key={ext.uid} extension={ext} />

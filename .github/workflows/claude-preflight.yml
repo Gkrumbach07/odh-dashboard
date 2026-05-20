@@ -231,9 +231,9 @@ jobs:
       - name: Protect GCP credentials
         run: |
           cp "${{ steps.gcp-auth.outputs.credentials_file_path }}" "${RUNNER_TEMP}/gcp-creds.json"
+          rm -f "${{ steps.gcp-auth.outputs.credentials_file_path }}"
           echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp-creds.json" >> "$GITHUB_ENV"
           echo "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=${RUNNER_TEMP}/gcp-creds.json" >> "$GITHUB_ENV"
-          echo "gha-creds-*.json" >> .git/info/exclude
 
       - name: Set up Python and MLflow
         uses: actions/setup-python@v5

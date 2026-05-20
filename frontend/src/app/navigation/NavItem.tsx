@@ -9,6 +9,8 @@ import {
 import { NavItemHref } from './NavItemHref';
 import { NavItemTabRoute } from './NavItemTabRoute';
 import { NavSection } from './NavSection';
+import { FlatNavSection } from './FlatNavSection';
+import { useNavLayout } from './useNavLayout';
 
 export type Props = {
   extension: NavExtension | TabRoutePageExtension;
@@ -16,7 +18,12 @@ export type Props = {
 };
 
 export const NavItem: React.FC<Props> = ({ extension, onNotifyStatus }) => {
+  const { isFlatNav } = useNavLayout();
+
   if (isNavSectionExtension(extension)) {
+    if (isFlatNav) {
+      return <FlatNavSection extension={extension} />;
+    }
     return <NavSection extension={extension} />;
   }
   if (isTabRoutePageExtension(extension)) {

@@ -11,13 +11,13 @@ skills:
   - skills/jira-eval-review
 
 host_files:
-  - src: .claude/rules/css-patternfly.md
+  - src: ../.claude/rules/css-patternfly.md
     dest: /workspace/rules/css-patternfly.md
-  - src: .claude/rules/security.md
+  - src: ../.claude/rules/security.md
     dest: /workspace/rules/security.md
-  - src: .claude/rules/conventions.md
+  - src: ../.claude/rules/conventions.md
     dest: /workspace/rules/conventions.md
-  - src: .claude/skills/rbac-review/reference.md
+  - src: ../.claude/skills/rbac-review/reference.md
     dest: /workspace/rules/rbac-reference.md
 
 pre_script: scripts/pre-review.sh

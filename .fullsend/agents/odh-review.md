@@ -82,16 +82,13 @@ The JSON must match this schema:
 
 ### How to write the output
 
-Construct the full JSON string in a shell variable, then write it in ONE Bash
-command. Example for an approve with no findings:
-
+First, create the output directory:
 ```bash
-OUTPUT_JSON='{"action":"approve","body":"## Review Report\n\nNo issues found.","findings":[]}'
-mkdir -p "$FULLSEND_OUTPUT_DIR" && echo "$OUTPUT_JSON" | python3 -m json.tool > "$FULLSEND_OUTPUT_DIR/agent-result.json" && echo "OUTPUT OK: $(wc -c < "$FULLSEND_OUTPUT_DIR/agent-result.json") bytes"
+mkdir -p ../output
 ```
 
-You MUST see "OUTPUT OK" in the Bash output. If you don't, the run fails.
-Do NOT use the Write tool for this file — only Bash redirection works here.
+Then use the Write tool to write the JSON to the path `../output/agent-result.json`.
+The `../output/` path is relative to the repo root and MUST be used exactly as shown.
 
 ## Constraints
 

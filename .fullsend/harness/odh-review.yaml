@@ -8,7 +8,6 @@ readonly_repo: true
 skills:
   - skills/style-review
   - skills/rbac-review
-  - skills/jira-eval-review
 
 host_files:
   - src: references/css-patternfly.md
@@ -19,11 +18,6 @@ host_files:
     dest: /tmp/rules/conventions.md
   - src: references/rbac-reference.md
     dest: /tmp/rules/rbac-reference.md
-  - src: common/env/gcp-vertex.env
-    dest: /sandbox/workspace/.env.d/gcp-vertex.env
-    expand: true
-  - src: ${GOOGLE_APPLICATION_CREDENTIALS}
-    dest: /tmp/.gcp-credentials.json
 
 pre_script: scripts/pre-review.sh
 post_script: scripts/post-review.sh
@@ -42,5 +36,3 @@ providers:
 env:
   runner:
     JIRA_READ_ONLY: "true"
-  sandbox:
-    REVIEW_FINDING_SEVERITY_THRESHOLD: "low"

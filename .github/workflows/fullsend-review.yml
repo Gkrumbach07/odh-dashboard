@@ -163,6 +163,10 @@ jobs:
         with:
           agent: __install_only__
 
+      - name: Stage GCP credentials for sandbox
+        run: |
+          cp "$GOOGLE_APPLICATION_CREDENTIALS" .fullsend/gcp-credentials.json
+
       - name: Run review agent
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

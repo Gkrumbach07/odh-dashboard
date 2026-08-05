@@ -19,6 +19,9 @@ host_files:
     dest: /tmp/rules/conventions.md
   - src: references/rbac-reference.md
     dest: /tmp/rules/rbac-reference.md
+  - src: gcp-credentials.json
+    dest: /tmp/gcp-credentials.json
+    optional: true
 
 pre_script: scripts/pre-review.sh
 post_script: scripts/post-review.sh
@@ -39,3 +42,6 @@ env:
     JIRA_READ_ONLY: "true"
   sandbox:
     REVIEW_FINDING_SEVERITY_THRESHOLD: "low"
+    ANTHROPIC_VERTEX_PROJECT_ID: "${ANTHROPIC_VERTEX_PROJECT_ID}"
+    CLOUD_ML_REGION: "${CLOUD_ML_REGION}"
+    GOOGLE_APPLICATION_CREDENTIALS: "/tmp/gcp-credentials.json"

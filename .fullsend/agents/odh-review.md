@@ -142,10 +142,21 @@ Format the summary body following this template:
 
 ### Step 7: Produce output
 
-Write the result as a JSON file to `/sandbox/workspace/output/agent-result.json`.
-Use the Write tool to create the file. Create the directory first if needed:
-`mkdir -p /sandbox/workspace/output`. The validation loop will check it against
-the schema. The output must be valid JSON matching `odh-review-result.schema.json`.
+**CRITICAL**: You MUST write the output to this EXACT path. No other path will work:
+
+```bash
+mkdir -p /sandbox/workspace/output
+```
+
+Then use the Write tool to write the JSON to:
+
+```
+/sandbox/workspace/output/agent-result.json
+```
+
+Do NOT write to `/tmp/output/`, `./agent-result.json`, or any other path.
+Do NOT use `$FULLSEND_OUTPUT_DIR`. The extraction pipeline ONLY reads from
+`/sandbox/workspace/output/`. Any other path means "No output files found".
 
 ## Constraints
 

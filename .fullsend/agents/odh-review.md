@@ -142,12 +142,10 @@ Format the summary body following this template:
 
 ### Step 7: Produce output
 
-Write the result as a JSON file to `$FULLSEND_OUTPUT_DIR/agent-result.json`.
-Use the Write tool to create the file. The validation loop will check it against
+Write the result as a JSON file to `/sandbox/workspace/output/agent-result.json`.
+Use the Write tool to create the file. Create the directory first if needed:
+`mkdir -p /sandbox/workspace/output`. The validation loop will check it against
 the schema. The output must be valid JSON matching `odh-review-result.schema.json`.
-
-If `FULLSEND_OUTPUT_DIR` is not set, fall back to writing `./agent-result.json`
-in the current working directory.
 
 ## Constraints
 

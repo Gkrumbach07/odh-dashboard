@@ -22,11 +22,11 @@ the post-script will post as a GitHub PR review.
 
 ## Inputs
 
-The pre-script writes context to `/workspace/output/context.json` with:
+The pre-script writes context to `/tmp/output/context.json` with:
 - `pr_number` — the PR number
 - `owner` / `repo` — repository coordinates
 - `head_sha` — commit SHA being reviewed
-- `diff` — full PR diff (path: `/workspace/output/pr.diff`)
+- `diff` — full PR diff (path: `/tmp/output/pr.diff`)
 - `changed_files` — list of changed file paths
 - `jira_key` — extracted Jira issue key (may be null)
 - `pr_title` / `pr_body` — PR metadata
@@ -36,7 +36,7 @@ The pre-script writes context to `/workspace/output/context.json` with:
 
 ### Step 1: Load context
 
-Read `/workspace/output/context.json` and `/workspace/output/pr.diff`.
+Read `/tmp/output/context.json` and `/tmp/output/pr.diff`.
 
 ### Step 2: Run reviews
 
@@ -46,7 +46,7 @@ against the changed files and diff.
 #### 2a. Style review
 
 Follow the style-review skill instructions:
-1. Load `/workspace/rules/css-patternfly.md` as the authority
+1. Load `/tmp/rules/css-patternfly.md` as the authority
 2. Filter changed files to `*.scss`, `*.css`, `*.tsx` (exclude `**/upstream/**`)
 3. Run all three checks: PF priority order, wrapper compliance, class naming
 4. Classify findings by severity (critical/warning/info per the skill)
@@ -62,7 +62,7 @@ Use category prefixes: `style-priority-order`, `style-wrapper-compliance`,
 #### 2b. RBAC review
 
 Follow the rbac-review skill instructions:
-1. Load `/workspace/rules/rbac-reference.md` and `/workspace/rules/security.md`
+1. Load `/tmp/rules/rbac-reference.md` and `/tmp/rules/security.md`
 2. Filter changed files to `*.ts`, `*.tsx`, `*.go`, `*.proto` (exclude `**/upstream/**`, `**/__tests__/**`)
 3. Classify by layer (pages, hooks, routes, models)
 4. Run all six checks: missing gates, fail-open, assumed access, namespace scoping,

@@ -1,0 +1,40 @@
+agent: agents/odh-review.md
+model: sonnet
+image: ghcr.io/fullsend-ai/fullsend-sandbox:latest
+role: review
+slug: fullsend-ai-review
+readonly_repo: true
+
+skills:
+  - skills/style-review
+  - skills/rbac-review
+  - skills/jira-eval-review
+
+host_files:
+  - src: .claude/rules/css-patternfly.md
+    dest: /workspace/rules/css-patternfly.md
+  - src: .claude/rules/security.md
+    dest: /workspace/rules/security.md
+  - src: .claude/rules/conventions.md
+    dest: /workspace/rules/conventions.md
+  - src: .claude/skills/rbac-review/reference.md
+    dest: /workspace/rules/rbac-reference.md
+
+pre_script: scripts/pre-review.sh
+post_script: scripts/post-review.sh
+
+validation_loop:
+  schema: schemas/odh-review-result.schema.json
+  max_iterations: 3
+
+timeout_minutes: 30
+
+providers:
+  - vertex-ai
+  - github
+
+env:
+  runner:
+    JIRA_READ_ONLY: "true"
+  sandbox:
+    REVIEW_FINDING_SEVERITY_THRESHOLD: "low"

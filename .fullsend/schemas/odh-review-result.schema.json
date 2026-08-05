@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ODH Review Agent Result",
+  "description": "Structured output from the ODH review agent. Contains a review action, summary body, and per-file findings from style, RBAC, and Jira evaluation reviews.",
+  "type": "object",
+  "required": ["action", "findings"],
+  "properties": {
+    "action": {
+      "description": "The review action to take on the PR.",
+      "enum": ["approve", "request-changes", "comment"]
+    },
+    "body": {
+      "description": "The review summary body in markdown format, following the ci-comment-template.",
+      "type": "string"
+    },
+    "head_sha": {
+      "description": "The commit SHA the review was performed against.",
+      "type": "string"
+    },
+    "findings": {
+      "description": "Array of review findings from all skills.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "category", "file", "description"],
+        "properties": {
+          "severity": {
+            "description": "Finding severity level.",
+            "enum": ["critical", "high", "medium", "low", "info"]
+          },
+          "category": {
+            "description": "Kebab-case category slug identifying the type of finding.",
+            "type": "string",
+            "examples": [
+              "style-priority-order",
+              "style-wrapper-compliance",
+              "style-class-naming",
+              "style-hardcoded-token",
+              "rbac-missing-ssar",
+              "rbac-fail-open",
+              "rbac-assumed-access",
+              "rbac-namespace-scope",
+              "rbac-graceful-degradation",
+              "rbac-data-exposure",
+              "jira-ac-miss",
+              "jira-ac-partial",
+              "general-correctness",
+              "general-security",
+              "general-performance"
+            ]
+          },
+          "file": {
+            "description": "Repo-relative file path where the finding applies.",
+            "type": "string"
+          },
+          "line": {
+            "description": "1-indexed line number where the finding is anchored.",
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": {
+            "description": "What is wrong and why it matters.",
+            "type": "string"
+          },
+          "remediation": {
+            "description": "How to fix the finding. Include a concrete code suggestion when possible.",
+            "type": "string"
+          },
+          "source_skill": {
+            "description": "Which review skill produced this finding.",
+            "enum": ["style-review", "rbac-review", "jira-eval-review", "claude-review"]
+          },
+          "actionable": {
+            "description": "Whether this finding has a concrete, automatable fix.",
+            "type": "boolean",
+            "default": true
+          }
+        }
+      }
+    },
+    "label_actions": {
+      "description": "Labels to add or remove based on review outcome.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Why labels are being changed.",
+          "type": "string"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["action", "label"],
+            "properties": {
+              "action": { "enum": ["add", "remove"] },
+              "label": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "checks": {
+      "description": "Summary of automated checks (CI, lint, type-check, tests).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": {
+            "enum": ["pass", "fail", "warning", "covered-by-ci", "not-applicable"]
+          },
+          "details": { "type": "string" }
+        }
+      }
+    }
+  }
+}

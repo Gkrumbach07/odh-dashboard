@@ -163,38 +163,12 @@ jobs:
         with:
           agent: __install_only__
 
-      - name: Generate Vertex AI access token
-        id: vertex-token
-        run: |
-          gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
-          TOKEN=$(gcloud auth print-access-token)
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-
-      - name: Write sandbox ADC credentials
-        run: |
-          # Write a minimal ADC-compatible credential file using the access token
-          # so Claude Code can authenticate via GOOGLE_APPLICATION_CREDENTIALS
-          cat > .fullsend/adc-credentials.json << ENDOFCRED
-          {
-            "type": "external_account",
-            "audience": "",
-            "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-            "token_url": "https://sts.googleapis.com/v1/token",
-            "credential_source": {
-              "file": "/tmp/vertex-access-token"
-            },
-            "service_account_impersonation_url": ""
-          }
-          ENDOFCRED
-          echo -n "${{ steps.vertex-token.outputs.token }}" > .fullsend/vertex-access-token
-
       - name: Run review agent
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
-          ANTHROPIC_VERTEX_ACCESS_TOKEN: ${{ steps.vertex-token.outputs.token }}
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           mkdir -p "${{ github.workspace }}/output"
 

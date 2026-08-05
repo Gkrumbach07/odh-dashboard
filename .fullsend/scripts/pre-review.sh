@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-output_dir="${FULLSEND_OUTPUT_DIR:-/workspace/output}"
+output_dir="${FULLSEND_OUTPUT_DIR:-${GITHUB_WORKSPACE:-.}/output}"
 mkdir -p "$output_dir"
 
 pr_number="${PR_NUMBER:?PR_NUMBER is required}"

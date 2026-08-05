@@ -127,7 +127,7 @@ jobs:
           fullsend-dir: ${{ github.workspace }}/.fullsend
           target-repo: ${{ github.workspace }}
           github_token: ${{ steps.app-token.outputs.token }}
-          mint-url: ${{ secrets.FULLSEND_MINT_URL }}
+          mint-url: ${{ vars.FULLSEND_MINT_URL }}
           status-repo: ${{ github.repository }}
           status-number: ${{ matrix.pr_number }}
           run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

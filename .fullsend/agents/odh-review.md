@@ -142,21 +142,14 @@ Format the summary body following this template:
 
 ### Step 7: Produce output
 
-**CRITICAL**: You MUST write the output to this EXACT path. No other path will work:
+First create the output directory, then write the JSON file:
 
 ```bash
-mkdir -p /sandbox/workspace/output
+mkdir -p "$FULLSEND_OUTPUT_DIR"
 ```
 
-Then use the Write tool to write the JSON to:
-
-```
-/sandbox/workspace/output/agent-result.json
-```
-
-Do NOT write to `/tmp/output/`, `./agent-result.json`, or any other path.
-Do NOT use `$FULLSEND_OUTPUT_DIR`. The extraction pipeline ONLY reads from
-`/sandbox/workspace/output/`. Any other path means "No output files found".
+Then write the result JSON to `$FULLSEND_OUTPUT_DIR/agent-result.json`.
+The validation loop checks this file against the schema.
 
 ## Constraints
 

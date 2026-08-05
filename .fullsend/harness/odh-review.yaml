@@ -19,6 +19,12 @@ host_files:
     dest: /tmp/rules/conventions.md
   - src: references/rbac-reference.md
     dest: /tmp/rules/rbac-reference.md
+  - src: vertex-access-token
+    dest: /tmp/vertex-access-token
+    optional: true
+  - src: adc-credentials.json
+    dest: /tmp/adc-credentials.json
+    optional: true
 
 pre_script: scripts/pre-review.sh
 post_script: scripts/post-review.sh
@@ -42,4 +48,5 @@ env:
     CLAUDE_CODE_USE_VERTEX: "1"
     ANTHROPIC_VERTEX_PROJECT_ID: "${ANTHROPIC_VERTEX_PROJECT_ID}"
     CLOUD_ML_REGION: "${CLOUD_ML_REGION}"
-    ANTHROPIC_VERTEX_ACCESS_TOKEN: "${VERTEX_ACCESS_TOKEN}"
+    ANTHROPIC_VERTEX_ACCESS_TOKEN: "${ANTHROPIC_VERTEX_ACCESS_TOKEN}"
+    GOOGLE_APPLICATION_CREDENTIALS: "/tmp/adc-credentials.json"

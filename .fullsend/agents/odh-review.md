@@ -142,14 +142,15 @@ Format the summary body following this template:
 
 ### Step 7: Produce output
 
-First create the output directory, then write the JSON file:
+Before writing output, run this command:
 
 ```bash
-mkdir -p "$FULLSEND_OUTPUT_DIR"
+mkdir -p ./output
 ```
 
-Then write the result JSON to `$FULLSEND_OUTPUT_DIR/agent-result.json`.
-The validation loop checks this file against the schema.
+Then use the Write tool to create `./output/agent-result.json`.
+Do NOT write to `./agent-result.json` — the file MUST be inside the `output/`
+subdirectory. The validation loop checks this file against the schema.
 
 ## Constraints
 

@@ -24,6 +24,7 @@ pre_script: scripts/pre-review.sh
 post_script: scripts/post-review.sh
 
 validation_loop:
+  script: scripts/validate-review.sh
   schema: schemas/odh-review-result.schema.json
   max_iterations: 3
 

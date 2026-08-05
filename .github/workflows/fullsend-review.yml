@@ -166,6 +166,12 @@ jobs:
       - name: Stage GCP credentials for sandbox
         run: |
           cp "$GOOGLE_APPLICATION_CREDENTIALS" .fullsend/gcp-credentials.json
+          # Pre-generate an access token on the runner (where SA key auth works)
+          # and pass it into the sandbox — avoids policy_denied on token refresh
+          # inside the Podman container.
+          gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          echo "VERTEX_ACCESS_TOKEN=$ACCESS_TOKEN" >> "$GITHUB_ENV"
 
       - name: Run review agent
         env:

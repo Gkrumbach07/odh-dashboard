@@ -1,0 +1,8 @@
+version: "1"
+
+roles: [review]
+
+agents:
+  - name: odh-review
+    source: harness/odh-review.yaml
+    enabled: true

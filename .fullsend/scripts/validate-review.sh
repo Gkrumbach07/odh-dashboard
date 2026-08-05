@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-output_dir="${FULLSEND_OUTPUT_DIR:-/workspace/output}"
+output_dir="${FULLSEND_OUTPUT_DIR:-${GITHUB_WORKSPACE:-.}/output}"
 result_file="${1:-$output_dir/agent-result.json}"
 schema_file="${2:-schemas/odh-review-result.schema.json}"
 

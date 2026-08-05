@@ -12,13 +12,13 @@ skills:
 
 host_files:
   - src: references/css-patternfly.md
-    dest: /workspace/rules/css-patternfly.md
+    dest: /tmp/rules/css-patternfly.md
   - src: references/security.md
-    dest: /workspace/rules/security.md
+    dest: /tmp/rules/security.md
   - src: references/conventions.md
-    dest: /workspace/rules/conventions.md
+    dest: /tmp/rules/conventions.md
   - src: references/rbac-reference.md
-    dest: /workspace/rules/rbac-reference.md
+    dest: /tmp/rules/rbac-reference.md
 
 pre_script: scripts/pre-review.sh
 post_script: scripts/post-review.sh

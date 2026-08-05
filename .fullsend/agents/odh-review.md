@@ -80,16 +80,18 @@ The JSON must match this schema:
 - Only medium/low/info → `"comment"`
 - No findings → `"approve"`
 
-### FINAL STEP — ALWAYS RUN THIS LAST
+### How to write the output
 
-After writing the JSON (by any method), you MUST run this Bash command as
-your very last action. This copies the output to where fullsend extracts it:
+Construct the full JSON string in a shell variable, then write it in ONE Bash
+command. Example for an approve with no findings:
 
 ```bash
-mkdir -p "$FULLSEND_OUTPUT_DIR" && for f in ./agent-result.json /tmp/output/agent-result.json ./output/agent-result.json; do [ -f "$f" ] && cp "$f" "$FULLSEND_OUTPUT_DIR/agent-result.json" && break; done && cat "$FULLSEND_OUTPUT_DIR/agent-result.json" | python3 -m json.tool > /dev/null && echo "OUTPUT OK"
+OUTPUT_JSON='{"action":"approve","body":"## Review Report\n\nNo issues found.","findings":[]}'
+mkdir -p "$FULLSEND_OUTPUT_DIR" && echo "$OUTPUT_JSON" | python3 -m json.tool > "$FULLSEND_OUTPUT_DIR/agent-result.json" && echo "OUTPUT OK: $(wc -c < "$FULLSEND_OUTPUT_DIR/agent-result.json") bytes"
 ```
 
-If you don't see "OUTPUT OK" printed, the pipeline will fail.
+You MUST see "OUTPUT OK" in the Bash output. If you don't, the run fails.
+Do NOT use the Write tool for this file — only Bash redirection works here.
 
 ## Constraints
 

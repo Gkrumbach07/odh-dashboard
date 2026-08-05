@@ -82,13 +82,15 @@ The JSON must match this schema:
 
 ### How to write the output
 
-First, create the output directory:
+Run this Bash command first:
 ```bash
-mkdir -p ../output
+mkdir -p /sandbox/workspace/output
 ```
 
-Then use the Write tool to write the JSON to the path `../output/agent-result.json`.
-The `../output/` path is relative to the repo root and MUST be used exactly as shown.
+Then use the Write tool to write the JSON to this ABSOLUTE path:
+`/sandbox/workspace/output/agent-result.json`
+
+This is NOT a relative path. Use exactly `/sandbox/workspace/output/agent-result.json`.
 
 ## Constraints
 

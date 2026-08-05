@@ -44,3 +44,4 @@ env:
     JIRA_READ_ONLY: "true"
   sandbox:
     REVIEW_FINDING_SEVERITY_THRESHOLD: "low"
+    FULLSEND_OUTPUT_DIR: "/sandbox/workspace/output"

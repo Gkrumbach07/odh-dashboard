@@ -80,11 +80,16 @@ The JSON must match this schema:
 - Only medium/low/info → `"comment"`
 - No findings → `"approve"`
 
-### IMPORTANT
-- Do NOT use the Write tool for the output file
-- Do NOT write to `/tmp/output/`, `./agent-result.json`, or any path other than `$FULLSEND_OUTPUT_DIR/agent-result.json`
-- `$FULLSEND_OUTPUT_DIR` is already set in your environment
-- The directory must be created with `mkdir -p` before writing
+### FINAL STEP — ALWAYS RUN THIS LAST
+
+After writing the JSON (by any method), you MUST run this Bash command as
+your very last action. This copies the output to where fullsend extracts it:
+
+```bash
+mkdir -p "$FULLSEND_OUTPUT_DIR" && for f in ./agent-result.json /tmp/output/agent-result.json ./output/agent-result.json; do [ -f "$f" ] && cp "$f" "$FULLSEND_OUTPUT_DIR/agent-result.json" && break; done && cat "$FULLSEND_OUTPUT_DIR/agent-result.json" | python3 -m json.tool > /dev/null && echo "OUTPUT OK"
+```
+
+If you don't see "OUTPUT OK" printed, the pipeline will fail.
 
 ## Constraints
 

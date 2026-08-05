@@ -168,14 +168,13 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
-          FULLSEND_OUTPUT_DIR: ${{ github.workspace }}/.fullsend-output
         run: |
-          mkdir -p "$FULLSEND_OUTPUT_DIR"
+          mkdir -p "${{ github.workspace }}/output"
 
           fullsend run odh-review \
             --fullsend-dir .fullsend \
-            --target-repo . \
-            --no-mint
+            --output-dir "${{ github.workspace }}/output" \
+            --target-repo .
 
       # ── Fallback: check run updates ──
       - name: Update check run (success)

@@ -13,16 +13,18 @@ allowed_remote_resources:
     - https://raw.githubusercontent.com/fullsend-ai/fullsend/
     - https://raw.githubusercontent.com/fullsend-ai/agents/
 
-agents:
-    - name: review
-      source: customized/harness/review.yaml
-      enabled: true
-    - name: triage
-      source: customized/harness/triage.yaml
-      enabled: true
-    - name: code
-      source: customized/harness/code.yaml
-      enabled: true
+# Custom harnesses commented out to test stock agents first.
+# Uncomment once stock agents are confirmed working.
+# agents:
+#     - name: review
+#       source: customized/harness/review.yaml
+#       enabled: true
+#     - name: triage
+#       source: customized/harness/triage.yaml
+#       enabled: true
+#     - name: code
+#       source: customized/harness/code.yaml
+#       enabled: true
 
 create_issues:
     allow_targets:

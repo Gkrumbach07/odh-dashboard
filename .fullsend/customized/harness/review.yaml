@@ -1,4 +1,4 @@
-base: https://raw.githubusercontent.com/fullsend-ai/agents/91f61f3441baedf3f912c9afd4bd574c98793b96/harness/review.yaml#sha256=79afebe4fe81ced1f14e67612aa6feea8afeaafdea6890516ab4d875a093fc77
+base: https://raw.githubusercontent.com/fullsend-ai/agents/91f61f3441baedf3f912c9afd4bd574c98793b96/harness/review.yaml#sha256=c805713f74d2d5c21eeefefaee42962136a6c83954a8d468463f8e13861e8d08
 
 skills:
   - skills/pr-review

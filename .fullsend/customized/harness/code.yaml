@@ -1,11 +1,6 @@
-base: https://raw.githubusercontent.com/fullsend-ai/agents/v0/harness/code.yaml
+base: https://raw.githubusercontent.com/fullsend-ai/agents/91f61f3441baedf3f912c9afd4bd574c98793b96/harness/code.yaml#sha256=0e6f47a7ebc4155d8a0e9d39cbb025f9be5f256b1290d7838e008b33f78c97a3
 
 skills:
   - skills/code-implementation
   - customized/skills/dev-workflow
   - customized/skills/jira-eval-review
-
-host_files:
-  - src: customized/env/jira.env
-    dest: /sandbox/workspace/.env.d/jira.env
-    expand: true

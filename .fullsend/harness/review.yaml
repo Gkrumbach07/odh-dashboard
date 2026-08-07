@@ -4,6 +4,7 @@ skills:
     - skills/style-review
     - skills/rbac-review
     - skills/jira-eval-review
+    - skills/pr-review
 
 host_files:
     - src: env/jira.env

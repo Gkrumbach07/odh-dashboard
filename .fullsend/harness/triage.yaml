@@ -1,7 +1,6 @@
 base: https://raw.githubusercontent.com/fullsend-ai/agents/91f61f3441baedf3f912c9afd4bd574c98793b96/harness/triage.yaml#sha256=451122f4eb191fa79d42c814a412bb969c7d629a9a10284d6fcd1ce366d46ba5
 
 skills:
-    - skills/issue-labels
     - skills/jira-triage
     - skills/jira-validate-area-label
     - skills/jira-validate-priority-severity

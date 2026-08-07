@@ -1,7 +1,6 @@
 base: https://raw.githubusercontent.com/fullsend-ai/agents/91f61f3441baedf3f912c9afd4bd574c98793b96/harness/code.yaml#sha256=2752012b4489288c87faebd315089bc2d89b671982de6a084e920e9972ce08be
 
 skills:
-    - skills/code-implementation
     - skills/dev-workflow
     - skills/jira-eval-review
 

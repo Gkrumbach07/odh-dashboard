@@ -126,6 +126,14 @@ describe('computeRunStatus', () => {
     expect(runStatus.color).toBe('grey');
   });
 
+  it('should check for Cached run status', () => {
+    const runStatus = computeRunStatus(createRun(RuntimeStateKF.CACHED));
+    expect(runStatus.label).toBe(runtimeStateLabels[RuntimeStateKF.CACHED]);
+    expect(runStatus.icon).toStrictEqual(<CheckCircleIcon />);
+    expect(runStatus.status).toBe('success');
+    expect(runStatus.labelStatus).toBe('success');
+  });
+
   it('should check for Pending run status color', () => {
     const runStatus = computeRunStatus(createRun(RuntimeStateKF.PENDING));
     expect(runStatus.color).toBe('purple');

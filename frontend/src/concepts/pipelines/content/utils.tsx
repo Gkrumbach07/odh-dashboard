@@ -72,6 +72,12 @@ export const computeRunStatus = (run?: PipelineRunKF | null): RunStatusDetails =
       labelStatus = 'success';
       label = runtimeStateLabels[RuntimeStateKF.SUCCEEDED];
       break;
+    case RuntimeStateKF.CACHED:
+      icon = <CheckCircleIcon />;
+      status = 'success';
+      labelStatus = 'success';
+      label = runtimeStateLabels[RuntimeStateKF.CACHED];
+      break;
     case RuntimeStateKF.FAILED:
       icon = <ExclamationCircleIcon />;
       status = 'danger';

@@ -5,7 +5,9 @@ import { ExtensibleNav } from './navigation/ExtensibleNav';
 const NavSidebar: React.FC = () => (
   <PageSidebar>
     <PageSidebarBody>
-      <ExtensibleNav label="Nav" />
+      <div style={{ borderBottom: '1px solid #ccc', padding: '8px' }}>
+        <ExtensibleNav label="Nav" />
+      </div>
     </PageSidebarBody>
   </PageSidebar>
 );

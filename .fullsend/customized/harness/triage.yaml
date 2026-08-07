@@ -1,0 +1,16 @@
+base: https://raw.githubusercontent.com/fullsend-ai/agents/v0/harness/triage.yaml
+
+skills:
+  - skills/issue-labels
+  - customized/skills/jira-triage
+  - customized/skills/jira-validate-area-label
+  - customized/skills/jira-validate-priority-severity
+  - customized/skills/jira-validate-description
+  - customized/skills/jira-evaluate-blockers
+  - customized/skills/jira-validate-issue-type
+  - customized/skills/jira-assign-scrum-team
+
+host_files:
+  - src: customized/env/jira.env
+    dest: /sandbox/workspace/.env.d/jira.env
+    expand: true

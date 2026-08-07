@@ -8,3 +8,8 @@ skills:
   - customized/skills/style-review
   - customized/skills/rbac-review
   - customized/skills/jira-eval-review
+
+host_files:
+  - src: customized/env/jira.env
+    dest: /sandbox/workspace/.env.d/jira.env
+    expand: true

@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# Vendored from fullsend-ai/agents scripts/pre-review.sh
+# @ 91f61f3441baedf3f912c9afd4bd574c98793b96 (harness review.yaml base).
+#
+# Local changes from the stock script:
+#   1. If the PR body is missing required headings (Problem / Solution /
+#      Evidence), post a comment and skip the sandbox.
+#   2. Run every cli-adapter in dimensions.json. Output goes to `.run/`.
+#      Findings payloads are folded into `.run/collected.json`. Context
+#      snapshots stay at producer_file so host_files can copy them. The
+#      sandbox does not receive Jira credentials.
+#
+# Usage:
+#   pre-review.sh              # CI / harness pre_script
+#   pre-review.sh --self-test  # local fixtures, no GitHub
+#
+# Runs on the host BEFORE sandbox creation.
+#
+# Required environment variables (set by the workflow):
+#   PR_NUMBER      — must be a positive integer
+#   REPO_FULL_NAME — must be owner/repo format
+#   GITHUB_PR_URL  — must be a valid GitHub pull request URL
+set -euo pipefail
+
+REVIEW_STICKY_MARKER='<!-- fullsend:review-agent -->'
+
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=pr-description-sot.sh
+source "${_SCRIPT_DIR}/pr-description-sot.sh"
+
+run_self_test() {
+  local fail=0 got
+  got=$(sot_missing_headings $'## Problem\nUsers cannot export.\n' | tr '\n' ' ')
+  if [[ "${got}" != "Solution Evidence " ]]; then
+    echo "FAIL pre-sot: expected Solution Evidence missing, got '${got}'" >&2
+    fail=1
+  else
+    echo "PASS pre-sot missing headings"
+  fi
+  got=$(sot_missing_headings $'## Problem\nx\n\n## Solution\ny\n\n## Evidence\nz\n')
+  if [[ -n "${got}" ]]; then
+    echo "FAIL pre-sot: expected none missing, got '${got}'" >&2
+    fail=1
+  else
+    echo "PASS pre-sot headings present"
+  fi
+  got=$(sot_missing_headings $'Problem Solution Evidence in prose.\n' | tr '\n' ' ')
+  if [[ "${got}" != "Problem Solution Evidence " ]]; then
+    echo "FAIL pre-sot: prose should not count as headings, got '${got}'" >&2
+    fail=1
+  else
+    echo "PASS pre-sot ignores prose"
+  fi
+  got=$(sot_missing_headings $'## Problem\n<!-- who hits it -->\n\n## Solution\nN/A\n\n## Evidence\nTBD\n' | tr '\n' ' ')
+  if [[ "${got}" != "Problem Solution Evidence " ]]; then
+    echo "FAIL pre-sot: placeholders should not count as content, got '${got}'" >&2
+    fail=1
+  else
+    echo "PASS pre-sot placeholders are empty"
+  fi
+  local tmpl="${_SCRIPT_DIR}/../../.github/PULL_REQUEST_TEMPLATE/agentic.md"
+  got=$(sot_missing_headings "$(cat "${tmpl}")" | tr '\n' ' ')
+  if [[ "${got}" != "Problem Solution Evidence " ]]; then
+    echo "FAIL pre-sot: unused agentic template must still look unfilled, got '${got}'" >&2
+    fail=1
+  else
+    echo "PASS pre-sot agentic template is unfilled"
+  fi
+  if [[ "${REQUIRED_PR_HEADINGS[*]}" != "Problem Solution Evidence" ]]; then
+    echo "FAIL pre-sot: REQUIRED_PR_HEADINGS drifted" >&2
+    fail=1
+  else
+    echo "PASS pre-sot required list"
+  fi
+  if ! bash "${_SCRIPT_DIR}/run-dimension-producers.sh" --self-test; then
+    echo "FAIL dimension producer self-test" >&2
+    fail=1
+  fi
+  if [[ "${fail}" -ne 0 ]]; then
+    exit 1
+  fi
+  echo "All pre-review self-tests passed"
+}
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  run_self_test
+  exit 0
+fi
+
+echo "::notice::🔗 Review target: ${GITHUB_PR_URL:-}"
+
+errors=0
+
+if [[ ! "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::PR_NUMBER must be a positive integer, got: '${PR_NUMBER:-}'"
+  errors=$((errors + 1))
+fi
+
+if [[ ! "${REPO_FULL_NAME:-}" =~ ^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$ ]]; then
+  echo "::error::REPO_FULL_NAME must be owner/repo format, got: '${REPO_FULL_NAME:-}'"
+  errors=$((errors + 1))
+fi
+
+if [[ ! "${GITHUB_PR_URL:-}" =~ ^https://github\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/pull/[0-9]+$ ]]; then
+  echo "::error::GITHUB_PR_URL format invalid, got: '${GITHUB_PR_URL:-}'"
+  errors=$((errors + 1))
+fi
+
+URL_REPO="$(echo "${GITHUB_PR_URL:-}" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/.*|\1|')"
+URL_PR="$(echo "${GITHUB_PR_URL:-}" | sed -E 's|.*/pull/([0-9]+)$|\1|')"
+
+if [[ -n "${URL_REPO}" && "${URL_REPO}" != "${REPO_FULL_NAME:-}" ]]; then
+  echo "::error::REPO_FULL_NAME does not match PR URL repo ('${REPO_FULL_NAME:-}' vs '${URL_REPO}')"
+  errors=$((errors + 1))
+fi
+if [[ -n "${URL_PR}" && "${URL_PR}" != "${PR_NUMBER:-}" ]]; then
+  echo "::error::PR_NUMBER does not match PR URL number ('${PR_NUMBER:-}' vs '${URL_PR}')"
+  errors=$((errors + 1))
+fi
+
+if [[ "${errors}" -gt 0 ]]; then
+  echo "::error::Input validation failed with ${errors} error(s). Aborting."
+  exit 1
+fi
+
+echo "Input validation passed:"
+echo "  PR_NUMBER=${PR_NUMBER}"
+echo "  REPO_FULL_NAME=${REPO_FULL_NAME}"
+echo "  GITHUB_PR_URL=${GITHUB_PR_URL}"
+
+# ---------------------------------------------------------------------------
+# Check PR state — skip review on merged or closed PRs
+# ---------------------------------------------------------------------------
+# Use REVIEW_TOKEN if available (set by the harness), fall back to GH_TOKEN.
+_TOKEN="${REVIEW_TOKEN:-${GH_TOKEN:-}}"
+if [[ -z "${_TOKEN}" ]]; then
+  echo "No token available — skipping PR state check"
+  exit 0
+fi
+
+PR_STATE="$(GH_TOKEN="${_TOKEN}" gh pr view "${PR_NUMBER}" \
+  --repo "${REPO_FULL_NAME}" --json state --jq '.state' 2>/dev/null || true)"
+
+if [[ -n "${PR_STATE}" && "${PR_STATE}" != "OPEN" ]]; then
+  echo "::notice::PR #${PR_NUMBER} is ${PR_STATE} — skipping review"
+
+  STATE_LOWER="$(echo "${PR_STATE}" | tr '[:upper:]' '[:lower:]')"
+  COMMENT_BODY="Review skipped — this PR is already **${STATE_LOWER}**.
+
+The \`/fs-review\` command only reviews open pull requests.
+
+<sub>Posted by <a href=\"https://github.com/fullsend-ai/fullsend\">fullsend</a> pre-review check</sub>"
+
+  printf '%s' "${COMMENT_BODY}" | GH_TOKEN="${_TOKEN}" gh issue comment "${PR_NUMBER}" \
+    --repo "${REPO_FULL_NAME}" --body-file - 2>/dev/null || true
+
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Check author skip list — exit early if PR author is in REVIEW_SKIP_AUTHORS
+# ---------------------------------------------------------------------------
+if [[ -n "${REVIEW_SKIP_AUTHORS:-}" ]]; then
+  PR_AUTHOR="$(GH_TOKEN="${_TOKEN}" gh pr view "${PR_NUMBER}" \
+    --repo "${REPO_FULL_NAME}" --json author --jq '.author.login' 2>/dev/null || true)"
+
+  if [[ -n "${PR_AUTHOR}" ]]; then
+    IFS=',' read -ra _SKIP_LIST <<< "${REVIEW_SKIP_AUTHORS}"
+    for _entry in "${_SKIP_LIST[@]}"; do
+      read -r _entry <<< "${_entry}"  # trim whitespace
+      if [[ "${_entry,,}" == "${PR_AUTHOR,,}" ]]; then
+        _SAFE_AUTHOR="${PR_AUTHOR//::/ }"
+        echo "::notice::PR #${PR_NUMBER} authored by ${_SAFE_AUTHOR} — skipping review (REVIEW_SKIP_AUTHORS)"
+
+        COMMENT_BODY="Review skipped — PR author **${PR_AUTHOR}** is in the \`REVIEW_SKIP_AUTHORS\` list.
+
+<sub>Posted by <a href=\"https://github.com/fullsend-ai/fullsend\">fullsend</a> pre-review check</sub>"
+
+        printf '%s' "${COMMENT_BODY}" | GH_TOKEN="${_TOKEN}" gh issue comment "${PR_NUMBER}" \
+          --repo "${REPO_FULL_NAME}" --body-file - 2>/dev/null || true
+
+        exit 0
+      fi
+    done
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Required PR headings — skip the agent when they are missing.
+# Edit the list in pr-description-sot.sh (keep in sync with post-review).
+# Title/body are exported for CLI context adapters (Jira key parse).
+# ---------------------------------------------------------------------------
+PR_VIEW="$(GH_TOKEN="${_TOKEN}" gh pr view "${PR_NUMBER}" \
+  --repo "${REPO_FULL_NAME}" --json title,body 2>/dev/null || true)"
+PR_TITLE="$(printf '%s' "${PR_VIEW}" | jq -r '.title // empty')"
+PR_BODY="$(printf '%s' "${PR_VIEW}" | jq -r '.body // empty')"
+export REVIEW_PR_TITLE="${PR_TITLE}"
+export REVIEW_PR_BODY="${PR_BODY}"
+
+if [[ ${#REQUIRED_PR_HEADINGS[@]} -gt 0 ]]; then
+  _SOT_MISSING=()
+  while IFS= read -r _sot_line; do
+    [[ -n "${_sot_line}" ]] && _SOT_MISSING+=("${_sot_line}")
+  done < <(sot_missing_headings "${PR_BODY}")
+  if [[ ${#_SOT_MISSING[@]} -gt 0 ]]; then
+    echo "::notice::PR #${PR_NUMBER} missing required description sections — skipping review agent"
+
+    _MISSING_MD=""
+    for h in "${_SOT_MISSING[@]}"; do
+      _MISSING_MD="${_MISSING_MD}- \`${h}\`"$'\n'
+    done
+
+    COMMENT_BODY="${REVIEW_STICKY_MARKER}
+<!-- fullsend:review-poc -->
+
+🤖 Review skipped — description is missing required sections.
+
+Follow \`.github/PULL_REQUEST_TEMPLATE/agentic.md\` (\`?template=agentic.md\`). Fill the headings below with **real content** (not N/A, TBD, or the template comments), then push or comment \`/fs-review\`:
+
+${_MISSING_MD}
+**Problem**, **Solution**, and **Evidence** are the source of truth for this review. Impact, Test plan, and other template sections are optional.
+"
+
+    _BOT="$(GH_TOKEN="${_TOKEN}" gh api user --jq .login 2>/dev/null || true)"
+    _COMMENT_ID="$(GH_TOKEN="${_TOKEN}" gh api --paginate "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/comments" \
+      | jq -s --arg bot "${_BOT}" --arg marker "${REVIEW_STICKY_MARKER}" \
+        'add | map(select($bot != "" and .user.login == $bot and (.body | contains($marker)))) | first | .id // empty')"
+    if [[ -n "${_COMMENT_ID}" && "${_COMMENT_ID}" != "null" ]]; then
+      echo "Updating sticky comment ${_COMMENT_ID} with skip notice"
+      jq -n --arg body "${COMMENT_BODY}" '{body: $body}' \
+        | GH_TOKEN="${_TOKEN}" gh api --method PATCH "repos/${REPO_FULL_NAME}/issues/comments/${_COMMENT_ID}" --input - >/dev/null \
+        || true
+    else
+      printf '%s' "${COMMENT_BODY}" | GH_TOKEN="${_TOKEN}" gh issue comment "${PR_NUMBER}" \
+        --repo "${REPO_FULL_NAME}" --body-file - 2>/dev/null || true
+    fi
+
+    if [[ -n "${FULLSEND_PRESCRIPT_OUTPUT:-}" ]]; then
+      {
+        echo "skipped=true"
+        echo "reason=PR description missing required sections"
+      } >> "${FULLSEND_PRESCRIPT_OUTPUT}"
+    else
+      echo "::warning::FULLSEND_PRESCRIPT_OUTPUT unset — cannot skip sandbox; post-script will still flag missing headings"
+    fi
+    exit 0
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# CLI adapters on the host (before the sandbox). Output → `.run/`.
+# Findings → `.run/collected.json`. Does not post GitHub comments.
+# ---------------------------------------------------------------------------
+if ! bash "${_SCRIPT_DIR}/run-dimension-producers.sh"; then
+  echo "::warning::dimension producers failed; leaving stub collected.json"
+fi
+
+echo "PR #${PR_NUMBER} is open — proceeding with review agent"

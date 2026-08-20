@@ -1,0 +1,6 @@
+{"type":"todo","message":"TODO: remove this mock fixture when CODERABBIT_CLI=cr is the repo default."}
+{"type":"review_context","base":"main","head":"789ea76652d5f5e9d3f315e3476b8623e20202ac"}
+{"type":"heartbeat"}
+{"type":"finding","severity":"major","fileName":"frontend/src/utilities/helpers.ts","startLine":7,"comment":"generateRandomId relies on Math.random, which is not cryptographically strong and can collide under load. Treat these as guessable IDs.","codegenInstructions":"Replace Math.random with crypto.getRandomValues (Web Crypto) or reuse the dashboard ID helper."}
+{"type":"finding","severity":"minor","fileName":"frontend/src/utilities/helpers.ts","startLine":24,"comment":"downloadTextFile creates an object URL via URL.createObjectURL and never calls URL.revokeObjectURL after the click. Repeated downloads leak blob URLs.","codegenInstructions":"Call URL.revokeObjectURL(el.href) after removeChild, or revoke in a finally block."}
+{"type":"complete","status":"reviewed","findings":2}

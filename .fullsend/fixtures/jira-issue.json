@@ -1,0 +1,11 @@
+{
+  "_todo": "TODO: remove this mock fixture when Jira REST credentials (JIRA_URL / JIRA_USERNAME / JIRA_API_TOKEN) are configured in CI.",
+  "key": "RHOAIENG-99999",
+  "fields": {
+    "summary": "Users cannot export the models table as CSV",
+    "description": "Export is missing from the models list. Add an Export action that downloads CSV of the visible columns.\n\nDo not change IA or navigation. Out of scope: PDF export and scheduled reports.",
+    "status": {
+      "name": "In Progress"
+    }
+  }
+}

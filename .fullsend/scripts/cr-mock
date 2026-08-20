@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Sample CodeRabbit CLI. Same arguments and NDJSON stdout as
+# `cr review --agent` (https://docs.coderabbit.ai/cli/reference).
+# Does not post GitHub comments. Extra flags are ignored.
+#
+# TODO: remove this mock when real CodeRabbit integration is configured
+# (CODERABBIT_CLI=cr as the repo default). Pair: fixtures/coderabbit-review.ndjson
+#
+# Use the real CLI with: CODERABBIT_CLI=cr
+set -euo pipefail
+
+_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_FIXTURE="${MOCK_CODERABBIT_FIXTURE:-${_DIR}/../fixtures/coderabbit-review.ndjson}"
+
+_has_agent=0
+for _arg in "$@"; do
+  if [[ "${_arg}" == "--agent" ]]; then
+    _has_agent=1
+  fi
+done
+
+if [[ "${_has_agent}" -ne 1 ]]; then
+  echo "{\"type\":\"error\",\"message\":\"cr-mock: expected review --agent (got: $*)\"}"
+  exit 2
+fi
+
+if [[ ! -f "${_FIXTURE}" ]]; then
+  echo "{\"type\":\"error\",\"message\":\"mock fixture missing: ${_FIXTURE}\"}"
+  exit 1
+fi
+
+cat "${_FIXTURE}"

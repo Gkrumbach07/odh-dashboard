@@ -8,6 +8,8 @@ alwaysApply: false
 
 When creating a pull request targeting `opendatahub-io/odh-dashboard`, you **MUST** use the PR template at `.github/pull_request_template.md` as the PR body structure. Read the template, fill in every section following the HTML comment instructions within it, and include the full checklist. This rule does not apply to PRs targeting other repositories.
 
+On this fork, agentic review uses `.github/PULL_REQUEST_TEMPLATE/agentic.md` (`?template=agentic.md`). Required sections are **Problem**, **Solution**, and **Evidence** (real content, not placeholders). Optional: User / product impact, Product ask / tracking, Test plan. Do not tell every contributor to switch; the classic template remains the GitHub default.
+
 ## Agent-Specific Guidance
 
 - **Honesty over completeness.** Only check `[x]` checklist items you can substantiate. If you didn't add tests, leave that box unchecked and explain why in the Test Impact section. If you only ran automated checks (lint, type-check), do not check "manually tested."

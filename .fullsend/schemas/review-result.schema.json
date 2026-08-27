@@ -47,6 +47,11 @@
       "then": { "required": ["reason"] }
     },
     {
+      "comment": "Every non-failure review must self-assess risk and confidence. Failure outputs carry `reason` instead.",
+      "if": { "not": { "required": ["reason"] } },
+      "then": { "required": ["risk", "confidence"] }
+    },
+    {
       "if": {
         "properties": { "action": { "const": "approve" } },
         "required": ["action"]

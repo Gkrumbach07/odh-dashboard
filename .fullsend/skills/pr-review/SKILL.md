@@ -1182,6 +1182,19 @@ fallback) produced it. Do NOT call `gh pr review` — the post-script
 handles all GitHub mutations. The host overwrites `action` and
 `body`; still set `risk`, `confidence`, findings, and sections.
 
+**`risk` and `confidence` are required on every non-failure result**
+(the schema rejects output that omits them unless `action` is
+`failure`). Derive them — never leave them blank:
+
+- `risk` = the highest severity among surviving findings:
+  `critical` finding → `critical`; `high` → `high`; only `medium` →
+  `medium`; only `low`/`info` or none → `low`. Bump one level when the
+  diff touches auth, RBAC, secrets, migrations, or public contracts.
+- `confidence` = how sure you are the review was complete: `high` when
+  every planned dimension ran and the diff was fully readable; `medium`
+  when a dimension was skipped or a CLI adapter failed; `low` when
+  context was missing (truncated diff, unfetchable files, tool errors).
+
 After writing the file, validate it before exiting:
 
 ```bash

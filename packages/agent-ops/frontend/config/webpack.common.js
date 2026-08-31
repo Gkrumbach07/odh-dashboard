@@ -1,5 +1,6 @@
 /* eslint-disable no-console */
 const path = require('path');
+const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const CopyPlugin = require('copy-webpack-plugin');
 const { moduleFederationPlugins } = require('./moduleFederation');
@@ -189,6 +190,11 @@ module.exports = (env) => ({
     uniqueName: name,
   },
   plugins: [
+    // The openshell-dashboard package source is authored for the automatic JSX
+    // runtime (no React import). When bundled into this module-federation remote
+    // its React.* references would be undefined ("React is not defined"), so
+    // provide React (the shared singleton) wherever it's referenced.
+    new webpack.ProvidePlugin({ React: 'react' }),
     ...moduleFederationPlugins,
     ...setupWebpackDotenvFilesForEnv({
       directory: RELATIVE_DIRNAME,
@@ -249,11 +255,15 @@ module.exports = (env) => ({
     alias: {
       '~': path.resolve(SRC_DIR),
       '@odh-dashboard/internal': path.resolve(RELATIVE_DIRNAME, '../../../frontend/src'),
-      'openshell-dashboard/pages': path.resolve(ROOT_NODE_MODULES, 'openshell-dashboard/src/pages/index.ts'),
-      'openshell-dashboard/components': path.resolve(ROOT_NODE_MODULES, 'openshell-dashboard/src/components/index.ts'),
-      'openshell-dashboard/api': path.resolve(ROOT_NODE_MODULES, 'openshell-dashboard/src/api/index.ts'),
-      'openshell-dashboard/types': path.resolve(ROOT_NODE_MODULES, 'openshell-dashboard/src/types/index.ts'),
-      'openshell-dashboard/slots': path.resolve(ROOT_NODE_MODULES, 'openshell-dashboard/src/slots/index.ts'),
+      // openshell-dashboard is a dependency of THIS module (frontend), installed
+      // into the module's own node_modules by the image build's per-module npm ci.
+      // Resolve its published src/ from there (not the workspace-root node_modules,
+      // which the image build does not populate for this dep).
+      'openshell-dashboard/pages': path.resolve(RELATIVE_DIRNAME, 'node_modules/openshell-dashboard/src/pages/index.ts'),
+      'openshell-dashboard/components': path.resolve(RELATIVE_DIRNAME, 'node_modules/openshell-dashboard/src/components/index.ts'),
+      'openshell-dashboard/api': path.resolve(RELATIVE_DIRNAME, 'node_modules/openshell-dashboard/src/api/index.ts'),
+      'openshell-dashboard/types': path.resolve(RELATIVE_DIRNAME, 'node_modules/openshell-dashboard/src/types/index.ts'),
+      'openshell-dashboard/slots': path.resolve(RELATIVE_DIRNAME, 'node_modules/openshell-dashboard/src/slots/index.ts'),
     },
     modules: [
       path.resolve(SRC_DIR),

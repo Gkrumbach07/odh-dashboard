@@ -112,6 +112,32 @@ type EnvConfig struct {
 	// Local development only — routes are live with no RBAC gate; do not enable in staging or production.
 	MockAgentClient bool
 
+	// ─── OPENSHELL (DOUBLE AUTH) ─────────────────────────────────
+	// OpenShell is a *separate* service the dashboard authenticates into with a
+	// second token (Token B), distinct from the RHOAI/OpenShift token (Token A)
+	// used for namespace-scoped agent CRs. When these are set, the BFF exposes a
+	// reverse proxy at /openshell/ to the OpenShell relay BFF and an OIDC config
+	// endpoint the browser uses to obtain Token B via silent OIDC.
+	//
+	// OpenShellBFFURL is the base URL of the OpenShell relay BFF (reverse-proxy
+	// target). Empty disables the OpenShell routes.
+	OpenShellBFFURL string
+
+	// OpenShellOIDCIssuer / ClientID / Audience / Scope describe the Keycloak
+	// client the *browser* uses for the silent OIDC (prompt=none) flow that mints
+	// Token B. They are advertised (non-secret) via GET /openshell/auth/config.
+	OpenShellOIDCIssuer   string
+	OpenShellOIDCClientID string
+	OpenShellOIDCAudience string
+	OpenShellOIDCScope    string
+
+	// OpenShellOIDCSharedSession indicates OpenShell's IdP is the SAME as the
+	// dashboard's (shared Keycloak), so Token B can be obtained via silent OIDC
+	// (prompt=none) with zero clicks. Default false: OpenShell is a SEPARATE,
+	// required provider — the browser must perform an explicit sign-in. RHOAI does
+	// not need a shared IdP, so the honest double-auth demo requires this login.
+	OpenShellOIDCSharedSession bool
+
 	// ─── DEPRECATED ─────────────────────────────────────────────
 	// The following fields are deprecated and maintained for backward compatibility
 	// Use DeploymentMode instead

@@ -54,6 +54,26 @@ func main() {
 		getEnvAsBool("MOCK_AGENT_CLIENT", false),
 		"Enable mock agent data client (demo data instead of Kubernetes; local development only)")
 
+	// ─── OpenShell (double auth) ─────────────────────────────────
+	flag.StringVar(&cfg.OpenShellBFFURL, "openshell-bff-url",
+		getEnvAsString("OPENSHELL_BFF_URL", ""),
+		"Base URL of the OpenShell relay BFF; enables the /openshell reverse proxy (double-auth). Empty disables it.")
+	flag.StringVar(&cfg.OpenShellOIDCIssuer, "openshell-oidc-issuer",
+		getEnvAsString("OPENSHELL_OIDC_ISSUER", ""),
+		"OIDC issuer URL the browser uses for OpenShell silent OIDC (Token B)")
+	flag.StringVar(&cfg.OpenShellOIDCClientID, "openshell-oidc-client-id",
+		getEnvAsString("OPENSHELL_OIDC_CLIENT_ID", ""),
+		"OIDC client ID (public/PKCE) for the OpenShell browser silent-OIDC flow")
+	flag.StringVar(&cfg.OpenShellOIDCAudience, "openshell-oidc-audience",
+		getEnvAsString("OPENSHELL_OIDC_AUDIENCE", ""),
+		"OIDC audience for Token B (the OpenShell gateway)")
+	flag.StringVar(&cfg.OpenShellOIDCScope, "openshell-oidc-scope",
+		getEnvAsString("OPENSHELL_OIDC_SCOPE", "openid profile"),
+		"OIDC scope for the OpenShell browser silent-OIDC flow")
+	flag.BoolVar(&cfg.OpenShellOIDCSharedSession, "openshell-oidc-shared-session",
+		getEnvAsBool("OPENSHELL_OIDC_SHARED_SESSION", false),
+		"Whether OpenShell shares the dashboard IdP (enables silent OIDC/SSO). Default false: require an explicit OpenShell sign-in.")
+
 	// Deprecated flags - kept for backward compatibility
 	flag.BoolVar(&cfg.StandaloneMode, "standalone-mode", false, "DEPRECATED: Use -deployment-mode=standalone instead")
 	flag.BoolVar(&cfg.FederatedPlatform, "federated-platform", false, "DEPRECATED: Use -deployment-mode=federated instead")

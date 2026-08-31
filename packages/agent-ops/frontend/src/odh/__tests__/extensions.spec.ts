@@ -1,25 +1,14 @@
 import extensions from '~/odh/extensions';
-import {
-  agentDeployWizardPath,
-  agentDeploymentsPath,
-  agentOpsDeploymentDetailRoute,
-} from '~/app/utilities/routes';
 
 const AGENT_OPS = 'agent-ops';
 const AGENT_OPS_DEPLOY = 'agent-ops-deploy';
 
-describe('agent-ops extensions', () => {
-  it('should register area, tab-route tab, and route extensions', () => {
-    expect(extensions).toHaveLength(5);
-    expect(extensions.map((extension) => extension.type)).toEqual([
-      'app.area',
-      'app.area',
-      'app.tab-route/tab',
-      'app.route',
-      'app.route',
-    ]);
-  });
+const tabs = () => extensions.filter((e) => e.type === 'app.tab-route/tab');
+const routes = () => extensions.filter((e) => e.type === 'app.route');
+const findTab = (id: string) => tabs().find((e) => e.properties.id === id);
+const routePaths = () => routes().map((e) => e.properties.path);
 
+describe('agent-ops extensions', () => {
   it('should register the agent ops area with feature flag', () => {
     const area = extensions.find(
       (extension) => extension.type === 'app.area' && extension.properties.id === AGENT_OPS,
@@ -35,8 +24,7 @@ describe('agent-ops extensions', () => {
 
   it('should register the deploy mode area with feature flag', () => {
     const area = extensions.find(
-      (extension) =>
-        extension.type === 'app.area' && extension.properties.id === AGENT_OPS_DEPLOY,
+      (extension) => extension.type === 'app.area' && extension.properties.id === AGENT_OPS_DEPLOY,
     );
     expect(area).toMatchObject({
       type: 'app.area',
@@ -47,13 +35,12 @@ describe('agent-ops extensions', () => {
     });
   });
 
-  it('should register deployments tab for the agents tab page', () => {
-    const tab = extensions.find((extension) => extension.type === 'app.tab-route/tab');
-    expect(tab).toMatchObject({
+  it('contributes one canonical Deployments tab', () => {
+    expect(tabs()).toHaveLength(1);
+    const deployments = findTab('deployments');
+    expect(deployments).toMatchObject({
       type: 'app.tab-route/tab',
-      flags: {
-        required: [AGENT_OPS],
-      },
+      flags: { required: [AGENT_OPS] },
       properties: {
         pageId: 'agents-tab-page',
         id: 'deployments',
@@ -61,43 +48,22 @@ describe('agent-ops extensions', () => {
         group: '1_deployments',
       },
     });
-    expect(tab?.type === 'app.tab-route/tab' && tab.properties.component).toBeTruthy();
   });
 
-  it('standalone route paths match routes.ts constants', () => {
-    const paths = extensions
-      .filter((extension) => extension.type === 'app.route')
-      .map((extension) => extension.properties.path);
-    expect(paths).toContain(agentDeployWizardPath);
-    expect(paths).toContain(`${agentDeploymentsPath}/:namespace/:agentId/*`);
-  });
-
-  it('should register standalone breakout routes outside the tab layout', () => {
-    const routes = extensions.filter((extension) => extension.type === 'app.route');
-    expect(routes).toHaveLength(2);
-    expect(routes.map((route) => route.properties.path)).toEqual([
-      `${agentDeploymentsPath}/:namespace/:agentId/*`,
-      agentDeployWizardPath,
+  it('does not register provider or workspace pages as standalone routes', () => {
+    expect(routePaths()).toEqual([
+      '/ai-hub/agents/oidc/callback',
+      '/ai-hub/agents/oidc/silent-callback',
     ]);
-    routes.forEach((route) => {
-      expect(route).toMatchObject({
-        type: 'app.route',
-        flags: {
-          required: [AGENT_OPS, AGENT_OPS_DEPLOY],
-        },
-      });
-      expect(route.properties.component).toBeTruthy();
-    });
   });
 
-  it('should keep extension route paths in sync with utilities/routes.ts', () => {
-    const routes = extensions.filter((extension) => extension.type === 'app.route');
-    expect(routes.map((route) => route.properties.path)).toEqual([
-      `${agentDeploymentsPath}/:namespace/:agentId/*`,
-      agentDeployWizardPath,
-    ]);
-    expect(agentOpsDeploymentDetailRoute('team1', 'my-agent')).toBe(
-      `${agentDeploymentsPath}/team1/my-agent`,
-    );
+  it('registers the OpenShell OIDC callback routes outside the /openshell proxy prefix', () => {
+    const paths = routePaths();
+    expect(paths).toContain('/ai-hub/agents/oidc/callback');
+    expect(paths).toContain('/ai-hub/agents/oidc/silent-callback');
+    // Callbacks must be SPA routes, never under the reverse-proxied /openshell/*.
+    paths
+      .filter((p) => p.includes('/oidc/'))
+      .forEach((p) => expect(p.startsWith('/openshell')).toBe(false));
   });
 });

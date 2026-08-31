@@ -22,7 +22,14 @@ const extensions: (AreaExtension | TabRouteTabExtension | RouteExtension)[] = [
       featureFlags: ['agentOpsDeploy'],
     },
   },
-  // --- Existing agent-ops tabs/routes ---
+  // --- Provider chooser — the "Deployments" tab ---
+  // ONE tab on the shared `agents-tab-page` (model-registry contributes
+  // "Catalog", a future module "Registry"). Its landing compares sandbox
+  // providers; selecting OpenShell opens the workspace-scoped sandbox view.
+  // When sibling tabs are enabled the bar shows them all; when
+  // only this one is active, core's single-tab mode hides the lone bar and
+  // renders just the page title + this component. Workspaces/projects are
+  // selectors inside their provider views, never tables or tabs.
   {
     type: 'app.tab-route/tab',
     flags: {
@@ -32,55 +39,20 @@ const extensions: (AreaExtension | TabRouteTabExtension | RouteExtension)[] = [
       pageId: AGENTS_TAB_PAGE,
       id: 'deployments',
       title: 'Deployments',
-      component: () => import('./AgentDeploymentsWrapper.tsx'),
+      singleTabTitle: 'Agents',
+      component: () => import('./openshell/DeploymentsWrapper'),
       group: '1_deployments',
     },
   },
+  // --- OpenShell OIDC (Token B) redirect + silent-renew callbacks ---
   {
     type: 'app.route',
-    flags: {
-      required: [AGENT_OPS, 'agent-ops-deploy'],
-    },
-    properties: {
-      path: '/ai-hub/agents/deployments/:namespace/:agentId/*',
-      component: () => import('./AgentDeploymentDetailRoutes.tsx'),
-    },
-  },
-  {
-    type: 'app.route',
-    flags: {
-      required: [AGENT_OPS, 'agent-ops-deploy'],
-    },
-    properties: {
-      path: '/ai-hub/agents/deployments/deploy',
-      component: () => import('./AgentDeployWizardRoutes.tsx'),
-    },
-  },
-  // --- OpenShell Dashboard tabs/routes ---
-  {
-    type: 'app.tab-route/tab',
     flags: {
       required: [AGENT_OPS],
     },
     properties: {
-      pageId: AGENTS_TAB_PAGE,
-      id: 'sandboxes',
-      title: 'Sandboxes',
-      component: () => import('./openshell/SandboxesWrapper'),
-      group: '2_sandboxes',
-    },
-  },
-  {
-    type: 'app.tab-route/tab',
-    flags: {
-      required: [AGENT_OPS],
-    },
-    properties: {
-      pageId: AGENTS_TAB_PAGE,
-      id: 'workspaces',
-      title: 'Workspaces',
-      component: () => import('./openshell/WorkspacesWrapper'),
-      group: '3_workspaces',
+      path: '/ai-hub/agents/oidc/callback',
+      component: () => import('./openshell/OpenShellOidcCallback'),
     },
   },
   {
@@ -89,28 +61,8 @@ const extensions: (AreaExtension | TabRouteTabExtension | RouteExtension)[] = [
       required: [AGENT_OPS],
     },
     properties: {
-      path: '/ai-hub/agents/workspaces/:workspace',
-      component: () => import('./openshell/WorkspaceDetailWrapper'),
-    },
-  },
-  {
-    type: 'app.route',
-    flags: {
-      required: [AGENT_OPS],
-    },
-    properties: {
-      path: '/ai-hub/agents/workspaces/:workspace/sandboxes/:sandbox',
-      component: () => import('./openshell/SandboxDetailWrapper'),
-    },
-  },
-  {
-    type: 'app.route',
-    flags: {
-      required: [AGENT_OPS],
-    },
-    properties: {
-      path: '/ai-hub/agents/workspaces/:workspace/providers/:provider',
-      component: () => import('./openshell/ProviderDetailWrapper'),
+      path: '/ai-hub/agents/oidc/silent-callback',
+      component: () => import('./openshell/OpenShellOidcCallback'),
     },
   },
 ];

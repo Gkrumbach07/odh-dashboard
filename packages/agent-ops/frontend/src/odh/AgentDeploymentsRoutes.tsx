@@ -1,12 +1,39 @@
 import * as React from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
+import NotFound from '@odh-dashboard/ui-core/components/NotFound';
 import AgentDeploymentsCoreLoader from '~/app/pages/AgentDeploymentsCoreLoader';
 
-const AgentDeploymentsRoutes: React.FC = () => (
+type AgentDeploymentsRoutesProps = {
+  getRedirectPath?: (namespace?: string) => string;
+  embeddedProviderView?: boolean;
+  namespacePath?: string;
+};
+
+const AgentDeploymentsRoutes: React.FC<AgentDeploymentsRoutesProps> = ({
+  getRedirectPath,
+  embeddedProviderView = false,
+  namespacePath = ':namespace',
+}) => (
   <Routes>
-    <Route index element={<AgentDeploymentsCoreLoader />} />
-    <Route path=":namespace" element={<AgentDeploymentsCoreLoader />} />
-    <Route path="*" element={<Navigate to="." replace />} />
+    <Route
+      index
+      element={
+        <AgentDeploymentsCoreLoader
+          getRedirectPath={getRedirectPath}
+          embeddedProviderView={embeddedProviderView}
+        />
+      }
+    />
+    <Route
+      path={namespacePath}
+      element={
+        <AgentDeploymentsCoreLoader
+          getRedirectPath={getRedirectPath}
+          embeddedProviderView={embeddedProviderView}
+        />
+      }
+    />
+    <Route path="*" element={<NotFound />} />
   </Routes>
 );
 

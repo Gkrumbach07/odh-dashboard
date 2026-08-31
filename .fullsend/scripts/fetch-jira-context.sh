@@ -2,7 +2,9 @@
 # Host snapshot of a linked Jira issue for the description-jira section LLM.
 #
 # Parses an issue key from the PR title/body (prefers Product ask / tracking).
-# Real REST when JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN are set.
+# Real REST when JIRA_URL/JIRA_BASE_URL, JIRA_USERNAME/JIRA_USER_EMAIL, and
+# JIRA_API_TOKEN/JIRA_TOKEN are set.  The aliases match Fullsend's managed
+# reusable-dispatch Jira interface.
 # Otherwise loads fixtures/jira-issue.json so the section LLM has something
 # to read (no token in the repo).
 #
@@ -112,9 +114,9 @@ def snapshot_from_issue(data, key):
 title = os.environ.get("REVIEW_PR_TITLE") or ""
 body = os.environ.get("REVIEW_PR_BODY") or ""
 key = pick_key(title, body)
-base = (os.environ.get("JIRA_URL") or "").rstrip("/")
-user = os.environ.get("JIRA_USERNAME") or ""
-token = os.environ.get("JIRA_API_TOKEN") or ""
+base = (os.environ.get("JIRA_URL") or os.environ.get("JIRA_BASE_URL") or "").rstrip("/")
+user = os.environ.get("JIRA_USERNAME") or os.environ.get("JIRA_USER_EMAIL") or ""
+token = os.environ.get("JIRA_API_TOKEN") or os.environ.get("JIRA_TOKEN") or ""
 
 if base and user and token:
     if not key:

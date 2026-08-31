@@ -44,17 +44,20 @@ jobs:
        || github.event.pull_request.head.ref != 'fullsend/scaffold-install')
       && (github.event_name != 'issue_comment'
        || github.event.comment.user.type != 'Bot')
-    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@6df635a109f4951505ae2d7399e7d52fe15f4518 # v0.33.0
+    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@32ad401f884b3fe989d689bab02be30657dce380 # Jira credential forwarding
     with:
       event_action: ${{ github.event.action }}
       install_mode: per-repo
       mint_url: ${{ vars.FULLSEND_MINT_URL }}
       gcp_region: ${{ vars.FULLSEND_GCP_REGION }}
+      jira_base_url: ${{ vars.JIRA_BASE_URL }}
       runner_image: ubuntu-24.04
     secrets:
       FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
       FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
       OTEL_EXPORTER_OTLP_TRACES_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_TRACES_HEADERS }}
+      JIRA_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USERNAME }}
 
   stop-fix:
     # Job-level if: is intentionally coarse — it only screens for the

@@ -29,3 +29,9 @@ forge:
   github:
     post_script: scripts/post-review.sh
     pre_script: scripts/pre-review.sh
+    env:
+      runner:
+        # The generic precomputed-matrix runner exposes work-item names rather
+        # than the review-specific names expected by the upstream harness.
+        GITHUB_PR_URL: "${FULLSEND_WORK_ITEM_URL}"
+        PR_NUMBER: "${ISSUE_NUMBER}"

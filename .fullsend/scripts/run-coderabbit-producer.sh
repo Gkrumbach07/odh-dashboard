@@ -5,13 +5,16 @@
 #     | adapt-coderabbit.py
 #     > .run/coderabbit.json
 #
-# Default CLI is scripts/cr-mock (checked-in sample NDJSON). The real tool:
+# Local development defaults to scripts/cr-mock (checked-in sample NDJSON).
+# GitHub Actions skips this producer unless a real CLI is configured, so a
+# fixture can never be mistaken for findings on a live pull request. The real
+# tool:
 #
 #   CODERABBIT_CLI=cr
 #   CODERABBIT_REVIEW_ARGS='--base origin/main'
 #
-# TODO: remove the cr-mock default when real CodeRabbit integration is
-# configured (CODERABBIT_CLI=cr as the repo default).
+# TODO: configure CODERABBIT_CLI=cr in the host job after the service account
+# and custom-secret forwarding path are available.
 #
 # GitHub stores repo files as non-executable; this script runs a file CLI
 # with bash when the execute bit is missing.
@@ -66,6 +69,12 @@ run_cli() {
 run_producer() {
   local out="$1"
   mkdir -p "$(dirname "${out}")"
+
+  if [[ -z "${CODERABBIT_CLI:-}" && "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    rm -f "${out}"
+    echo "CodeRabbit CLI is not configured in GitHub Actions — skipping producer"
+    return 0
+  fi
 
   local cli="${CODERABBIT_CLI:-${_MOCK}}"
   local extra=()
@@ -145,6 +154,17 @@ data = json.load(open(sys.argv[1], encoding="utf-8"))
 assert data["status"] == "ok" and len(data["findings"]) == 2
 print("PASS producer: CODERABBIT_CLI swap still uses review --agent + adapter")
 PY
+
+  (
+    unset CODERABBIT_CLI
+    GITHUB_ACTIONS=true run_producer "${tmp}" >/dev/null
+  )
+  if [[ -e "${tmp}" ]]; then
+    echo "FAIL producer: GitHub Actions used the local CodeRabbit fixture" >&2
+    return 1
+  fi
+  echo "PASS producer: GitHub Actions skips an unconfigured CodeRabbit CLI"
+
   rm -f "${tmp}" "${wrapper}" "${copy}"
   echo "All coderabbit-producer self-tests passed"
 }

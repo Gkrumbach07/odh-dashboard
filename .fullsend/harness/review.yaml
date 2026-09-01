@@ -16,6 +16,13 @@ host_files:
     dest: /sandbox/workspace/.fullsend/.run/jira.json
     optional: true
 
+env:
+  sandbox:
+    # Keep the sandbox on the same PR as the generic matrix runner. Only the
+    # normalized identifiers cross this boundary; Jira credentials do not.
+    GITHUB_PR_URL: "${FULLSEND_WORK_ITEM_URL}"
+    PR_NUMBER: "${ISSUE_NUMBER}"
+
 model: sonnet
 validation_loop:
   script: scripts/validate-output-schema.sh

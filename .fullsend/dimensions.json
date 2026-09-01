@@ -103,12 +103,12 @@
       "dispatch": "always",
       "command": ["review", "--agent"],
       "cli_env": "CODERABBIT_CLI",
-      "cli_default": "scripts/cr-mock",
+      "cli_default": "scripts/cr-mock (local only; CI skips when CODERABBIT_CLI is unset)",
       "adapter": "scripts/adapt-coderabbit.py",
       "runner": "scripts/run-coderabbit-producer.sh",
       "producer_file": ".run/coderabbit.json",
       "failure_severity": "info",
-      "notes": "TODO: remove cr-mock default when real CodeRabbit integration is configured. Set CODERABBIT_CLI=cr to call the real CLI. Host runs this before the sandbox. Orchestrator loads the envelope; it does not start the CLI."
+      "notes": "Local dry-runs use cr-mock. GitHub Actions skips this producer unless CODERABBIT_CLI is explicitly configured, preventing fixture findings from contaminating live reviews. Set CODERABBIT_CLI=cr to call the real CLI. Host runs this before the sandbox; the orchestrator only loads the envelope."
     },
     {
       "id": "jira-snapshot",

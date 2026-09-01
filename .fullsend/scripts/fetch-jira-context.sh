@@ -5,12 +5,12 @@
 # Real REST when JIRA_URL/JIRA_BASE_URL, JIRA_USERNAME/JIRA_USER_EMAIL, and
 # JIRA_API_TOKEN/JIRA_TOKEN are set.  The aliases match Fullsend's managed
 # reusable-dispatch Jira interface.
-# Otherwise loads fixtures/jira-issue.json so the section LLM has something
-# to read (no token in the repo).
+# Outside CI, otherwise loads fixtures/jira-issue.json so local dry-runs have
+# deterministic context (no token in the repo). CI never silently substitutes
+# fixture data unless JIRA_MOCK=1 is explicitly set.
 #
-# TODO: remove the mock default when real Jira integration is configured
-# (JIRA_* secrets in CI). Pair: fixtures/jira-issue.json
-# Disable the mock without credentials: JIRA_MOCK=0
+# Fixture pair: fixtures/jira-issue.json. Set JIRA_MOCK=1 to use it explicitly
+# in CI, or JIRA_MOCK=0 to disable it explicitly outside CI.
 #
 # Writes context JSON — no findings, no GitHub posts, no secrets in the file.
 #
@@ -77,7 +77,10 @@ def flatten_adf(node):
 
 
 def mock_enabled():
-    val = (os.environ.get("JIRA_MOCK") or "1").strip().lower()
+    configured = os.environ.get("JIRA_MOCK")
+    if configured is None:
+        return (os.environ.get("GITHUB_ACTIONS") or "").strip().lower() != "true"
+    val = configured.strip().lower()
     return val not in ("0", "false", "no", "off")
 
 
@@ -203,6 +206,25 @@ assert data["status"] == "ok", data
 assert data["source"] == "mock", data
 assert data["key"] == "RHOAIENG-99999", data
 print("PASS jira-snapshot: default mock still present with no PR key")
+PY
+
+  (
+    unset JIRA_MOCK
+    REVIEW_PR_TITLE='fix: export' \
+    REVIEW_PR_BODY=$'## Product ask / tracking\nFixes RHOAIENG-82129\n' \
+    GITHUB_ACTIONS=true \
+    JIRA_URL='' JIRA_USERNAME='' JIRA_API_TOKEN='' \
+    JIRA_BASE_URL='' JIRA_USER_EMAIL='' JIRA_TOKEN='' \
+      run_producer "${tmp}" >/dev/null
+  )
+
+  python3 - "${tmp}" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["status"] == "none", data
+assert data["key"] == "RHOAIENG-82129", data
+assert data["reason"] == "jira-credentials-unset", data
+print("PASS jira-snapshot: CI never silently substitutes fixture context")
 PY
 
   REVIEW_PR_TITLE='fix: export' \

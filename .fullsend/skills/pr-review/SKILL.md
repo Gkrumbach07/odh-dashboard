@@ -679,7 +679,7 @@ was selected in step 3c (snapshot present and `status` is `ok`):
 1. **Do not** include the diff, source files, or `meta-prompt.md`.
 2. Compose a short prompt: the skill `definition` body, PR title and
    body, and an instruction to read `context_file` (e.g.
-   `.fullsend/.run/jira.json`). Do not call Jira or GitHub issue
+   `/sandbox/workspace/.fullsend/.run/jira.json`). Do not call Jira or GitHub issue
    APIs. Do not emit `findings[]`.
 3. The return value is the named schema object (for
    `section:product_ask`, a `product_ask` object). Copy it onto
@@ -697,7 +697,7 @@ include section payloads or context snapshots.
 1. **Findings LLM sub-agents** that ran in step 4. Each returns a
    JSON array of findings in the standard format. Ignore `section:*`
    returns here (those are step 4b / 7).
-2. **CLI adapters** from `.fullsend/.run/collected.json` (array
+2. **CLI adapters** from `/sandbox/workspace/.fullsend/.run/collected.json` (array
    of envelopes `{dimension, findings[]}`). The host only put
    payloads that already have a `findings` key in that file. Do not
    re-run those tools. If the file is missing, treat CLI input as

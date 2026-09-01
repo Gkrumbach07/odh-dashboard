@@ -17,7 +17,7 @@ emit `findings[]`.
 
 1. PR title and body (Problem, Solution, Evidence, optional Product
    ask / tracking).
-2. Host snapshot at `.fullsend/.run/jira.json` (also listed as
+2. Host snapshot at `/sandbox/workspace/.fullsend/.run/jira.json` (also listed as
    `context_file` on the registry row).
 
 If the snapshot `status` is not `ok`, or the file is missing, return:

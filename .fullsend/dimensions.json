@@ -118,7 +118,7 @@
       "runner": "scripts/fetch-jira-context.sh",
       "producer_file": ".run/jira.json",
       "failure_severity": "info",
-      "notes": "TODO: remove fixtures/jira-issue.json default when Jira REST credentials are configured in CI. Host snapshot of the linked issue (or the mock). No findings. Do not copy Jira credentials into the sandbox; the section LLM reads this file. Real REST: set JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN. JIRA_MOCK=0 disables the mock when credentials are unset."
+      "notes": "Host snapshot of the linked issue. No findings. Do not copy Jira credentials into the sandbox; the section LLM reads this file. Real REST accepts Fullsend's JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_TOKEN names plus legacy aliases. Local dry-runs default to the fixture; GitHub Actions defaults to no mock. Set JIRA_MOCK explicitly to override."
     },
     {
       "id": "description-jira",
@@ -126,7 +126,7 @@
       "output": "section:product_ask",
       "dispatch": "always",
       "definition": "skills/description-jira/SKILL.md",
-      "context_file": ".run/jira.json",
+      "context_file": "/sandbox/workspace/.fullsend/.run/jira.json",
       "failure_severity": "info",
       "re_review": "full",
       "notes": "Compare PR description to the Jira snapshot. Do not review the diff against Jira AC. Skip spawn when the snapshot status is none/error and write product_ask.status none."

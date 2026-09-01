@@ -477,13 +477,6 @@ EOF
     echo "PASS producer merge adds unique finding, skips same-line duplicate"
   fi
 
-  if ! grep -q 'replace_sticky_current_only' "${BASH_SOURCE[0]}"; then
-    echo "FAIL: missing sticky replace (CLI history merge)" >&2
-    fail=1
-  else
-    echo "PASS sticky replace present"
-  fi
-
   # Missing required heading → host injects description-sot → request-changes
   export REVIEW_REQUIRED_HEADINGS=$'Problem\nSolution\nEvidence'
   export REVIEW_PR_BODY=$'## Problem\nUsers cannot export.\n'
@@ -981,35 +974,6 @@ ${REDISPATCH_MARKER}" || echo "::warning::Failed to post re-dispatch comment"
 elif [ "${POST_REVIEW_EXIT}" -ne 0 ]; then
   echo "::error::fullsend post-review failed with exit code ${POST_REVIEW_EXIT} (PR #${PR_NUMBER} in ${REPO_FULL_NAME})" >&2
   exit "${POST_REVIEW_EXIT}"
-fi
-
-# CLI sticky.Post always runs BuildUpdatedBody (Previous-run <details>).
-# Replace the sticky with renderer output so the live comment is current-only.
-# GitHub comment edit history is the archive. Keep using the CLI for inlines,
-# formal review, and stale-head.
-replace_sticky_current_only() {
-  local body marked bot comment_id
-  body=$(jq -r '.body // empty' "${RESULT_FILE}")
-  if [[ -z "${body}" ]]; then
-    echo "No review body — skipping current-only sticky replace"
-    return 0
-  fi
-  marked="${REVIEW_STICKY_MARKER}"$'\n'"${body}"
-  bot=$(gh api user --jq .login)
-  comment_id=$(gh api --paginate "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/comments" \
-    | jq -s --arg bot "${bot}" --arg marker "${REVIEW_STICKY_MARKER}" \
-      'add | map(select(.user.login == $bot and (.body | contains($marker)))) | first | .id // empty')
-  if [[ -z "${comment_id}" || "${comment_id}" == "null" ]]; then
-    echo "::warning::Sticky comment not found — cannot strip Previous-run history"
-    return 0
-  fi
-  echo "Replacing sticky comment ${comment_id} with current-only body (no Previous-run history)"
-  jq -n --arg body "${marked}" '{body: $body}' \
-    | gh api --method PATCH "repos/${REPO_FULL_NAME}/issues/comments/${comment_id}" --input - >/dev/null
-}
-
-if [ "${ACTION}" != "failure" ]; then
-  replace_sticky_current_only
 fi
 
 # ---------------------------------------------------------------------------

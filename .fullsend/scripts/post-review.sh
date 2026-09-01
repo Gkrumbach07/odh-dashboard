@@ -6,14 +6,14 @@
 #   1. Set the GitHub review action from findings (critical/high →
 #      request-changes, and so on) and rewrite the sticky comment.
 #   2. Do not append the /fs-fix "Next steps" footer.
-#   3. After `fullsend post-review`, replace the sticky so a previous-run
-#      history block does not stay in the live comment.
-#   4. Require Problem / Solution / Evidence headings. Pre-review skips the
+#   3. Require Problem / Solution / Evidence headings. Pre-review skips the
 #      agent when they are missing; this script still flags them if the
 #      agent ran.
-#   5. If the agent omitted host-collected producer findings from
+#   4. If the agent omitted host-collected producer findings from
 #      `.run/collected.json`, append ones that are not already covered
 #      at the same file and nearby line.
+#   5. Link file/line references in the sticky summary and suppress inline
+#      review comments by omitting line numbers only from the CLI payload.
 
 #
 # Harness may fetch this script with sibling files in scripts/.
@@ -57,6 +57,7 @@ transform_review_result() {
   python3 - "$1" <<'PY'
 import json, os, re, sys
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 FUNCTIONAL_CATEGORIES = {
     "correctness", "security", "protected-path",
@@ -235,6 +236,20 @@ def group_findings(findings):
         grouped.setdefault(f.get("severity") or "info", []).append(f)
     return [(s, grouped[s]) for s in order if grouped.get(s)]
 
+def render_location(result, finding, server_url):
+    path = (finding.get("file") or "").strip()
+    line = finding.get("line")
+    label = f"{path}:{line}" if line else path
+    repo = (result.get("repo") or os.environ.get("GITHUB_REPOSITORY") or "").strip("/")
+    sha = (result.get("head_sha") or "").strip()
+    if not path or path.lower() == "n/a" or not repo or not sha:
+        return f"`{label}`"
+    target = f"{server_url.rstrip('/')}/{repo}/blob/{sha}/{quote(path.lstrip('/'), safe='/')}"
+    if line:
+        target += f"#L{line}"
+    safe_label = label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    return f"[{safe_label}]({target})"
+
 def render_body(result, previous_md, action):
     sha = result.get("head_sha") or ""
     short = sha[:7] if sha else "unknown"
@@ -306,13 +321,11 @@ def render_body(result, previous_md, action):
         for sev, items in group_findings(findings):
             lines.append(f"### {sev.capitalize()}")
             for f in items:
-                loc = f.get("file") or ""
-                if f.get("line"):
-                    loc = f"{loc}:{f['line']}"
+                loc = render_location(result, f, run_url)
                 desc = f.get("description") or ""
                 why = f.get("why")
                 rem = f.get("remediation")
-                lines.append(f"- **{f.get('category', '')}** (`{loc}`): {desc}")
+                lines.append(f"- **{f.get('category', '')}** ({loc}): {desc}")
                 if why:
                     lines.append(f"  - Why: {why}")
                 if rem:
@@ -341,6 +354,14 @@ if body:
 json.dump(out, sys.stdout, indent=2)
 sys.stdout.write("\n")
 PY
+}
+
+# Fullsend v0.39.0 has no switch for summary-only review findings. Its CLI
+# creates inline or file-level review comments only for findings that include
+# a positive line number. Preserve findings for verdicts and approved-review
+# follow-up issues, but remove line numbers from the copy passed to the CLI.
+prepare_summary_only_result() {
+  jq 'if (.findings | type) == "array" then .findings |= map(del(.line)) else . end' "$1" > "$2"
 }
 
 run_self_test() {
@@ -421,9 +442,10 @@ run_self_test() {
     echo "PASS product-ask unjustified raises risk, drops confidence, comments"
   fi
 
-  printf '%s' '{"pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"approve","findings":[{"severity":"low","category":"docs-currency","file":"README.md","description":"typo"}]}' > "${tmp}/render.json"
-  local body
-  body=$(transform_review_result "${tmp}/render.json" | jq -r .body)
+  printf '%s' '{"pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"approve","findings":[{"severity":"low","category":"docs-currency","file":"README.md","line":12,"description":"typo"}]}' > "${tmp}/render.json"
+  local body rendered
+  rendered=$(transform_review_result "${tmp}/render.json")
+  body=$(jq -r .body <<<"${rendered}")
   if ! grep -q 'fullsend:review-poc' <<<"${body}"; then
     echo "FAIL render: missing poc marker" >&2
     fail=1
@@ -441,6 +463,22 @@ run_self_test() {
     fail=1
   else
     echo "PASS sticky has no overwrite note"
+  fi
+  if ! grep -Fq '[README.md:12](https://github.com/o/r/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/README.md#L12)' <<<"${body}"; then
+    echo "FAIL render: finding location is not a commit-pinned link" >&2
+    fail=1
+  else
+    echo "PASS finding location links to reviewed commit"
+  fi
+
+  printf '%s' "${rendered}" > "${tmp}/rendered.json"
+  prepare_summary_only_result "${tmp}/rendered.json" "${tmp}/summary-only.json"
+  if ! jq -e '.findings[0].file == "README.md" and (.findings[0] | has("line") | not) and (.body | contains("README.md#L12"))' \
+      "${tmp}/summary-only.json" >/dev/null; then
+    echo "FAIL summary-only: expected body link with no structured line number" >&2
+    fail=1
+  else
+    echo "PASS summary-only payload suppresses inline comments"
   fi
 
   printf '%s' '{"pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"approve","findings":[{"severity":"critical","category":"security","file":"a.go","description":"rce"}]}' > "${tmp}/overwrite.json"
@@ -938,12 +976,20 @@ fi
 # agent reviewed it. When this happens, post a /fs-review comment to
 # re-dispatch a fresh review for the current HEAD.
 # ---------------------------------------------------------------------------
+POST_RESULT_FILE=$(mktemp)
+CLEANUP_FILES+=("${POST_RESULT_FILE}")
+prepare_summary_only_result "${RESULT_FILE}" "${POST_RESULT_FILE}"
+INLINE_LOCATION_COUNT=$(jq '[.findings[]? | select(.line != null)] | length' "${RESULT_FILE}")
+if [ "${INLINE_LOCATION_COUNT}" -gt 0 ]; then
+  echo "Summary-only review: linked ${INLINE_LOCATION_COUNT} finding location(s) in the sticky comment; inline comments disabled"
+fi
+
 POST_REVIEW_EXIT=0
 fullsend post-review \
   --repo "${REPO_FULL_NAME}" \
   --pr "${PR_NUMBER}" \
   --token "${REVIEW_TOKEN}" \
-  --result "${RESULT_FILE}" || POST_REVIEW_EXIT=$?
+  --result "${POST_RESULT_FILE}" || POST_REVIEW_EXIT=$?
 
 if [ "${POST_REVIEW_EXIT}" -eq 10 ]; then
   echo "Stale-head detected — checking whether to re-dispatch review"

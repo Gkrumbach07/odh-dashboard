@@ -28,8 +28,40 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=pr-description-sot.sh
 source "${_SCRIPT_DIR}/pr-description-sot.sh"
 
+normalize_dispatch_context() {
+  local work_item_url
+  work_item_url="${FULLSEND_WORK_ITEM_URL:-${GITHUB_ISSUE_URL:-}}"
+
+  # The reusable dispatch matrix runner exports forge-neutral work-item
+  # variables. The stock review runner exports the legacy PR-specific names.
+  # Normalize only GitHub pull-request URLs so this script supports both paths.
+  if [[ -z "${GITHUB_PR_URL:-}" && "${work_item_url}" =~ ^https://github\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/pull/[0-9]+$ ]]; then
+    export GITHUB_PR_URL="${work_item_url}"
+  fi
+
+  if [[ -z "${PR_NUMBER:-}" ]]; then
+    if [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+      export PR_NUMBER="${ISSUE_NUMBER}"
+    elif [[ "${GITHUB_PR_URL:-}" =~ /pull/([1-9][0-9]*)$ ]]; then
+      export PR_NUMBER="${BASH_REMATCH[1]}"
+    fi
+  fi
+}
+
 run_self_test() {
   local fail=0 got
+  if ! (
+    unset GITHUB_PR_URL PR_NUMBER
+    FULLSEND_WORK_ITEM_URL='https://github.com/Gkrumbach07/odh-dashboard/pull/61'
+    ISSUE_NUMBER=61
+    normalize_dispatch_context
+    [[ "${GITHUB_PR_URL}" == "${FULLSEND_WORK_ITEM_URL}" && "${PR_NUMBER}" == "61" ]]
+  ); then
+    echo "FAIL pre-context: matrix dispatch variables were not normalized" >&2
+    fail=1
+  else
+    echo "PASS pre-context matrix dispatch normalization"
+  fi
   got=$(sot_missing_headings $'## Problem\nUsers cannot export.\n' | tr '\n' ' ')
   if [[ "${got}" != "Solution Evidence " ]]; then
     echo "FAIL pre-sot: expected Solution Evidence missing, got '${got}'" >&2
@@ -86,6 +118,8 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_self_test
   exit 0
 fi
+
+normalize_dispatch_context
 
 echo "::notice::🔗 Review target: ${GITHUB_PR_URL:-}"
 

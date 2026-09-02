@@ -121,6 +121,25 @@ base = (os.environ.get("JIRA_URL") or os.environ.get("JIRA_BASE_URL") or "").rst
 user = os.environ.get("JIRA_USERNAME") or os.environ.get("JIRA_USER_EMAIL") or ""
 token = os.environ.get("JIRA_API_TOKEN") or os.environ.get("JIRA_TOKEN") or ""
 
+if os.environ.get("FULLSEND_JIRA_SNAPSHOT_READY") == "1" and dest.is_file():
+    allowed = {
+        "id", "dimension", "kind", "output", "status", "source", "url",
+        "key", "summary", "description", "status_name", "reason",
+    }
+    try:
+        existing = json.loads(dest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"precomputed Jira snapshot is invalid: {type(exc).__name__}")
+    if not isinstance(existing, dict) or existing.get("id") != "jira-snapshot":
+        raise SystemExit("precomputed Jira snapshot has the wrong envelope")
+    if existing.get("status") not in {"ok", "none", "error"}:
+        raise SystemExit("precomputed Jira snapshot has an invalid status")
+    unexpected = set(existing) - allowed
+    if unexpected:
+        raise SystemExit(f"precomputed Jira snapshot has unexpected keys: {sorted(unexpected)}")
+    print(f"Reusing precomputed Jira snapshot ({existing['status']}, key={existing.get('key', 'none')}) at {dest}")
+    raise SystemExit(0)
+
 if base and user and token:
     if not key:
         write(envelope(status="none", reason="no-issue-key"))
@@ -252,6 +271,31 @@ assert data["status"] == "none", data
 assert "key" not in data, data
 assert data["reason"] == "no-issue-key", data
 print("PASS jira-snapshot: JIRA_MOCK=0 + no key → none")
+PY
+
+  python3 - "${tmp}" <<'PY'
+import json, sys
+json.dump({
+    "id": "jira-snapshot",
+    "dimension": "jira-snapshot",
+    "kind": "cli-adapter",
+    "output": "context",
+    "status": "ok",
+    "key": "RHOAIENG-57547",
+    "summary": "Trusted host snapshot",
+    "description": "Sanitized Jira description",
+    "status_name": "In Progress",
+    "url": "https://redhat.atlassian.net/browse/RHOAIENG-57547",
+}, open(sys.argv[1], "w", encoding="utf-8"))
+PY
+  FULLSEND_JIRA_SNAPSHOT_READY=1 run_producer "${tmp}" >/dev/null
+  python3 - "${tmp}" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["status"] == "ok", data
+assert data["key"] == "RHOAIENG-57547", data
+assert data["summary"] == "Trusted host snapshot", data
+print("PASS jira-snapshot: trusted precomputed context is preserved")
 PY
 
   rm -f "${tmp}"

@@ -14,6 +14,8 @@
 #      at the same file and nearby line.
 #   5. Link file/line references in the sticky summary and suppress inline
 #      review comments by omitting line numbers only from the CLI payload.
+#   6. Render a compact, CodeRabbit-inspired summary: disposition and merge
+#      risk first, Jira context collapsed, and findings as readable cards.
 
 #
 # Harness may fetch this script with sibling files in scripts/.
@@ -23,7 +25,7 @@
 #   post-review.sh --self-test  # local fixtures, no GitHub
 #
 # Stock behavior kept: severity filter, protected-path, labels,
-# stale-head (exit 10), fullsend post-review (inlines + formal review).
+# stale-head (exit 10), and the formal fullsend post-review disposition.
 #
 # Runs on the GitHub Actions runner AFTER the sandbox is destroyed.
 # CWD is runDir.
@@ -236,6 +238,38 @@ def group_findings(findings):
         grouped.setdefault(f.get("severity") or "info", []).append(f)
     return [(s, grouped[s]) for s in order if grouped.get(s)]
 
+def count_summary(findings):
+    counts = []
+    for severity, items in group_findings(findings):
+        count = len(items)
+        counts.append(f"`{count} {severity}`")
+    return " · ".join(counts)
+
+def action_presentation(action):
+    return {
+        "approve": ("TIP", "Approved"),
+        "comment": ("WARNING", "Review comments"),
+        "request-changes": ("CAUTION", "Changes requested"),
+        "reject": ("CAUTION", "Approach rejected"),
+        "failure": ("CAUTION", "Review failed"),
+    }.get(action, ("NOTE", action.replace("-", " ").title()))
+
+def severity_presentation(severity):
+    return {
+        "critical": "🔴",
+        "high": "🟠",
+        "medium": "🟡",
+        "low": "🔵",
+        "info": "⚪",
+    }.get(severity, "⚪")
+
+def category_title(category):
+    return re.sub(r"[-_]+", " ", category or "finding").strip().capitalize()
+
+def suppress_mentions(text):
+    """Keep agent prose from turning @words into GitHub mentions/links."""
+    return re.sub(r"@(?=[A-Za-z0-9-])", "@\u200b", text or "")
+
 def render_location(result, finding, server_url):
     path = (finding.get("file") or "").strip()
     line = finding.get("line")
@@ -264,13 +298,25 @@ def render_body(result, previous_md, action):
     if repo and run_id:
         run_link = f"{run_url}/{repo}/actions/runs/{run_id}"
 
-    # Sticky copy is for the PR author: outcome + findings + run metadata.
-    # Host/agent action disagreement stays in CI logs, not this body.
+    findings = result.get("findings") or []
+    callout, action_label = action_presentation(action)
+    count_text = count_summary(findings)
+    finding_text = count_text if count_text else "No actionable findings"
+    risk_icon = severity_presentation(risk.lower())
+
+    # Sticky copy is for the PR author: disposition and risk first, then
+    # supporting Jira context and actionable findings. Host/agent action
+    # disagreement stays in CI logs, not this body.
     lines = [
         "<!-- fullsend:review-poc -->",
         f"<!-- **Head SHA:** {sha} -->",
         "",
-        f"🤖 Finished Review · `{action}` · Commit: `{short}`",
+        "## 🤖 Fullsend review",
+        "",
+        f"> [!{callout}]",
+        f"> **{action_label}** · {finding_text}",
+        "",
+        f"**Merge risk:** {risk_icon} {risk.capitalize()} · **Confidence:** {confidence.capitalize()}",
     ]
     meta = []
     if started:
@@ -278,21 +324,19 @@ def render_body(result, previous_md, action):
     meta.append(f"Completed {completed}")
     if run_link:
         meta.append(f"[View workflow run]({run_link})")
-    if meta:
-        lines.append(" · ".join(meta))
-    lines += ["", f"**Risk:** {risk} · **Confidence:** {confidence}", ""]
+    lines.append("")
 
     pa = result.get("product_ask") if isinstance(result.get("product_ask"), dict) else None
     if pa:
         status = pa.get("status") or "none"
-        lines.append("## Product ask")
         extra = []
         if pa.get("needs_human"):
-            extra.append("needs human review")
+            extra.append("⚠️ needs human review")
         if pa.get("justified_in_description"):
             extra.append("justified in the PR description")
         suffix = f" · {'; '.join(extra)}" if extra else ""
-        lines.append(f"**Status:** `{status}`{suffix}")
+        lines.append("<details>")
+        lines.append(f"<summary>🎯 <strong>Product ask</strong> · <code>{status}</code>{suffix}</summary>")
         lines.append("")
         if status == "none":
             lines.append("No Jira snapshot, or no linked issue. Description remains the source of truth.")
@@ -301,36 +345,61 @@ def render_body(result, previous_md, action):
             aligned = pa.get("aligned") or []
             mismatched = pa.get("mismatched") or []
             if aligned:
-                lines.append("Aligned:")
+                lines.append("**Aligned**")
                 for item in aligned:
-                    lines.append(f"- {item}")
+                    lines.append(f"- {suppress_mentions(item)}")
                 lines.append("")
             if mismatched:
-                lines.append("Mismatched:")
+                lines.append("**Mismatched**")
                 for item in mismatched:
-                    lines.append(f"- {item}")
+                    lines.append(f"- {suppress_mentions(item)}")
                 lines.append("")
-            lines.append("The PR description is the source of truth. This section does not review the diff against Jira acceptance criteria.")
+            lines.append("> The PR description remains the source of truth. This section compares it with Jira context; it does not review the diff against Jira acceptance criteria.")
             lines.append("")
+        lines.append("</details>")
+        lines.append("")
 
-    findings = result.get("findings") or []
+    lines.append("## Review findings")
+    lines.append("")
     if not findings:
-        lines.append("Looks good to me")
+        lines.append("No actionable findings were generated. 🎉")
     else:
-        lines.append("## Findings")
+        finding_number = 0
         for sev, items in group_findings(findings):
-            lines.append(f"### {sev.capitalize()}")
-            for f in items:
-                loc = render_location(result, f, run_url)
-                desc = f.get("description") or ""
-                why = f.get("why")
-                rem = f.get("remediation")
-                lines.append(f"- **{f.get('category', '')}** ({loc}): {desc}")
-                if why:
-                    lines.append(f"  - Why: {why}")
-                if rem:
-                    lines.append(f"  - Remediation: {rem}")
+            count = len(items)
+            noun = "finding" if count == 1 else "findings"
+            lines.append(f"### {severity_presentation(sev)} {sev.capitalize()} · {count} {noun}")
             lines.append("")
+            for f in items:
+                finding_number += 1
+                loc = render_location(result, f, run_url)
+                desc = suppress_mentions(f.get("description"))
+                why = suppress_mentions(f.get("why"))
+                rem = suppress_mentions(f.get("remediation"))
+                lines.append(f"#### {finding_number}. {category_title(f.get('category'))} · {loc}")
+                lines.append("")
+                lines.append(desc)
+                lines.append("")
+                if why:
+                    lines.append("<details>")
+                    lines.append("<summary>Why this matters</summary>")
+                    lines.append("")
+                    lines.append(why)
+                    lines.append("")
+                    lines.append("</details>")
+                    lines.append("")
+                if rem:
+                    lines.append(f"**Suggested change:** {rem}")
+                    lines.append("")
+
+    commit_link = ""
+    if repo and sha:
+        commit_link = f"[{short}]({run_url.rstrip('/')}/{repo}/commit/{sha})"
+    else:
+        commit_link = f"`{short}`"
+    footer = [f"Reviewed commit {commit_link}"]
+    footer.extend(meta)
+    lines += ["", "---", "", f"<sub>{' · '.join(footer)}</sub>"]
 
     # previous_md is available if a later renderer wants history; this
     # body is the current run only.
@@ -435,14 +504,14 @@ run_self_test() {
   elif [[ "$(jq -r .confidence <<<"${pa_out}")" != "low" ]]; then
     echo "FAIL product-ask-unjustified: want confidence=low, got $(jq -r .confidence <<<"${pa_out}")" >&2
     fail=1
-  elif ! grep -q 'Product ask' <<<"$(jq -r .body <<<"${pa_out}")"; then
-    echo "FAIL product-ask-unjustified: renderer missing Product ask section" >&2
+  elif ! grep -q '<summary>🎯 <strong>Product ask</strong>' <<<"$(jq -r .body <<<"${pa_out}")"; then
+    echo "FAIL product-ask-unjustified: renderer missing collapsed Product ask section" >&2
     fail=1
   else
     echo "PASS product-ask unjustified raises risk, drops confidence, comments"
   fi
 
-  printf '%s' '{"pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"approve","findings":[{"severity":"low","category":"docs-currency","file":"README.md","line":12,"description":"typo"}]}' > "${tmp}/render.json"
+  printf '%s' '{"pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"approve","findings":[{"severity":"low","category":"docs-currency","file":"README.md","line":12,"description":"Document @param behavior"}]}' > "${tmp}/render.json"
   local body rendered
   rendered=$(transform_review_result "${tmp}/render.json")
   body=$(jq -r .body <<<"${rendered}")
@@ -451,6 +520,24 @@ run_self_test() {
     fail=1
   else
     echo "PASS render marker"
+  fi
+  if ! grep -q '## 🤖 Fullsend review' <<<"${body}" || ! grep -Fq '> [!TIP]' <<<"${body}"; then
+    echo "FAIL render: missing review heading or approve callout" >&2
+    fail=1
+  else
+    echo "PASS render disposition callout"
+  fi
+  if ! grep -q '### 🔵 Low · 1 finding' <<<"${body}" || ! grep -q '#### 1. Docs currency' <<<"${body}"; then
+    echo "FAIL render: missing severity count or readable finding heading" >&2
+    fail=1
+  else
+    echo "PASS render finding hierarchy"
+  fi
+  if grep -q '@param' <<<"${body}"; then
+    echo "FAIL render: agent prose can trigger a GitHub mention" >&2
+    fail=1
+  else
+    echo "PASS render suppresses accidental mentions"
   fi
   if grep -q 'Previous run' <<<"${body}"; then
     echo "FAIL render: nested history should not appear" >&2
@@ -486,8 +573,8 @@ run_self_test() {
   if grep -q 'Host overwrote' <<<"${body}"; then
     echo "FAIL render: overwrite note leaked when host changed action" >&2
     fail=1
-  elif ! grep -q 'request-changes' <<<"${body}"; then
-    echo "FAIL render: expected request-changes in author-facing body" >&2
+  elif ! grep -q 'Changes requested' <<<"${body}"; then
+    echo "FAIL render: expected changes-requested disposition in author-facing body" >&2
     fail=1
   else
     echo "PASS overwrite stays out of sticky"

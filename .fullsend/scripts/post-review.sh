@@ -266,6 +266,10 @@ def severity_presentation(severity):
 def category_title(category):
     return re.sub(r"[-_]+", " ", category or "finding").strip().capitalize()
 
+def suppress_mentions(text):
+    """Keep agent prose from turning @words into GitHub mentions/links."""
+    return re.sub(r"@(?=[A-Za-z0-9-])", "@\u200b", text or "")
+
 def render_location(result, finding, server_url):
     path = (finding.get("file") or "").strip()
     line = finding.get("line")
@@ -343,12 +347,12 @@ def render_body(result, previous_md, action):
             if aligned:
                 lines.append("**Aligned**")
                 for item in aligned:
-                    lines.append(f"- {item}")
+                    lines.append(f"- {suppress_mentions(item)}")
                 lines.append("")
             if mismatched:
                 lines.append("**Mismatched**")
                 for item in mismatched:
-                    lines.append(f"- {item}")
+                    lines.append(f"- {suppress_mentions(item)}")
                 lines.append("")
             lines.append("> The PR description remains the source of truth. This section compares it with Jira context; it does not review the diff against Jira acceptance criteria.")
             lines.append("")
@@ -369,9 +373,9 @@ def render_body(result, previous_md, action):
             for f in items:
                 finding_number += 1
                 loc = render_location(result, f, run_url)
-                desc = f.get("description") or ""
-                why = f.get("why")
-                rem = f.get("remediation")
+                desc = suppress_mentions(f.get("description"))
+                why = suppress_mentions(f.get("why"))
+                rem = suppress_mentions(f.get("remediation"))
                 lines.append(f"#### {finding_number}. {category_title(f.get('category'))} · {loc}")
                 lines.append("")
                 lines.append(desc)
@@ -507,7 +511,7 @@ run_self_test() {
     echo "PASS product-ask unjustified raises risk, drops confidence, comments"
   fi
 
-  printf '%s' '{"pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"approve","findings":[{"severity":"low","category":"docs-currency","file":"README.md","line":12,"description":"typo"}]}' > "${tmp}/render.json"
+  printf '%s' '{"pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"approve","findings":[{"severity":"low","category":"docs-currency","file":"README.md","line":12,"description":"Document @param behavior"}]}' > "${tmp}/render.json"
   local body rendered
   rendered=$(transform_review_result "${tmp}/render.json")
   body=$(jq -r .body <<<"${rendered}")
@@ -528,6 +532,12 @@ run_self_test() {
     fail=1
   else
     echo "PASS render finding hierarchy"
+  fi
+  if grep -q '@param' <<<"${body}"; then
+    echo "FAIL render: agent prose can trigger a GitHub mention" >&2
+    fail=1
+  else
+    echo "PASS render suppresses accidental mentions"
   fi
   if grep -q 'Previous run' <<<"${body}"; then
     echo "FAIL render: nested history should not appear" >&2

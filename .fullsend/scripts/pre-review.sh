@@ -231,6 +231,33 @@ PR_BODY="$(printf '%s' "${PR_VIEW}" | jq -r '.body // empty')"
 export REVIEW_PR_TITLE="${PR_TITLE}"
 export REVIEW_PR_BODY="${PR_BODY}"
 
+# The pinned reusable dispatcher currently forwards Jira credentials only to
+# its generic matrix runner, not to the normal review job. The trusted shim
+# therefore fetches Jira before dispatch and uploads only the sanitized JSON
+# snapshot. Hydrate that artifact on the host before CLI producers run; Jira
+# credentials never enter this process or the sandbox.
+if [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_RUN_ID:-}" ]]; then
+  _JIRA_ARTIFACT="fullsend-jira-context-${PR_NUMBER}"
+  _JIRA_ARTIFACT_DIR="$(mktemp -d)"
+  if GH_TOKEN="${_TOKEN}" gh run download "${GITHUB_RUN_ID}" \
+    --repo "${REPO_FULL_NAME}" \
+    --name "${_JIRA_ARTIFACT}" \
+    --dir "${_JIRA_ARTIFACT_DIR}" >/dev/null 2>&1; then
+    _JIRA_ARTIFACT_FILE="${_JIRA_ARTIFACT_DIR}/jira.json"
+    if [[ -f "${_JIRA_ARTIFACT_FILE}" ]]; then
+      mkdir -p "${_SCRIPT_DIR}/../.run"
+      cp "${_JIRA_ARTIFACT_FILE}" "${_SCRIPT_DIR}/../.run/jira.json"
+      export FULLSEND_JIRA_SNAPSHOT_READY=1
+      echo "Loaded sanitized Jira snapshot from workflow artifact ${_JIRA_ARTIFACT}"
+    else
+      echo "::warning::Jira context artifact did not contain jira.json"
+    fi
+  else
+    echo "::warning::Could not download Jira context artifact ${_JIRA_ARTIFACT}; continuing without Jira context"
+  fi
+  rm -rf "${_JIRA_ARTIFACT_DIR}"
+fi
+
 if [[ ${#REQUIRED_PR_HEADINGS[@]} -gt 0 ]]; then
   _SOT_MISSING=()
   while IFS= read -r _sot_line; do

@@ -91,6 +91,24 @@ def needs_human(result):
     pa = result.get("product_ask") if isinstance(result.get("product_ask"), dict) else {}
     return bool(result.get("decision_needed") or pa.get("needs_human") or pa.get("status") == "mismatch-unjustified")
 
+def normalize_host_verification(result):
+    """Make the host-owned blocker audit agree with the host action rule."""
+    count = blocking_count(result)
+    noun = "finding" if count == 1 else "findings"
+    row = {
+        "id": "blocking-findings",
+        "label": "Blocking findings",
+        "result": "fail" if count else "pass",
+        "notes": f"{count} blocking {noun} under the host rule: critical/high, or functional medium.",
+    }
+    verification = [
+        existing for existing in (result.get("verification") or [])
+        if existing.get("id") != "blocking-findings"
+    ]
+    verification.append(row)
+    result["verification"] = verification
+    return result
+
 def compute_action(result):
     existing = result.get("action")
     if existing == "failure":
@@ -453,6 +471,7 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 previous_md = os.environ.get("REVIEW_PREVIOUS_MARKDOWN", "")
 result = inject_description_sot_findings(result)
 result = merge_producer_findings(result)
+result = normalize_host_verification(result)
 result = augment_inspected(result)
 result = apply_product_ask(result)
 action, _reason = compute_action(result)
@@ -993,6 +1012,14 @@ REVIEW_SIGNALS=$(gh pr view "${PR_NUMBER}" --repo "${REPO_FULL_NAME}" \
   --jq '"+\(.additions) / −\(.deletions) · \(.changedFiles) " + (if .changedFiles == 1 then "file" else "files" end)' \
   2>/dev/null || true)
 export REVIEW_SIGNALS
+if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+  _RUN_STARTED_AT=$(gh run view "${GITHUB_RUN_ID}" --repo "${REPO_FULL_NAME}" \
+    --json startedAt --jq '.startedAt // empty' 2>/dev/null || true)
+  if [[ -n "${_RUN_STARTED_AT}" ]]; then
+    REVIEW_STARTED=$(date -u -d "${_RUN_STARTED_AT}" '+%H:%M UTC' 2>/dev/null || true)
+    export REVIEW_STARTED
+  fi
+fi
 AGENT_ACTION=$(jq -r '.action // "omitted"' "${RESULT_FILE}")
 TRANSFORMED=$(mktemp)
 CLEANUP_FILES+=("${TRANSFORMED}")

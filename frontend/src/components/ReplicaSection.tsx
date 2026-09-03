@@ -1,15 +1,15 @@
 import * as React from 'react';
 import {
   FormGroup,
+  FormGroupLabelHelp,
   Popover,
-  Icon,
   Flex,
   FlexItem,
   FormHelperText,
   HelperText,
   HelperTextItem,
 } from '@patternfly/react-core';
-import { OutlinedQuestionCircleIcon, ExclamationTriangleIcon } from '@patternfly/react-icons';
+import { ExclamationTriangleIcon } from '@patternfly/react-icons';
 import NumberInputWrapper from '#~/components/NumberInputWrapper';
 import { normalizeBetween } from '#~/utilities/utils';
 
@@ -65,9 +65,7 @@ const ReplicaSection: React.FC<ReplicaSectionProps> = ({
       labelHelp={
         infoContent ? (
           <Popover bodyContent={<div>{infoContent}</div>}>
-            <Icon aria-label="Model server replicas info" role="button">
-              <OutlinedQuestionCircleIcon />
-            </Icon>
+            <FormGroupLabelHelp aria-label="Model server replicas info" />
           </Popover>
         ) : undefined
       }

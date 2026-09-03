@@ -225,9 +225,10 @@ fi
 # Title/body are exported for CLI context adapters (Jira key parse).
 # ---------------------------------------------------------------------------
 PR_VIEW="$(GH_TOKEN="${_TOKEN}" gh pr view "${PR_NUMBER}" \
-  --repo "${REPO_FULL_NAME}" --json title,body 2>/dev/null || true)"
+  --repo "${REPO_FULL_NAME}" --json title,body,headRefOid 2>/dev/null || true)"
 PR_TITLE="$(printf '%s' "${PR_VIEW}" | jq -r '.title // empty')"
 PR_BODY="$(printf '%s' "${PR_VIEW}" | jq -r '.body // empty')"
+PR_HEAD_SHA="$(printf '%s' "${PR_VIEW}" | jq -r '.headRefOid // empty')"
 export REVIEW_PR_TITLE="${PR_TITLE}"
 export REVIEW_PR_BODY="${PR_BODY}"
 
@@ -271,15 +272,19 @@ if [[ ${#REQUIRED_PR_HEADINGS[@]} -gt 0 ]]; then
       _MISSING_MD="${_MISSING_MD}- \`${h}\`"$'\n'
     done
 
+    _SHORT_SHA="${PR_HEAD_SHA:0:7}"
+    _TEMPLATE_URL="https://github.com/${REPO_FULL_NAME}/blob/main/.github/PULL_REQUEST_TEMPLATE/agentic.md"
     COMMENT_BODY="${REVIEW_STICKY_MARKER}
 <!-- fullsend:review-poc -->
+<!-- **Head SHA:** ${PR_HEAD_SHA} -->
 
-🤖 Review skipped — description is missing required sections.
+Finished Review · \`skipped\` · Commit: \`${_SHORT_SHA:-unknown}\`
 
-Follow \`.github/PULL_REQUEST_TEMPLATE/agentic.md\` (\`?template=agentic.md\`). Fill the headings below with **real content** (not N/A, TBD, or the template comments), then push or comment \`/fs-review\`:
+Review did not run. Fill required sections with real content (not N/A / TBD): **Problem**, **Solution**, and **Evidence**.
 
+Missing:
 ${_MISSING_MD}
-**Problem**, **Solution**, and **Evidence** are the source of truth for this review. Impact, Test plan, and other template sections are optional.
+See [agentic.md](${_TEMPLATE_URL}). Then push or comment \`/fs-review\`.
 "
 
     _BOT="$(GH_TOKEN="${_TOKEN}" gh api user --jq .login 2>/dev/null || true)"

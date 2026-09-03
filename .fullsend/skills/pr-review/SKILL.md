@@ -972,11 +972,8 @@ For each file in the PR diff, check whether its path starts with (or
 exactly matches) any entry in the list above.
 
 If **any** protected files are modified, you MUST emit a structured
-finding with `category: "protected-path"`. This is not optional —
-the `review-result.schema.json` schema rejects `action: "approve"`
-when any finding has `category: "protected-path"`, so omitting the
-finding is the only way an approval can slip through. Always emit
-the finding.
+finding with `category: "protected-path"`. This is not optional; the host also
+performs an independent protected-path check before posting.
 
 1. **Insufficient context** — the PR has no linked issue, or the PR
    description does not explain why the protected files are being
@@ -992,14 +989,9 @@ the finding.
    approval is always required for protected-path changes, regardless
    of context.
 
-In either case, the presence of a `protected-path` finding means the
-outcome MUST NOT be `approve`. The schema enforces this — validation
-will reject the result if `action` is `approve` and any finding has
-`category: "protected-path"`.
-
-- For high severity, the outcome MUST be `request-changes`
-- For medium severity (with sufficient context), the outcome MUST be
-  `comment-only`
+In either case, the presence of a `protected-path` finding prevents host
+approval. High severity is blocking; medium protected-path findings require
+human judgment.
 
 The `post-review.sh` script independently downgrades approvals on
 protected-path PRs, but the review agent should surface the finding
@@ -1065,94 +1057,31 @@ premise:
 - It does not re-run the challenger pass. Reconciliation operates
   on the final finding set, not on intermediate results.
 
-#### 6f. Determine overall outcome
+#### 6f. Classify blockers for the host
 
 Merge the reconciled PR-specific findings (from 6e-1) into the
-challenger-adjudicated finding set and evaluate:
+challenger-adjudicated finding set. Classify blockers consistently so the
+`blocking-findings` verification row matches the host rule:
 
-- Any **critical** or **high** finding → `request-changes`
+- Any **critical** or **high** finding blocks.
 - One or more **medium** findings identifying a functional bug
   (incorrect behavior, permission error, schema violation, or silent
-  failure) → `request-changes`
+  failure) blocks.
 - One or more **medium** findings that are all
   stylistic/advisory/process-related (no functional bugs) →
-  `comment-only` (attach findings as comments so the author sees them,
-  but do not block the PR)
-- **Low** or **info** findings only (no medium+) → `approve` (attach
-  findings as comments; preserve concrete follow-up work with
-  `actionable: true` so the post-script can create follow-up issues)
-- No findings → `approve`
+  remains advisory.
+- **Low** or **info** findings do not block. Preserve concrete follow-up work
+  with `actionable: true`.
 - The approach is fundamentally wrong — wrong design, unauthorized
   change, or the PR should be closed/completely rethought → `reject`.
-  Use `reject` only when no amount of code-level iteration will make
-  the PR mergeable.
-
-**Self-consistency check.** Before emitting the final verdict, verify
-that the verdict action is consistent with the language used in the
-summary paragraph of the review body. If the summary states that
-findings "should be addressed before merge," "must be fixed," "need to
-be resolved," or uses equivalent blocking language, the verdict MUST be
-`request-changes` — not `comment`. A `comment` verdict paired with
-blocking language removes the only automated signal that the findings
-require action, because `comment` (COMMENTED review state) does not
-block the PR. When the summary language and the verdict action
-contradict each other, escalate the verdict to match the language.
+  Mark it with category `approach-rejected`; the host maps that category to
+  `reject`. Use it only when no amount of code-level iteration will make the PR
+  mergeable.
 
 ### 7. Produce the review result
 
-Compose the review comment using this structure:
-
-The first line must be an HTML comment embedding the head SHA.
-Construct it by concatenating: the HTML comment open delimiter,
-a space, `**Head SHA:**`, a space, the SHA value, a space, and
-the HTML comment close delimiter. For example, if the SHA were
-`abc123`, the line would read (with no line break):
-
-```text
-[open] **Head SHA:** abc123 [close]
-```
-
-where `[open]` = `<` + `!--` and `[close]` = `--` + `>`.
-
-```markdown
-## Review
-
-### Findings
-
-#### Critical
-
-- **[<category>]** `<file>:<line>` — <description>
-  Remediation: <remediation>
-
-#### High
-
-...
-
-#### Medium / Low / Info
-
-...
-```
-
-**Formatting rules:**
-
-- **Head SHA** is embedded in a hidden HTML comment on the first line.
-  It is not shown to reviewers but is required for re-review anchoring
-  (the `pre-fetch-prior-review.sh` script extracts it).
-- **No visible SHA, timestamp, or outcome lines.** These are implicit
-  in the GitHub PR review process (the SHA is pinned via the formal
-  review API, the timestamp is on the comment, and the outcome is
-  conveyed via GitHub's approve/request-changes mechanism).
-- **No summary section.** The PR description already explains the
-  change; the review should focus on findings.
-- **Only include finding severity sections that have findings.** If
-  there are no critical findings, omit the `#### Critical` heading
-  entirely. If the only findings are medium/low/info, only show that
-  section. If there are no findings at all, set the body to
-  the hidden SHA comment followed by a newline and "Looks good to me"
-  — omit the `## Review` header and `### Findings` section entirely.
-- **No footer.** Do not append any footer, action-hints block, or
-  boilerplate after findings. The post-review pipeline appends
-  action hints deterministically when appropriate.
+Produce the structured instance that the host renders. Do not compose review
+markdown. The durable comment is intentionally a host-owned view of this JSON.
 
 If `PRIOR_REVIEW_PROVENANCE` starts with `unverifiable-`, include an
 info-level finding in the review output:
@@ -1161,39 +1090,42 @@ info-level finding in the review output:
   provenance validation failed (`PRIOR_REVIEW_PROVENANCE` value).
   This review treats all findings as first-time assessments.
 
-Map the outcome to an action value. `action`, `pr_number`, and `repo`
-are always required (see the agent definition for the full schema).
-The table below lists the **additional** required fields per action:
-
-| Outcome         | Action            | Required fields                                                                               |
-|-----------------|-------------------|-----------------------------------------------------------------------------------------------|
-| approve         | `approve`         | `body`, `head_sha`; set `body` to "Looks good to me" (preceded by the hidden SHA comment) when there are no findings; include `findings[]` when low/info findings are actionable follow-up work |
-| request-changes | `request-changes` | `body`, `head_sha`, `findings[]`                                                              |
-| comment-only    | `comment`         | `body`, `head_sha`                                                                            |
-| failure         | `failure`         | `reason` (body optional)                                                                      |
-| reject          | `reject`          | `body`, `head_sha`, `findings[]`                                                              |
-
 #### Pipeline mode (`$FULLSEND_OUTPUT_DIR` is set)
 
 Write the result to `$FULLSEND_OUTPUT_DIR/agent-result.json` following
 the overlay schema (`.fullsend/schemas/review-result.schema.json`).
 Include `product_ask` when a section LLM (or the none-snapshot
 fallback) produced it. Do NOT call `gh pr review` — the post-script
-handles all GitHub mutations. The host overwrites `action` and
-`body`; still set `risk`, `confidence`, findings, and sections.
+handles all GitHub mutations. Omit `action` and `body` for normal reviews; the
+host computes and renders both. Set `action: failure` plus `reason` only when
+the review did not complete.
 
-**`risk` and `confidence` are required on every non-failure result**
-(the schema rejects output that omits them unless `action` is
-`failure`). Derive them — never leave them blank:
+Every non-failure result must include:
 
-- `risk` = the highest severity among surviving findings:
-  `critical` finding → `critical`; `high` → `high`; only `medium` →
-  `medium`; only `low`/`info` or none → `low`. Bump one level when the
-  diff touches auth, RBAC, secrets, migrations, or public contracts.
-- `confidence` = how sure you are the review was complete: `high` when
-  every planned dimension ran and the diff was fully readable; `medium`
-  when a dimension was skipped or a CLI adapter failed; `low` when
-  context was missing (truncated diff, unfetchable files, tool errors).
+- `schema_version: "2"`.
+- `change_summary`: one short independent read of what the diff does, not a
+  file list and not copied from the PR body.
+- `findings[]` when issues survive synthesis. Critical/high/medium findings
+  require `why`; critical/high findings also require `remediation`.
+- `risk: { level, why }`: blast radius if this change ships wrong. `low` is
+  narrow/internal, `medium` is feature-local or sensitive-adjacent, `high` is
+  wide/product-visible, and `critical` crosses a trust boundary or risks data
+  loss. **Do not derive risk from the highest finding severity.**
+- `confidence: { level, why }`: the weaker of proof quality and patch-review
+  completeness. Use `high` when evidence matches the change and every planned
+  producer ran, `medium` when usable but incomplete, and `low` when the review
+  cannot support approval.
+- `verification[]`: one row for each applicable fixed check ID:
+  `description-vs-code`, `evidence`, `security`, `blocking-findings`, and
+  `product-ask`, with result `pass`, `fail`, or `could-not-verify`. A failed row
+  must map to a finding or `decision_needed`.
+- Optional `decision_needed` with a concrete question and structured A/B/None
+  options when human judgment is required. Author-fixable blocking findings
+  still take precedence in the host status.
+- Optional `inspected` describing evidence read, producers that ran, and what
+  could not be verified.
+- `product_ask` from the section LLM, including `{ "status": "none" }` when no
+  Jira snapshot exists.
 
 After writing the file, validate it before exiting:
 
@@ -1263,10 +1195,8 @@ wins.
   complete the review (tool failure, missing context, all sub-agents
   failed), produce a failure result (see step 7) rather than posting
   an incomplete result.
-- **Always include the PR head SHA in a hidden HTML comment.** The
-  SHA must appear in the format described in step 7 so the re-review
-  anchoring script can extract it, but it must not be visible to
-  reviewers.
+- **Always include the exact PR head SHA in `head_sha`.** The host renders the
+  hidden HTML anchor used by re-review pre-fetch.
 - **In pipeline mode, `gh pr review` is reserved for the post-script.**
   The sandbox token is read-only. Write JSON to
   `$FULLSEND_OUTPUT_DIR/agent-result.json` and exit.

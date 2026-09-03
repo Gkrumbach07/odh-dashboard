@@ -14,8 +14,9 @@
 #      at the same file and nearby line.
 #   5. Link file/line references in the sticky summary and suppress inline
 #      review comments by omitting line numbers only from the CLI payload.
-#   6. Render a compact, CodeRabbit-inspired summary: disposition and merge
-#      risk first, Jira context collapsed, and findings as readable cards.
+#   6. Render the durable structured review: change summary, host status,
+#      blast-radius risk, confidence rationale, decisions, findings, Jira
+#      coherence, verification, inspected evidence, signals, and labels.
 
 #
 # Harness may fetch this script with sibling files in scripts/.
@@ -73,6 +74,23 @@ def is_functional(finding):
         return True
     return any(tok in cat for tok in ("bug", "permission", "schema", "silent"))
 
+def rated_level(result, field, default):
+    rated = result.get(field)
+    if isinstance(rated, dict):
+        return (rated.get("level") or default).lower()
+    return default
+
+def is_blocking(finding):
+    severity = (finding.get("severity") or "info").lower()
+    return severity in ("critical", "high") or (severity == "medium" and is_functional(finding))
+
+def blocking_count(result):
+    return sum(1 for finding in (result.get("findings") or []) if is_blocking(finding))
+
+def needs_human(result):
+    pa = result.get("product_ask") if isinstance(result.get("product_ask"), dict) else {}
+    return bool(result.get("decision_needed") or pa.get("needs_human") or pa.get("status") == "mismatch-unjustified")
+
 def compute_action(result):
     existing = result.get("action")
     if existing == "failure":
@@ -80,25 +98,21 @@ def compute_action(result):
     findings = result.get("findings") or []
     if any((f.get("category") or "") == "approach-rejected" for f in findings):
         return "reject", "approach-rejected"
-    sevs = [(f.get("severity") or "info") for f in findings]
-    if any(s in ("critical", "high") for s in sevs):
-        return "request-changes", "critical-or-high"
+    if blocking_count(result):
+        return "request-changes", "blocking-findings"
     medium = [f for f in findings if f.get("severity") == "medium"]
-    if any(is_functional(f) for f in medium):
-        return "request-changes", "medium-functional"
     if medium:
         return "comment", "medium-advisory"
     action = "approve"
     reason = "no-blocking-findings"
-    risk = (result.get("risk") or "low").lower()
-    confidence = (result.get("confidence") or "high").lower()
-    pa = result.get("product_ask") if isinstance(result.get("product_ask"), dict) else {}
+    risk = rated_level(result, "risk", "low")
+    confidence = rated_level(result, "confidence", "high")
     if action == "approve" and risk in ("high", "critical"):
         return "comment", "risk-blocks-approve"
     if action == "approve" and confidence == "low":
         return "comment", "low-confidence"
-    if action == "approve" and (pa.get("needs_human") or pa.get("status") == "mismatch-unjustified"):
-        return "comment", "product-ask-needs-human"
+    if action == "approve" and needs_human(result):
+        return "comment", "needs-human"
     return action, reason
 
 def norm_heading(text):
@@ -158,21 +172,27 @@ def apply_product_ask(result):
     risk_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
     conf_rank = {"high": 0, "medium": 1, "low": 2}
 
-    def bump_risk(floor):
-        cur = (result.get("risk") or "low").lower()
+    def bump_risk(floor, why):
+        rated = result.get("risk") if isinstance(result.get("risk"), dict) else {}
+        cur = (rated.get("level") or "low").lower()
+        reasons = [rated.get("why", "").strip(), why]
         if risk_rank.get(floor, 0) > risk_rank.get(cur, 0):
-            result["risk"] = floor
+            cur = floor
+        result["risk"] = {"level": cur, "why": " ".join(r for r in reasons if r)}
 
-    def drop_confidence(floor):
-        cur = (result.get("confidence") or "high").lower()
+    def drop_confidence(floor, why):
+        rated = result.get("confidence") if isinstance(result.get("confidence"), dict) else {}
+        cur = (rated.get("level") or "high").lower()
+        reasons = [rated.get("why", "").strip(), why]
         if conf_rank.get(floor, 0) > conf_rank.get(cur, 0):
-            result["confidence"] = floor
+            cur = floor
+        result["confidence"] = {"level": cur, "why": " ".join(r for r in reasons if r)}
 
     if status == "mismatch-unjustified":
         pa["needs_human"] = True
         pa["justified_in_description"] = False
-        bump_risk("high")
-        drop_confidence("low")
+        bump_risk("high", "The PR description does not justify departing from the linked Jira ask.")
+        drop_confidence("low", "The unresolved Jira mismatch requires human judgment before approval.")
     return result
 
 
@@ -231,40 +251,42 @@ def merge_producer_findings(result):
     result["findings"] = existing + added
     return result
 
+def augment_inspected(result):
+    """Record host-visible producers and verification limits for audit."""
+    inspected = dict(result.get("inspected") or {})
+    producers = list(inspected.get("producers") or [])
+    path = os.environ.get("REVIEW_PRODUCER_JSON") or ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            envelopes = json.load(fh)
+        if isinstance(envelopes, dict):
+            envelopes = [envelopes]
+        for envelope in envelopes if isinstance(envelopes, list) else []:
+            dimension = envelope.get("dimension") if isinstance(envelope, dict) else None
+            if dimension and dimension not in producers:
+                producers.append(dimension)
+    except (OSError, json.JSONDecodeError):
+        pass
+    could_not_verify = list(inspected.get("could_not_verify") or [])
+    for row in result.get("verification") or []:
+        if row.get("result") == "could-not-verify":
+            note = row.get("notes") or row.get("label")
+            if note and note not in could_not_verify:
+                could_not_verify.append(note)
+    if producers:
+        inspected["producers"] = producers
+    if could_not_verify:
+        inspected["could_not_verify"] = could_not_verify
+    if inspected:
+        result["inspected"] = inspected
+    return result
+
 def group_findings(findings):
     order = ["critical", "high", "medium", "low", "info"]
     grouped = {s: [] for s in order}
     for f in findings:
         grouped.setdefault(f.get("severity") or "info", []).append(f)
     return [(s, grouped[s]) for s in order if grouped.get(s)]
-
-def count_summary(findings):
-    counts = []
-    for severity, items in group_findings(findings):
-        count = len(items)
-        counts.append(f"`{count} {severity}`")
-    return " · ".join(counts)
-
-def action_presentation(action):
-    return {
-        "approve": ("TIP", "Approved"),
-        "comment": ("WARNING", "Review comments"),
-        "request-changes": ("CAUTION", "Changes requested"),
-        "reject": ("CAUTION", "Approach rejected"),
-        "failure": ("CAUTION", "Review failed"),
-    }.get(action, ("NOTE", action.replace("-", " ").title()))
-
-def severity_presentation(severity):
-    return {
-        "critical": "🔴",
-        "high": "🟠",
-        "medium": "🟡",
-        "low": "🔵",
-        "info": "⚪",
-    }.get(severity, "⚪")
-
-def category_title(category):
-    return re.sub(r"[-_]+", " ", category or "finding").strip().capitalize()
 
 def suppress_mentions(text):
     """Keep agent prose from turning @words into GitHub mentions/links."""
@@ -284,122 +306,142 @@ def render_location(result, finding, server_url):
     safe_label = label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     return f"[{safe_label}]({target})"
 
-def render_body(result, previous_md, action):
+def clean(text):
+    return suppress_mentions(str(text or "").strip())
+
+def table_cell(text):
+    return clean(text).replace("|", "\\|").replace("\n", " ")
+
+def render_header(result, action):
     sha = result.get("head_sha") or ""
     short = sha[:7] if sha else "unknown"
-    risk = result.get("risk") or "unspecified"
-    confidence = result.get("confidence") or "unspecified"
     started = os.environ.get("REVIEW_STARTED") or os.environ.get("FULLSEND_RUN_STARTED") or ""
     completed = datetime.now(timezone.utc).strftime("%H:%M UTC")
     run_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     repo = os.environ.get("GITHUB_REPOSITORY") or result.get("repo") or ""
     run_id = os.environ.get("GITHUB_RUN_ID", "")
-    run_link = ""
-    if repo and run_id:
-        run_link = f"{run_url}/{repo}/actions/runs/{run_id}"
-
-    findings = result.get("findings") or []
-    callout, action_label = action_presentation(action)
-    count_text = count_summary(findings)
-    finding_text = count_text if count_text else "No actionable findings"
-    risk_icon = severity_presentation(risk.lower())
-
-    # Sticky copy is for the PR author: disposition and risk first, then
-    # supporting Jira context and actionable findings. Host/agent action
-    # disagreement stays in CI logs, not this body.
     lines = [
         "<!-- fullsend:review-poc -->",
         f"<!-- **Head SHA:** {sha} -->",
         "",
-        "## 🤖 Fullsend review",
-        "",
-        f"> [!{callout}]",
-        f"> **{action_label}** · {finding_text}",
-        "",
-        f"**Merge risk:** {risk_icon} {risk.capitalize()} · **Confidence:** {confidence.capitalize()}",
+        f"Finished Review · `{action}` · Commit: `{short}`",
     ]
     meta = []
     if started:
         meta.append(f"Started {started}")
     meta.append(f"Completed {completed}")
-    if run_link:
-        meta.append(f"[View workflow run]({run_link})")
-    lines.append("")
+    if repo and run_id:
+        meta.append(f"[View workflow run]({run_url.rstrip('/')}/{repo}/actions/runs/{run_id})")
+    lines.append(" · ".join(meta))
+    return lines
+
+def status_text(result, action):
+    count = blocking_count(result)
+    if action == "request-changes":
+        noun = "finding" if count == 1 else "findings"
+        return f"Waiting on author — {count} blocking {noun} before the agent bar can clear. Human still finalizes."
+    if action == "comment" and needs_human(result):
+        return "Needs human judgment."
+    if action == "comment":
+        return "Advisory — no blocking findings. Human still finalizes."
+    if action == "approve":
+        return "Agent bar cleared for this head. Human still finalizes."
+    if action == "reject":
+        return "Approach rejected."
+    return "This review did not complete. Do not treat this head as reviewed."
+
+def render_body(result, previous_md, action):
+    run_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    lines = render_header(result, action)
+
+    if action == "failure":
+        reason = clean(result.get("reason") or "unknown")
+        lines += ["", f"This review did not complete (`{reason}`). Do not treat this head as reviewed."]
+        return "\n".join(lines).rstrip() + "\n"
+
+    lines += [
+        "",
+        "## Change summary",
+        "",
+        clean(result.get("change_summary")),
+        "",
+        "## Status",
+        "",
+        status_text(result, action),
+        "",
+    ]
+
+    risk = result.get("risk") if isinstance(result.get("risk"), dict) else {}
+    confidence = result.get("confidence") if isinstance(result.get("confidence"), dict) else {}
+    lines.append(f"**Risk:** {clean(risk.get('level') or 'unspecified')} — {clean(risk.get('why'))}")
+    lines.append(f"**Confidence:** {clean(confidence.get('level') or 'unspecified')} — {clean(confidence.get('why'))}")
+
+    decision = result.get("decision_needed") if isinstance(result.get("decision_needed"), dict) else None
+    if decision:
+        lines += ["", "## Decision needed", "", clean(decision.get("question")), ""]
+        for option in decision.get("options") or []:
+            suffix = f" — {clean(option.get('implication'))}" if option.get("implication") else ""
+            lines.append(f"- **{clean(option.get('id'))}.** {clean(option.get('title'))}{suffix}")
+
+    findings = result.get("findings") or []
+    if findings:
+        lines += [
+            "",
+            "## Findings",
+            "",
+            "Critical, High, and functional Medium block the agent bar. Low and Info do not.",
+        ]
+        for severity, items in group_findings(findings):
+            lines += ["", f"### {severity.capitalize()}"]
+            for finding in items:
+                loc = render_location(result, finding, run_url)
+                actionable = " · actionable follow-up" if finding.get("actionable") and severity in ("low", "info") else ""
+                lines += [
+                    "",
+                    f"- **{clean(finding.get('category'))}** ({loc}){actionable}: {clean(finding.get('description'))}",
+                ]
+                if finding.get("why"):
+                    lines.append(f"  - Why: {clean(finding.get('why'))}")
+                if finding.get("remediation"):
+                    lines.append(f"  - Remediation: {clean(finding.get('remediation'))}")
+    elif action == "approve":
+        lines += ["", "Looks good to me."]
 
     pa = result.get("product_ask") if isinstance(result.get("product_ask"), dict) else None
-    if pa:
+    if pa and (pa.get("status") or "none") != "none":
         status = pa.get("status") or "none"
-        extra = []
-        if pa.get("needs_human"):
-            extra.append("⚠️ needs human review")
-        if pa.get("justified_in_description"):
-            extra.append("justified in the PR description")
-        suffix = f" · {'; '.join(extra)}" if extra else ""
-        lines.append("<details>")
-        lines.append(f"<summary>🎯 <strong>Product ask</strong> · <code>{status}</code>{suffix}</summary>")
-        lines.append("")
-        if status == "none":
-            lines.append("No Jira snapshot, or no linked issue. Description remains the source of truth.")
-            lines.append("")
-        else:
-            aligned = pa.get("aligned") or []
-            mismatched = pa.get("mismatched") or []
-            if aligned:
-                lines.append("**Aligned**")
-                for item in aligned:
-                    lines.append(f"- {suppress_mentions(item)}")
-                lines.append("")
-            if mismatched:
-                lines.append("**Mismatched**")
-                for item in mismatched:
-                    lines.append(f"- {suppress_mentions(item)}")
-                lines.append("")
-            lines.append("> The PR description remains the source of truth. This section compares it with Jira context; it does not review the diff against Jira acceptance criteria.")
-            lines.append("")
-        lines.append("</details>")
-        lines.append("")
+        suffix = " · needs human review" if pa.get("needs_human") else ""
+        lines += ["", "## Product ask", "", f"**Status:** `{clean(status)}`{suffix}"]
+        if pa.get("aligned"):
+            lines += ["", "Aligned:"] + [f"- {clean(item)}" for item in pa["aligned"]]
+        if pa.get("mismatched"):
+            lines += ["", "Mismatched:"] + [f"- {clean(item)}" for item in pa["mismatched"]]
+        lines += ["", "The PR description is the source of truth. This section does not review the diff against Jira acceptance criteria."]
 
-    lines.append("## Review findings")
-    lines.append("")
-    if not findings:
-        lines.append("No actionable findings were generated. 🎉")
-    else:
-        finding_number = 0
-        for sev, items in group_findings(findings):
-            count = len(items)
-            noun = "finding" if count == 1 else "findings"
-            lines.append(f"### {severity_presentation(sev)} {sev.capitalize()} · {count} {noun}")
-            lines.append("")
-            for f in items:
-                finding_number += 1
-                loc = render_location(result, f, run_url)
-                desc = suppress_mentions(f.get("description"))
-                why = suppress_mentions(f.get("why"))
-                rem = suppress_mentions(f.get("remediation"))
-                lines.append(f"#### {finding_number}. {category_title(f.get('category'))} · {loc}")
-                lines.append("")
-                lines.append(desc)
-                lines.append("")
-                if why:
-                    lines.append("<details>")
-                    lines.append("<summary>Why this matters</summary>")
-                    lines.append("")
-                    lines.append(why)
-                    lines.append("")
-                    lines.append("</details>")
-                    lines.append("")
-                if rem:
-                    lines.append(f"**Suggested change:** {rem}")
-                    lines.append("")
-
-    commit_link = ""
-    if repo and sha:
-        commit_link = f"[{short}]({run_url.rstrip('/')}/{repo}/commit/{sha})"
-    else:
-        commit_link = f"`{short}`"
-    footer = [f"Reviewed commit {commit_link}"]
-    footer.extend(meta)
-    lines += ["", "---", "", f"<sub>{' · '.join(footer)}</sub>"]
+    verification = result.get("verification") or []
+    inspected = result.get("inspected") if isinstance(result.get("inspected"), dict) else {}
+    labels = result.get("label_actions") if isinstance(result.get("label_actions"), dict) else {}
+    lines += ["", "## Review details"]
+    if verification:
+        lines += ["", "### Verification", "", "| Check | Result | Notes |", "| --- | --- | --- |"]
+        for row in verification:
+            lines.append(f"| {table_cell(row.get('label'))} | {table_cell(row.get('result'))} | {table_cell(row.get('notes'))} |")
+    if inspected:
+        lines += ["", "### Evidence inspected", ""]
+        if inspected.get("summary"):
+            lines.append(clean(inspected["summary"]))
+        if inspected.get("producers"):
+            lines.append(f"Producers: {', '.join(clean(item) for item in inspected['producers'])}.")
+        if inspected.get("could_not_verify"):
+            lines.append(f"Could not verify: {'; '.join(clean(item) for item in inspected['could_not_verify'])}.")
+    signals = clean(os.environ.get("REVIEW_SIGNALS"))
+    if signals:
+        lines += ["", "### Signals", "", signals]
+    if labels and labels.get("actions"):
+        lines += ["", "### Labels", ""]
+        reason = clean(labels.get("reason"))
+        for item in labels["actions"]:
+            lines.append(f"- `{clean(item.get('label'))}` — {clean(item.get('action'))}: {reason}")
 
     # previous_md is available if a later renderer wants history; this
     # body is the current run only.
@@ -411,11 +453,10 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 previous_md = os.environ.get("REVIEW_PREVIOUS_MARKDOWN", "")
 result = inject_description_sot_findings(result)
 result = merge_producer_findings(result)
+result = augment_inspected(result)
 result = apply_product_ask(result)
 action, _reason = compute_action(result)
-body = result.get("body")
-if action != "failure":
-    body = render_body(result, previous_md, action)
+body = render_body(result, previous_md, action)
 out = dict(result)
 out["action"] = action
 if body:
@@ -433,7 +474,7 @@ prepare_summary_only_result() {
   jq 'if (.findings | type) == "array" then .findings |= map(del(.line)) else . end' "$1" > "$2"
 }
 
-run_self_test() {
+run_legacy_self_test() {
   local fail=0 tmp
   tmp=$(mktemp -d)
   cleanup_self_test() { rm -rf "${tmp}"; }
@@ -670,6 +711,100 @@ EOF
   cleanup_self_test
 }
 
+run_self_test() {
+  local fail=0 tmp
+  tmp=$(mktemp -d)
+  cleanup_self_test() { rm -rf "${tmp}"; }
+  trap cleanup_self_test EXIT
+
+  render_fixture() {
+    local name="$1" want_action="$2" json="$3" body
+    printf '%s' "${json}" > "${tmp}/${name}.json"
+    transform_review_result "${tmp}/${name}.json" > "${tmp}/${name}-out.json"
+    if [[ "$(jq -r .action "${tmp}/${name}-out.json")" != "${want_action}" ]]; then
+      echo "FAIL ${name}: expected action=${want_action}" >&2
+      fail=1
+      return
+    fi
+    body=$(jq -r .body "${tmp}/${name}-out.json")
+    if ! grep -q '## Change summary' <<<"${body}" ||
+       ! grep -q '## Status' <<<"${body}" ||
+       ! grep -q '## Review details' <<<"${body}" ||
+       ! grep -q '### Verification' <<<"${body}"; then
+      echo "FAIL ${name}: required rendered sections missing" >&2
+      fail=1
+      return
+    fi
+    echo "PASS ${name} (${want_action})"
+  }
+
+  local common
+  common='"schema_version":"2","pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","change_summary":"Changes a small frontend helper without changing authorization.","risk":{"level":"low","why":"The change is isolated to one internal helper."},"confidence":{"level":"high","why":"The complete diff and matching unit evidence were inspected."},"verification":[{"id":"description-vs-code","label":"Description vs code","result":"pass"},{"id":"evidence","label":"Evidence","result":"pass"},{"id":"security","label":"Security","result":"pass"},{"id":"blocking-findings","label":"Blocking findings","result":"pass"},{"id":"product-ask","label":"Product ask","result":"pass"}]'
+
+  render_fixture approve approve "{${common},\"findings\":[],\"product_ask\":{\"status\":\"none\"},\"inspected\":{\"summary\":\"Read the PR body and full diff.\",\"producers\":[\"correctness\",\"style-conventions\"]}}"
+
+  render_fixture request-changes request-changes "{${common},\"findings\":[{\"severity\":\"high\",\"category\":\"correctness\",\"file\":\"a.ts\",\"line\":12,\"description\":\"Empty state throws.\",\"why\":\"The supported empty route reaches an unguarded map.\",\"remediation\":\"Guard the list and add an empty-state test.\"}],\"product_ask\":{\"status\":\"aligned\"}}"
+
+  render_fixture needs-human comment "{${common},\"findings\":[],\"decision_needed\":{\"question\":\"Which product scope should this PR implement?\",\"options\":[{\"id\":\"A\",\"title\":\"Keep the PR scope\"},{\"id\":\"B\",\"title\":\"Match Jira\"}]},\"product_ask\":{\"status\":\"mismatch-justified\",\"needs_human\":true}}"
+
+  local pa body
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"mismatch-unjustified\",\"mismatched\":[\"Jira asks for export\"]}}" > "${tmp}/product-ask.json"
+  transform_review_result "${tmp}/product-ask.json" > "${tmp}/product-ask-out.json"
+  if ! jq -e '.action == "comment" and .risk.level == "high" and .confidence.level == "low" and (.risk.why | contains("Jira")) and (.confidence.why | contains("Jira"))' "${tmp}/product-ask-out.json" >/dev/null; then
+    echo "FAIL product-ask: host floors and rationale rewrite" >&2
+    fail=1
+  else
+    echo "PASS product-ask floors risk/confidence and rewrites why"
+  fi
+
+  body=$(jq -r .body "${tmp}/request-changes-out.json")
+  if ! grep -q 'Waiting on author — 1 blocking finding' <<<"${body}" ||
+     ! grep -Fq '[a.ts:12](https://github.com/o/r/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/a.ts#L12)' <<<"${body}"; then
+    echo "FAIL request-changes: status count or commit-pinned link missing" >&2
+    fail=1
+  else
+    echo "PASS request-changes status and linked location"
+  fi
+  body=$(jq -r .body "${tmp}/needs-human-out.json")
+  if ! grep -q 'Needs human judgment' <<<"${body}" || ! grep -q '## Decision needed' <<<"${body}"; then
+    echo "FAIL needs-human: status or decision section missing" >&2
+    fail=1
+  else
+    echo "PASS needs-human status and decision section"
+  fi
+  body=$(jq -r .body "${tmp}/approve-out.json")
+  if grep -q '## Findings' <<<"${body}" || ! grep -q 'Looks good to me' <<<"${body}"; then
+    echo "FAIL approve: empty findings rendering" >&2
+    fail=1
+  else
+    echo "PASS approve omits findings section"
+  fi
+
+  prepare_summary_only_result "${tmp}/request-changes-out.json" "${tmp}/summary-only.json"
+  if ! jq -e '(.findings[0] | has("line") | not) and (.body | contains("a.ts#L12"))' "${tmp}/summary-only.json" >/dev/null; then
+    echo "FAIL summary-only: expected linked body location without structured line" >&2
+    fail=1
+  else
+    echo "PASS summary-only suppresses inline comments"
+  fi
+
+  printf '%s' '{"pr_number":1,"repo":"o/r","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"failure","reason":"tool-failure"}' > "${tmp}/failure.json"
+  body=$(transform_review_result "${tmp}/failure.json" | jq -r .body)
+  if ! grep -q 'Finished Review · `failure`' <<<"${body}" || ! grep -q 'Do not treat this head as reviewed' <<<"${body}"; then
+    echo "FAIL failure: failure variant missing" >&2
+    fail=1
+  else
+    echo "PASS failure variant"
+  fi
+
+  if [[ "${fail}" -ne 0 ]]; then
+    exit 1
+  fi
+  echo "All self-tests passed"
+  trap - EXIT
+  cleanup_self_test
+}
+
 if [[ "${1:-}" == "--self-test" ]]; then
   run_self_test
   exit 0
@@ -853,6 +988,11 @@ fi
 
 echo "Transforming review result (action + comment body) using ${RESULT_FILE}"
 export REVIEW_PRODUCER_JSON="${REVIEW_PRODUCER_JSON:-${_SCRIPT_DIR}/../.run/collected.json}"
+REVIEW_SIGNALS=$(gh pr view "${PR_NUMBER}" --repo "${REPO_FULL_NAME}" \
+  --json additions,deletions,changedFiles \
+  --jq '"+\(.additions) / −\(.deletions) · \(.changedFiles) " + (if .changedFiles == 1 then "file" else "files" end)' \
+  2>/dev/null || true)
+export REVIEW_SIGNALS
 AGENT_ACTION=$(jq -r '.action // "omitted"' "${RESULT_FILE}")
 TRANSFORMED=$(mktemp)
 CLEANUP_FILES+=("${TRANSFORMED}")
@@ -942,24 +1082,25 @@ if [ "${ACTION}" = "approve" ]; then
       echo "PR touches protected paths — downgrading approve to comment"
       echo "${PROTECTED_MATCHES}" | sed '/^$/d' | sed 's/^/  /'
 
-      PROTECTED_NOTICE=$'\n\n---\n\n'
-      PROTECTED_NOTICE+=$'> **Protected paths detected** — this PR modifies files under one or more\n'
-      PROTECTED_NOTICE+=$'> protected paths. The review agent cannot approve PRs that touch these paths.\n'
-      PROTECTED_NOTICE+=$'> A human reviewer must approve this PR.\n'
-      PROTECTED_NOTICE+=$'>\n'
-      PROTECTED_NOTICE+=$'> Protected files in this PR:\n'
-      while IFS= read -r f; do
-        [ -z "${f}" ] && continue
-        PROTECTED_NOTICE+="> - \`${f}\`"$'\n'
-      done <<< "${PROTECTED_MATCHES}"
+      _PROTECTED_LIST=$(printf '%s' "${PROTECTED_MATCHES}" | sed '/^$/d' | paste -sd ', ' -)
 
-      # Rewrite the result file with downgraded action and appended notice.
+      # Express the policy gate as structured input, then let the host renderer
+      # recompute the comment instead of appending a second visual language.
       MODIFIED_RESULT=$(mktemp)
       CLEANUP_FILES+=("${MODIFIED_RESULT}")
-      jq --arg notice "${PROTECTED_NOTICE}" \
-        '.action = "comment" | .body = (.body + $notice)' \
+      jq --arg files "${_PROTECTED_LIST}" \
+        '.decision_needed = {
+          question: ("A human must approve this protected-path change: " + $files),
+          options: [
+            {id: "A", title: "Approve the protected-path change", implication: "A human accepts the governance or infrastructure risk."},
+            {id: "None", title: "Do not land this approach"}
+          ]
+        } | del(.body, .action)' \
         "${RESULT_FILE}" > "${MODIFIED_RESULT}"
-      RESULT_FILE="${MODIFIED_RESULT}"
+      RERENDERED_RESULT=$(mktemp)
+      CLEANUP_FILES+=("${RERENDERED_RESULT}")
+      transform_review_result "${MODIFIED_RESULT}" > "${RERENDERED_RESULT}"
+      RESULT_FILE="${RERENDERED_RESULT}"
       DOWNGRADED=true
     fi
   fi
@@ -1045,17 +1186,8 @@ if [[ "${HAS_LABEL_ACTIONS}" == "true" ]]; then
     esac
   done
 
-  # Append label reason to body if any labels validated.
-  VALIDATED_COUNT=$(( ${#VALIDATED_LABEL_ADDS[@]} + ${#VALIDATED_LABEL_REMOVES[@]} ))
-  if [[ "${VALIDATED_COUNT}" -gt 0 ]]; then
-    LABEL_NOTICE=$'\n\n---\n'"**Labels:** ${LABEL_REASON}"
-    LABEL_MODIFIED_RESULT=$(mktemp)
-    CLEANUP_FILES+=("${LABEL_MODIFIED_RESULT}")
-    jq --arg notice "${LABEL_NOTICE}" \
-      '.body = (.body + $notice)' \
-      "${RESULT_FILE}" > "${LABEL_MODIFIED_RESULT}"
-    RESULT_FILE="${LABEL_MODIFIED_RESULT}"
-  fi
+  # The host-rendered Review details section already explains label_actions.
+  # Validation controls which of those proposed mutations are actually synced.
 fi
 
 # ---------------------------------------------------------------------------

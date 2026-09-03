@@ -1,64 +1,60 @@
 ---
 name: review-host-contract
 description: >-
-  Fill findings, risk, confidence, and product_ask. The host writes the
-  PR comment and the GitHub review action. Agent-authored action and
-  markdown are not final.
+  Fill the structured review result. The host writes the durable PR comment
+  and chooses the GitHub review action.
 ---
 
 # Review host contract
 
-The sticky PR comment and GitHub review action are produced by the host
-post-script. This skill does not replace `pr-review`. It constrains
-`$FULLSEND_OUTPUT_DIR/agent-result.json`.
+The sticky PR comment and GitHub review action are host-rendered from the
+validated `$FULLSEND_OUTPUT_DIR/agent-result.json`. This skill constrains that
+JSON; it does not replace `pr-review`.
 
-## Do
+## Produce
 
-- Run `pr-review` (and domain skills) to produce **findings** and
-  schema sections. `pr-review` reads `.fullsend/dimensions.json`.
-  `output: findings` LLM rows are spawned; CLI findings envelopes come
-  from `.fullsend/.run/collected.json` before merge and
-  challenger. `output: context` snapshots (e.g.
-  `.fullsend/.run/jira.json`) are host-fetched — do not fetch Jira
-  in the sandbox and do not copy secrets. `output: section:*` LLMs fill
-  named fields (e.g. `product_ask`) and skip the challenger. Do not
-  start CLIs yourself. Do not scrape GitHub bot comments.
-- Description vs code mismatches are ordinary findings (same
-  `findings[]`).
-- **PR description vs Jira description** is `product_ask`, not a
-  finding and not a code-vs-AC review. Do not run `jira-eval-review`.
-- Required PR headings (**Problem**, **Solution**, **Evidence**) are
-  checked by the host. Missing headings skip the review agent. Impact,
-  Test plan, and other template sections are optional. If the agent does
-  run, you may still flag thin or mismatched section *content*.
-- Set `risk` to `low` | `medium` | `high` | `critical`.
-- Set `confidence` to `low` | `medium` | `high`.
-- Copy `product_ask` from the description-jira section LLM (or
-  `status: none` when there is no snapshot).
-- Optional `why` on each finding (rationale).
-- Invoke `issue-labels` **after** findings/risk/confidence/sections
-  exist so labels can follow the assembled result, not only the diff.
-- Keep `pr_number`, `repo`, `head_sha`.
+- Keep `pr_number`, `repo`, and the exact `head_sha`.
+- Set `change_summary` to a short, independent description of what the diff
+  does. Do not repeat the file list or copy the PR body.
+- Put review issues in `findings[]`. `why` is required for critical, high, and
+  medium findings. `remediation` is required for critical and high findings.
+- Set `risk` to `{ "level": ..., "why": ... }`. Risk is blast radius if the
+  change ships wrong, not finding severity: low is narrow/internal; medium is
+  feature-local or sensitive-adjacent; high is wide/product-visible; critical
+  crosses a trust boundary or risks data loss.
+- Set `confidence` to `{ "level": ..., "why": ... }`. Use the weaker of proof
+  quality and patch-review completeness: high when evidence matches and all
+  planned producers ran; medium when usable but incomplete; low when the
+  review cannot support approval.
+- Fill `verification[]` using the fixed IDs `description-vs-code`, `evidence`,
+  `security`, `blocking-findings`, and `product-ask`. Every `fail` must map to a
+  finding or `decision_needed`.
+- Set `decision_needed` only for a concrete human fork, with a question and
+  structured options. Use it when `product_ask.needs_human` or an evidenced
+  policy/security judgment cannot be cleared by the agent.
+- Fill optional `inspected.summary`, `inspected.producers`, and
+  `inspected.could_not_verify` with audit evidence and limitations.
+- Copy `product_ask` from the description-Jira section LLM, or use
+  `{ "status": "none" }` when no sanitized Jira snapshot exists. This compares
+  the PR description with Jira; it is not a code-vs-acceptance-criteria review
+  and does not go through the challenger.
+- Invoke `issue-labels` after findings and all structured sections exist.
 
-## Do not
+CLI findings envelopes come from `.fullsend/.run/collected.json`. Context-only
+snapshots such as `.fullsend/.run/jira.json` are fetched by the trusted host.
+Do not fetch Jira in the sandbox, copy credentials, start CLI producers, or
+scrape GitHub bot comments.
 
-- Do not treat comment markdown as the review contract. The host
-  overwrites `body`.
-- Do not assume your `action` will be posted. The host sets it from
-  findings (critical/high → `request-changes`, and so on). High/critical
-  `risk`, low `confidence`, or `product_ask.needs_human` / unjustified
-  mismatch can turn an approve into `comment`.
-- Do not emit preflight-style markdown reports (Critical/Warning/Info
-  tables, PASS/MISS). Fold domain-skill issues into `findings[]` with
-  `severity`, `category`, `file`, `description`.
-- Do not invent GitHub review types. Host posting still uses
-  `approve` | `request-changes` | `comment` | `reject` | `failure`.
-- Do not post or scrape tool GitHub comments. CLI adapters contribute
-  JSON (findings or context), not a second reviewer.
+## Host-owned fields
+
+- Do not author `body` for a normal review. The host renders the sticky.
+- Do not author `action` for a normal review. The host computes it from
+  blocking findings, risk, confidence, product ask, and decisions.
+- Do not derive risk from maximum finding severity.
+- Do not emit preflight-style markdown reports or invent review types.
 
 ## Failure
 
-If you cannot complete the review, set `action` to `failure` and `reason`
-to one of `tool-failure`, `missing-context`, `ambiguous-findings`,
-`token-limit`. The host leaves `failure` unchanged. A missing Jira
-snapshot is `product_ask.status: none`, not a failed review.
+If the review cannot complete, set `action: failure` and `reason` to one of
+`tool-failure`, `missing-context`, `ambiguous-findings`, or `token-limit`.
+A missing Jira snapshot is `product_ask.status: none`, not a failed review.

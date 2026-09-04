@@ -63,7 +63,7 @@ Each `dimensions[]` object:
 | `budget_priority` | Lower runs deeper when attention is scarce (**findings** LLM only) |
 | `re_review` | `full` / `trivial` / `skip-unless-requalified` when this **findings** dimension had no prior findings |
 | `producer_file` | Host JSON path (`cli-adapter` only), under `.fullsend/.run/`. Findings payloads also appear in `.fullsend/.run/collected.json` |
-| `context_file` | Host snapshot a `section:*` LLM must read (do not fetch it yourself) |
+| `context_file` | Optional trusted-host snapshot an LLM must read (do not fetch it yourself) |
 
 **Not in the registry as dimensions:**
 
@@ -312,6 +312,11 @@ Analyze the diff and changed file list. For each registry row with
 - `dispatch: conditional` → in scope only when the PR matches that
   row's `when` text.
 
+For a findings row with `context_file`, also inspect that JSON before
+selection. Skip the row when the file is missing or its `status` is
+`none` / `error`. Never replace missing trusted context by calling the
+external service from the sandbox.
+
 Do not consult a name table in this file. `cli-adapter` rows are
 always collected later when they have `findings`; they are not
 classified here. `output: section:*` rows are not classified against
@@ -517,6 +522,8 @@ For each selected sub-agent, assemble a context package containing:
 - `changed_since_prior`: file set that changed since prior review
 - `pr_metadata`: title, body, author, labels, draft status
 - `issue_context`: linked issue title, body, comments
+- `trusted_context`: for a row with `context_file`, the exact sanitized
+  JSON loaded from that file; otherwise `none`
 - `cross_repo_context`: prior findings from 3a for this dimension when
   relevant
 - `scope_constraint`: exploration limit for this sub-agent (see 3e)
@@ -648,6 +655,9 @@ For each selected **findings** `llm-subagent` (from step 3c — excludes
 
    ### Issue context
    <linked issue content or "no linked issue">
+
+   ### Trusted context
+   <sanitized JSON from this row's context_file or "none">
 
    ### Scope constraint
    <scope_constraint value or "none">

@@ -12,14 +12,8 @@ skills:
 host_files:
   - src: dimensions.json
     dest: /sandbox/workspace/.fullsend/dimensions.json
-  - src: .run/jira.json
-    dest: /sandbox/workspace/.fullsend/.run/jira.json
-    optional: true
-  - src: .run/ci-status.json
-    dest: /sandbox/workspace/.fullsend/.run/ci-status.json
-    optional: true
-  - src: .run/ci-flake-classifier.json
-    dest: /sandbox/workspace/.fullsend/.run/ci-flake-classifier.json
+  - src: .run/collected.json
+    dest: /sandbox/workspace/.fullsend/.run/collected.json
     optional: true
 
 model: sonnet

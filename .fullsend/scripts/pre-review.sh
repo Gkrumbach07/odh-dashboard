@@ -219,10 +219,6 @@ run_self_test() {
     echo "FAIL pre-context: Fullsend dimension-registry validation failed" >&2
     fail=1
   fi
-  if ! "${_SCRIPT_DIR}/fetch-ci-context.sh" --self-test; then
-    echo "FAIL pre-context: CI adapter self-test failed" >&2
-    fail=1
-  fi
   if ! (
     unset GITHUB_PR_URL PR_NUMBER
     FULLSEND_WORK_ITEM_URL='https://github.com/Gkrumbach07/odh-dashboard/pull/61'

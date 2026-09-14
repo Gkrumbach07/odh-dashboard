@@ -4,12 +4,20 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import ProviderLandingPage from '~/odh/openshell/ProviderLandingPage';
 import { useOpenShellConnection } from '~/odh/openshell/OpenShellConnection';
+import type { OpenShellGateway } from '~/odh/openshell/openShellAuth';
 
 jest.mock('~/odh/openshell/OpenShellConnection', () => ({
   useOpenShellConnection: jest.fn(),
 }));
 
 const mockUseOpenShellConnection = jest.mocked(useOpenShellConnection);
+
+const gateway: OpenShellGateway = {
+  id: 'prod',
+  name: 'Production',
+  features: {},
+  connectable: true,
+};
 
 describe('ProviderLandingPage', () => {
   const connect = jest.fn();
@@ -20,6 +28,7 @@ describe('ProviderLandingPage', () => {
 
   it('shows only the connected identity when OpenShell is connected', () => {
     mockUseOpenShellConnection.mockReturnValue({
+      gateway,
       state: { status: 'connected', username: 'gkrumbac', error: null },
       connect,
       disconnect: jest.fn(),
@@ -40,6 +49,7 @@ describe('ProviderLandingPage', () => {
 
   it('shows an actionable disconnected state', () => {
     mockUseOpenShellConnection.mockReturnValue({
+      gateway,
       state: { status: 'disconnected', username: null, error: null },
       connect,
       disconnect: jest.fn(),

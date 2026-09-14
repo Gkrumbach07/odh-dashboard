@@ -113,30 +113,21 @@ type EnvConfig struct {
 	MockAgentClient bool
 
 	// ─── OPENSHELL (DOUBLE AUTH) ─────────────────────────────────
-	// OpenShell is a *separate* service the dashboard authenticates into with a
-	// second token (Token B), distinct from the RHOAI/OpenShift token (Token A)
-	// used for namespace-scoped agent CRs. When these are set, the BFF exposes a
-	// reverse proxy at /openshell/ to the OpenShell relay BFF and an OIDC config
-	// endpoint the browser uses to obtain Token B via silent OIDC.
+	// OpenShell is a *separate* service with its own identity domain. The RHOAI
+	// token authenticates the user to RHOAI and stops at the dashboard boundary;
+	// to reach a gateway the browser signs in to THAT gateway's OIDC provider and
+	// sends the resulting token on a dedicated header.
 	//
-	// OpenShellBFFURL is the base URL of the OpenShell relay BFF (reverse-proxy
-	// target). Empty disables the OpenShell routes.
-	OpenShellBFFURL string
-
-	// OpenShellOIDCIssuer / ClientID / Audience / Scope describe the Keycloak
-	// client the *browser* uses for the silent OIDC (prompt=none) flow that mints
-	// Token B. They are advertised (non-secret) via GET /openshell/auth/config.
-	OpenShellOIDCIssuer   string
-	OpenShellOIDCClientID string
-	OpenShellOIDCAudience string
-	OpenShellOIDCScope    string
-
-	// OpenShellOIDCSharedSession indicates OpenShell's IdP is the SAME as the
-	// dashboard's (shared Keycloak), so Token B can be obtained via silent OIDC
-	// (prompt=none) with zero clicks. Default false: OpenShell is a SEPARATE,
-	// required provider — the browser must perform an explicit sign-in. RHOAI does
-	// not need a shared IdP, so the honest double-auth demo requires this login.
-	OpenShellOIDCSharedSession bool
+	// An OpenShell install is a gateway plus its own relay BFF, so multi-gateway is
+	// multi-install. OpenShellGateways is the registry of installs, as a JSON array:
+	//
+	//   [{"id":"prod","name":"Production","bffUrl":"https://openshell-dashboard.openshell.svc.cluster.local:8443","consoleUrl":"https://openshell.apps.example.com"}]
+	//
+	// Each install's issuer, client id and audience are NOT configured here — they
+	// are discovered from that install's public /api/v1/auth/config, so the value
+	// that mints a token and the value that validates it cannot drift apart.
+	// Empty disables the OpenShell routes.
+	OpenShellGateways string
 
 	// ─── DEPRECATED ─────────────────────────────────────────────
 	// The following fields are deprecated and maintained for backward compatibility

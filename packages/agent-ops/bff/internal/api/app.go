@@ -78,6 +78,9 @@ type App struct {
 	rootCAs *x509.CertPool
 	// bffClientFactory creates clients for inter-BFF communication
 	bffClientFactory bffclient.BFFClientFactory
+	// openShell is the registry of configured OpenShell installs. Nil when none are
+	// configured, which disables the /openshell routes.
+	openShell *GatewayRegistry
 }
 
 func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
@@ -190,6 +193,22 @@ func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
 		openAPIHandler = nil
 	}
 
+	// An unparseable gateway registry is a configuration error worth failing on:
+	// starting with the OpenShell area silently missing is harder to diagnose.
+	gateways, err := ParseGateways(cfg.OpenShellGateways)
+	if err != nil {
+		return nil, fmt.Errorf("invalid OpenShell gateway registry: %w", err)
+	}
+	var openShell *GatewayRegistry
+	if len(gateways) > 0 {
+		ids := make([]string, 0, len(gateways))
+		for _, g := range gateways {
+			ids = append(ids, g.ID)
+		}
+		logger.Info("OpenShell gateways configured", slog.Any("gateways", ids))
+		openShell = NewGatewayRegistry(gateways, rootCAs, cfg.InsecureSkipVerify, logger)
+	}
+
 	app := &App{
 		config:                  cfg,
 		logger:                  logger,
@@ -199,6 +218,7 @@ func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
 		testEnv:                 testEnv,
 		rootCAs:                 rootCAs,
 		bffClientFactory:        bffFactory,
+		openShell:               openShell,
 	}
 	return app, nil
 }
@@ -265,15 +285,11 @@ func (app *App) Routes() http.Handler {
 	appMux.Handle(ApiPathPrefix+"/", apiRouter)
 	appMux.Handle(PathPrefix+ApiPathPrefix+"/", http.StripPrefix(PathPrefix, apiRouter))
 
-	// OpenShell double-auth routes (RHOAI embedding). Registered on the outer mux
-	// beside /api/v1 so they don't conflict with httprouter's wildcards. The exact
-	// /openshell/auth/config path takes precedence over the /openshell/ subtree.
-	if openShellProxy, err := app.OpenShellProxyHandler(); err != nil {
-		app.logger.Error("failed to initialize OpenShell reverse proxy; OpenShell routes disabled", slog.Any("error", err))
-	} else {
-		appMux.HandleFunc(OpenShellAuthConfigPath, app.OpenShellAuthConfigHandler)
-		appMux.Handle(OpenShellPathPrefix+"/", openShellProxy)
-	}
+	// OpenShell routes (RHOAI embedding). Registered on the outer mux beside /api/v1
+	// so they don't conflict with httprouter's wildcards. The exact /openshell/gateways
+	// path takes precedence over the /openshell/{gatewayId}/ subtree.
+	appMux.HandleFunc(OpenShellGatewaysPath, app.OpenShellGatewaysHandler)
+	appMux.Handle(OpenShellPathPrefix+"/", app.OpenShellProxyHandler())
 
 	// file server for the frontend file and SPA routes
 	staticDir := http.Dir(app.config.StaticAssetsDir)

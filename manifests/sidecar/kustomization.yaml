@@ -124,6 +124,16 @@ replacements:
           name: odh-dashboard
         fieldPaths:
           - spec.template.spec.containers.[name=agent-ops-ui].image
+  - source:
+      kind: ConfigMap
+      name: sidecar-params
+      fieldPath: data.openshell-gateways
+    targets:
+      - select:
+          kind: Deployment
+          name: odh-dashboard
+        fieldPaths:
+          - spec.template.spec.containers.[name=agent-ops-ui].env.[name=OPENSHELL_GATEWAYS].value
 patchesJson6902:
   - path: deployment.yaml
     target:

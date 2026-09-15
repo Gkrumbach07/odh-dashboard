@@ -165,6 +165,10 @@ data:
             {
               "path": "/agent-ops/healthcheck",
               "pathRewrite": "/healthcheck"
+            },
+            {
+              "path": "/openshell",
+              "pathRewrite": "/openshell"
             }
           ],
           "local": {

@@ -690,6 +690,12 @@
     ports:
       - containerPort: 8843
         name: agent-ops-ui
+    env:
+      # JSON array of OpenShell installs this dashboard routes to. Each install's
+      # OIDC issuer/clientId/audience is discovered from its own public
+      # /api/v1/auth/config, not configured here. Empty disables the routes.
+      - name: OPENSHELL_GATEWAYS
+        value: openshell-gateways
     volumeMounts:
       - name: proxy-tls
         mountPath: /etc/tls/private

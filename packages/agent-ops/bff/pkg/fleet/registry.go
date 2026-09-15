@@ -29,6 +29,11 @@ type Options struct {
 	AttemptTimeout time.Duration
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	// Dynamic keeps the background retry loop alive once every backend is ready,
+	// instead of letting it finish. Set it when membership can change under
+	// SetBackends: otherwise a backend added after the fleet first went green is
+	// never retried, because the loop that would have retried it has exited.
+	Dynamic bool
 }
 
 // Entry is a backend plus what it last said about itself.
@@ -102,6 +107,44 @@ func New[D any](backends []Backend, discover DiscoverFunc[D], opts Options) *Reg
 		r.order = append(r.order, b.ID)
 	}
 	return r
+}
+
+// SetBackends replaces the fleet's membership, returning the IDs that were added
+// and removed.
+//
+// A backend that is still present keeps its cached discovery document and its
+// backoff state, so re-running discovery does not take a working backend briefly
+// out of service. Only its Backend struct is refreshed, because a backend can be
+// rediscovered with new details under the same ID.
+//
+// This is what makes membership dynamic: a fleet discovered from the cluster
+// changes when the cluster does, without restarting the process.
+func (r *Registry[D]) SetBackends(backends []Backend) (added, removed []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	seen := make(map[string]struct{}, len(backends))
+	order := make([]string, 0, len(backends))
+	for _, b := range backends {
+		seen[b.ID] = struct{}{}
+		order = append(order, b.ID)
+		if existing, ok := r.entries[b.ID]; ok {
+			existing.backend = b
+			continue
+		}
+		r.entries[b.ID] = &entry[D]{backend: b, backoff: r.opts.InitialBackoff}
+		added = append(added, b.ID)
+	}
+
+	for id := range r.entries {
+		if _, ok := seen[id]; !ok {
+			delete(r.entries, id)
+			removed = append(removed, id)
+		}
+	}
+
+	r.order = order
+	return added, removed
 }
 
 // Len reports how many backends are configured.
@@ -247,7 +290,7 @@ func (r *Registry[D]) Start(ctx context.Context) {
 			}
 			r.refresh(ctx, id)
 		}
-		if r.allReady() {
+		if r.allReady() && !r.opts.Dynamic {
 			cancel()
 			return
 		}
@@ -304,8 +347,13 @@ func (r *Registry[D]) retryLoop(ctx context.Context) {
 			r.refresh(ctx, id)
 		}
 		if r.allReady() {
-			r.opts.Logger.Info("all backends discovered")
-			return
+			if !r.opts.Dynamic {
+				r.opts.Logger.Info("all backends discovered")
+				return
+			}
+			// Dynamic: idle rather than finish, so a backend added later is picked
+			// up by this loop instead of waiting for a request to force a refresh.
+			wait = r.opts.MaxBackoff
 		}
 
 		timer := time.NewTimer(wait)

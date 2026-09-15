@@ -26,7 +26,8 @@ for what a consumer supplies:
 
 | Consumer supplies | OpenShell's version |
 |---|---|
-| `DiscoverFunc[D]` — how a backend describes itself | `GET /api/v1/auth/config` → issuer, clientId, audience |
+| `DiscoverFunc[D]` — how a backend describes itself | `GetGatewayInfo` over gRPC → version, status, drivers |
+| membership — which backends exist | Services carrying the OpenShell chart's label |
 | `Router.Rewrite` — the credential swap | RHOAI token destroyed, OpenShell token projected on |
 | `Router.OnResponse` — status mapping | 401 → `gateway_auth_required`, 403 → `gateway_forbidden` |
 | `Router.Codes` — error codes | `gateway_*`, so the frontend contract stays stable |
@@ -42,6 +43,30 @@ for what a consumer supplies:
   so a backend that is down at boot heals on its own and startup is never blocked.
 - **Router** — `/{prefix}/{id}/...` to the right backend, one cached handler
   each, with a hook for the credential swap.
+- **Dynamic membership** — `SetBackends` swaps the fleet's roster while it is
+  serving. Backends that survive keep their cached discovery document and their
+  readiness, so a resync never briefly takes a working backend out of service.
+  Pair it with `Options{Dynamic: true}`, which keeps the background retry loop
+  alive after the fleet first goes green — otherwise a backend added later is
+  never retried, because the loop that would have retried it has exited.
+- **Handler invalidation** — `Router.Forget(ids...)` drops cached handlers. The
+  cache is keyed by backend ID, and an ID outlives what it points at: a
+  rediscovered backend may have a new URL, or new credentials baked into an
+  embedded handler. Forget it on every change or the router keeps serving the
+  handler built for the old configuration.
+
+## Configured vs discovered fleets
+
+A fleet told what its members are cannot be wrong about them; a fleet that asks
+has to decide what a failed question means. The rule this package assumes, and
+that `agent-ops` implements above it:
+
+- **source error** → "I could not tell." Keep the fleet as it is. A transient API
+  server error must not tear down every working backend.
+- **empty answer, no error** → "there are genuinely none." Empty the fleet.
+
+The same split is why `SetBackends` returns what changed rather than swapping
+silently: the consumer needs those IDs to invalidate its own caches.
 
 ## Proxying vs embedding
 

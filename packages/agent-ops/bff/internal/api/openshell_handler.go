@@ -43,21 +43,31 @@ func (app *App) OpenShellGatewaysHandler(w http.ResponseWriter, r *http.Request)
 
 // OpenShellProxyHandler routes /openshell/{gatewayId}/... to that install's
 // embedded App.
+//
+// The router belongs to the fleet, not to this call: membership is discovered and
+// can change while the process runs, so the handler registered at startup has to
+// be the same object a later resync invalidates. Deciding here that the area is
+// "disabled" because the fleet is empty would freeze a startup-time answer —
+// a gateway installed an hour later would never be routable.
 func (app *App) OpenShellProxyHandler() http.Handler {
-	if app.openShell == nil || app.openShell.Len() == 0 {
-		app.logger.Info("no OpenShell gateways configured; OpenShell routes disabled")
+	if app.openShell == nil {
+		app.logger.Info("OpenShell gateway discovery is not configured; OpenShell routes disabled")
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			writeOpenShellError(w, http.StatusServiceUnavailable, "openshell_disabled",
-				"No OpenShell gateways are configured for this deployment")
+				"OpenShell is not configured for this deployment")
 		})
 	}
+	return app.openShell.Router()
+}
 
+// newRouter builds the fleet's router once, at construction.
+func (f *OpenShellFleet) newRouter() *fleet.Router {
 	return &fleet.Router{
 		Prefix:    OpenShellPathPrefix,
-		Backends:  app.openShell,
-		Readiness: app.openShell,
-		Handlers:  app.openShell.Handler,
-		Logger:    app.logger,
+		Backends:  f,
+		Readiness: f,
+		Handlers:  f.Handler,
+		Logger:    f.logger,
 		// Federated mode is HTTP request/response only: a browser cannot put a
 		// bearer on a protocol upgrade, so an upgrade is refused here rather than
 		// dispatched without credentials.

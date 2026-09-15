@@ -691,9 +691,18 @@
       - containerPort: 8843
         name: agent-ops-ui
     env:
-      # JSON array of OpenShell installs this dashboard routes to. Each install's
-      # OIDC issuer/clientId/audience is discovered from its own public
-      # /api/v1/auth/config, not configured here. Empty disables the routes.
+      # OpenShell gateways are discovered from the cluster: Services carrying
+      # the OpenShell label, with each gateway's OIDC issuer and audience read
+      # from that gateway's own ConfigMap so they cannot drift.
+      # OPENSHELL_GATEWAYS overrides discovery with an explicit list.
+      - name: OPENSHELL_DISCOVERY
+        value: openshell-discovery
+      - name: OPENSHELL_CLIENT_ID
+        value: openshell-client-id
+      - name: OPENSHELL_GATEWAY_SELECTOR
+        value: openshell-gateway-selector
+      - name: OPENSHELL_GATEWAY_NAMESPACES
+        value: openshell-gateway-namespaces
       - name: OPENSHELL_GATEWAYS
         value: openshell-gateways
     volumeMounts:

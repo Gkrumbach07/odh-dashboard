@@ -134,6 +134,46 @@ replacements:
           name: odh-dashboard
         fieldPaths:
           - spec.template.spec.containers.[name=agent-ops-ui].env.[name=OPENSHELL_GATEWAYS].value
+  - source:
+      kind: ConfigMap
+      name: sidecar-params
+      fieldPath: data.openshell-discovery
+    targets:
+      - select:
+          kind: Deployment
+          name: odh-dashboard
+        fieldPaths:
+          - spec.template.spec.containers.[name=agent-ops-ui].env.[name=OPENSHELL_DISCOVERY].value
+  - source:
+      kind: ConfigMap
+      name: sidecar-params
+      fieldPath: data.openshell-client-id
+    targets:
+      - select:
+          kind: Deployment
+          name: odh-dashboard
+        fieldPaths:
+          - spec.template.spec.containers.[name=agent-ops-ui].env.[name=OPENSHELL_CLIENT_ID].value
+  - source:
+      kind: ConfigMap
+      name: sidecar-params
+      fieldPath: data.openshell-gateway-selector
+    targets:
+      - select:
+          kind: Deployment
+          name: odh-dashboard
+        fieldPaths:
+          - spec.template.spec.containers.[name=agent-ops-ui].env.[name=OPENSHELL_GATEWAY_SELECTOR].value
+  - source:
+      kind: ConfigMap
+      name: sidecar-params
+      fieldPath: data.openshell-gateway-namespaces
+    targets:
+      - select:
+          kind: Deployment
+          name: odh-dashboard
+        fieldPaths:
+          - spec.template.spec.containers.[name=agent-ops-ui].env.[name=OPENSHELL_GATEWAY_NAMESPACES].value
 patchesJson6902:
   - path: deployment.yaml
     target:

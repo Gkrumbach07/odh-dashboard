@@ -193,27 +193,22 @@ func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
 		openAPIHandler = nil
 	}
 
-	// An unparseable gateway registry is a configuration error worth failing on:
-	// starting with the OpenShell area silently missing is harder to diagnose.
-	gateways, err := ParseGateways(cfg.OpenShellGateways)
+	// Where the OpenShell fleet comes from. A misconfigured source is worth
+	// failing on: starting with the OpenShell area silently missing is harder to
+	// diagnose than not starting.
+	source, err := newOpenShellSource(cfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("invalid OpenShell gateway registry: %w", err)
+		return nil, fmt.Errorf("OpenShell gateway discovery: %w", err)
 	}
 	var openShell *OpenShellFleet
-	if len(gateways) > 0 {
-		ids := make([]string, 0, len(gateways))
-		for _, g := range gateways {
-			ids = append(ids, g.ID)
-		}
-		logger.Info("OpenShell gateways configured", slog.Any("gateways", ids))
-		// Each gateway gets its own embedded App; a gateway that cannot be dialled
-		// is a configuration error rather than something discovery can heal.
-		openShell, err = NewOpenShellFleet(gateways, rootCAs, logger)
+	if source != nil {
+		logger.Info("discovering OpenShell gateways", slog.String("source", source.Describe()))
+		openShell, err = NewOpenShellFleet(context.Background(), source, rootCAs, logger)
 		if err != nil {
 			return nil, fmt.Errorf("OpenShell fleet setup failed: %w", err)
 		}
-		// Discover in the background so a gateway that is down at startup heals
-		// on its own instead of staying unconnectable until someone reloads.
+		// Reach each gateway in the background so one that is down at startup heals
+		// on its own, and re-ask the source so one installed later is picked up.
 		openShell.Start(context.Background())
 	}
 

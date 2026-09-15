@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/opendatahub-io/mod-arch-library/bff/internal/api"
@@ -58,13 +59,37 @@ func main() {
 	flag.StringVar(&cfg.OpenShellGateways, "openshell-gateways",
 		getEnvAsString("OPENSHELL_GATEWAYS", ""),
 		`JSON array of OpenShell installs, e.g. [{"id":"prod","name":"Production","gatewayUrl":"openshell.openshell.svc.cluster.local:8080","issuer":"https://dex.example/","clientId":"openshell-dashboard","audience":"openshell-dashboard"}]. `+
-			`The upstream BFF is embedded per gateway, so each entry names the gateway gRPC endpoint. Empty disables the OpenShell routes.`)
+			`The upstream BFF is embedded per gateway, so each entry names the gateway gRPC endpoint. `+
+			`Setting this disables discovery; leave it empty and set -openshell-discovery to find gateways from the cluster.`)
+
+	var openShellNamespaces string
+	flag.BoolVar(&cfg.OpenShellDiscovery, "openshell-discovery",
+		getEnvAsBool("OPENSHELL_DISCOVERY", false),
+		"Discover OpenShell gateways from the cluster instead of OPENSHELL_GATEWAYS. Reads each gateway's own ConfigMap for the OIDC issuer and audience it runs with, so those cannot drift.")
+	flag.StringVar(&cfg.OpenShellGatewaySelector, "openshell-gateway-selector",
+		getEnvAsString("OPENSHELL_GATEWAY_SELECTOR", ""),
+		"Label selector matching OpenShell gateway Services. Empty uses the OpenShell chart's own label.")
+	flag.StringVar(&openShellNamespaces, "openshell-gateway-namespaces",
+		getEnvAsString("OPENSHELL_GATEWAY_NAMESPACES", ""),
+		"Comma-separated namespaces to search for gateways. Empty searches the whole cluster, which needs a cluster-scoped Service list.")
+	flag.StringVar(&cfg.OpenShellClientID, "openshell-client-id",
+		getEnvAsString("OPENSHELL_CLIENT_ID", ""),
+		"Default browser OIDC client id for discovered gateways that do not annotate their own. The gateway does not know this value, so it cannot be discovered.")
+	flag.StringVar(&cfg.OpenShellScope, "openshell-scope",
+		getEnvAsString("OPENSHELL_SCOPE", ""),
+		"Default OIDC scopes for discovered gateways that do not annotate their own.")
 
 	// Deprecated flags - kept for backward compatibility
 	flag.BoolVar(&cfg.StandaloneMode, "standalone-mode", false, "DEPRECATED: Use -deployment-mode=standalone instead")
 	flag.BoolVar(&cfg.FederatedPlatform, "federated-platform", false, "DEPRECATED: Use -deployment-mode=federated instead")
 
 	flag.Parse()
+
+	for _, ns := range strings.Split(openShellNamespaces, ",") {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			cfg.OpenShellGatewayNamespaces = append(cfg.OpenShellGatewayNamespaces, ns)
+		}
+	}
 
 	// Handle backward compatibility: if old flags are used, override deployment mode
 	if cfg.StandaloneMode {

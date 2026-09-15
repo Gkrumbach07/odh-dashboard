@@ -75,3 +75,26 @@ rules:
       - list
     resources:
       - mcpserverregistrations
+  # Agent Ops — OpenShell gateway discovery. Gateways are found by listing
+  # Services carrying the OpenShell chart's label, and each one's OIDC issuer
+  # and audience are read from that gateway's own ConfigMap so they cannot
+  # drift out of step with the gateway that has to accept the token.
+  #
+  # Deliberately no `list` on configmaps: with `get` only, a ConfigMap can be
+  # read when its exact name was derived from a gateway Service already found,
+  # and nothing else can be enumerated. To narrow further, set
+  # OPENSHELL_GATEWAY_NAMESPACES and move these two rules into a Role in each.
+  - apiGroups:
+      - ""
+    verbs:
+      - get
+      - list
+      - watch
+    resources:
+      - services
+  - apiGroups:
+      - ""
+    verbs:
+      - get
+    resources:
+      - configmaps

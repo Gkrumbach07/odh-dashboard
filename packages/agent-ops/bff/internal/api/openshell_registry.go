@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	openshellapi "github.com/Gkrumbach07/openshell-dashboard/backend/pkg/api"
 	openshellauth "github.com/Gkrumbach07/openshell-dashboard/backend/pkg/auth"
@@ -85,9 +87,25 @@ type GatewayView struct {
 // WebSocket, and a browser cannot put a bearer on a protocol upgrade.
 var embeddedUnsupportedFeatures = []string{"terminal"}
 
-// OpenShellFleet owns one embedded App per configured gateway.
+// DefaultResyncInterval is how often a cluster-backed fleet re-asks its source
+// which gateways exist. Gateways are installed and removed by an operator, on
+// human timescales, so this trades promptness for not hammering the API server.
+const DefaultResyncInterval = 2 * time.Minute
+
+// OpenShellFleet owns one embedded App per gateway, and keeps that set in step
+// with whatever its GatewaySource reports.
 type OpenShellFleet struct {
+	source   GatewaySource
 	registry *fleet.Registry[Discovery]
+	router   *fleet.Router
+	rootCAs  *x509.CertPool
+	logger   *slog.Logger
+	resync   time.Duration
+
+	// mu guards everything below. It exists because membership is no longer fixed
+	// at construction: a resync can add, replace or drop a gateway while requests
+	// are being served against the others.
+	mu       sync.RWMutex
 	gateways map[string]Gateway
 	apps     map[string]*openshellapi.App
 	clients  map[string]*openshellsdk.GatewayClients
@@ -127,49 +145,153 @@ func ParseGateways(raw string) ([]Gateway, error) {
 	return gateways, nil
 }
 
-// NewOpenShellFleet dials every configured gateway and builds an embedded App
-// for each. A gateway that cannot be dialled fails startup: a bad endpoint is a
-// configuration error, and discovery — which runs later and retries — is for a
-// gateway that is merely not up yet.
-func NewOpenShellFleet(gateways []Gateway, rootCAs *x509.CertPool, logger *slog.Logger) (*OpenShellFleet, error) {
+// NewOpenShellFleet builds a fleet over a source and populates it once.
+//
+// An initial Sync failure is fatal: a source that cannot answer at startup is a
+// configuration or RBAC problem — the wrong label selector, no permission to list
+// Services — and starting with the OpenShell area silently empty is harder to
+// diagnose than failing here. A source that answers with *no* gateways is not an
+// error; the cluster may simply not have one installed yet, and the resync loop
+// will pick one up when it appears.
+func NewOpenShellFleet(ctx context.Context, source GatewaySource, rootCAs *x509.CertPool, logger *slog.Logger) (*OpenShellFleet, error) {
 	f := &OpenShellFleet{
-		gateways: make(map[string]Gateway, len(gateways)),
-		apps:     make(map[string]*openshellapi.App, len(gateways)),
-		clients:  make(map[string]*openshellsdk.GatewayClients, len(gateways)),
-		backends: make([]fleet.Backend, 0, len(gateways)),
+		source:   source,
+		rootCAs:  rootCAs,
+		logger:   logger,
+		resync:   DefaultResyncInterval,
+		gateways: map[string]Gateway{},
+		apps:     map[string]*openshellapi.App{},
+		clients:  map[string]*openshellsdk.GatewayClients{},
+	}
+	// Dynamic keeps the registry's retry loop alive after the fleet first goes
+	// green, so a gateway discovered later is still reached without a restart.
+	f.registry = fleet.New(nil, f.discover, fleet.Options{Logger: logger, Dynamic: true})
+	f.router = f.newRouter()
+
+	if err := f.Sync(ctx); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// Sync brings the fleet in line with its source.
+//
+// A source error leaves the fleet exactly as it was. That matters most for the
+// cluster source: a transient API server error must not tear down every working
+// gateway and log every user out, so "I could not tell" is treated as "no change"
+// rather than as "there are none".
+func (f *OpenShellFleet) Sync(ctx context.Context) error {
+	desired, err := f.source.Gateways(ctx)
+	if err != nil {
+		return fmt.Errorf("discover gateways from %s: %w", f.source.Describe(), err)
 	}
 
-	for _, g := range gateways {
-		clients, err := openshellsdk.NewGatewayClients(g.GatewayURL, g.CACert, g.ClientCert, g.ClientKey)
-		if err != nil {
-			f.Close()
-			return nil, fmt.Errorf("gateway %q: %w", g.ID, err)
+	backends := make([]fleet.Backend, 0, len(desired))
+	for _, g := range desired {
+		backends = append(backends, fleet.Backend{ID: g.ID, Name: g.Name, LinkURL: g.ConsoleURL})
+	}
+	if err := fleet.Validate(backends); err != nil {
+		return fmt.Errorf("gateways from %s are invalid: %w", f.source.Describe(), err)
+	}
+	for i := range desired {
+		desired[i].Name = backends[i].Name // Validate defaults Name to ID
+	}
+
+	f.mu.Lock()
+	var (
+		stale   []*openshellsdk.GatewayClients
+		changed []string
+	)
+	keep := make(map[string]struct{}, len(desired))
+	for i := range desired {
+		g := desired[i]
+		keep[g.ID] = struct{}{}
+
+		// Gateway is all scalars, so equality is the whole config. Anything that
+		// differs — a new issuer, a moved endpoint — means the embedded App was
+		// built against details that no longer hold and has to be rebuilt.
+		if existing, ok := f.gateways[g.ID]; ok && existing == g {
+			continue
 		}
 
-		// staticDir "" keeps this API-only: the embedding host renders the UI
-		// from the npm package, not from the console's static assets.
-		app := openshellapi.NewApp(
-			clients.SDK,
-			clients.UploadExec,
-			openshellauth.New(openshellauth.Config{}),
-			"",
-			openshellapi.AuthConfigResponse{
-				Issuer:   g.Issuer,
-				ClientID: g.ClientID,
-				Audience: g.Audience,
-				Scope:    g.Scope,
-				Features: embeddedFeatureFlags(),
-			},
-		)
+		clients, err := openshellsdk.NewGatewayClients(g.GatewayURL, g.CACert, g.ClientCert, g.ClientKey)
+		if err != nil {
+			// One unusable endpoint must not cost the rest of the fleet. The
+			// gateway is dropped from this sync and reappears if it is fixed.
+			f.logger.Error("cannot connect to OpenShell gateway; excluding it from the fleet",
+				slog.String("gateway", g.ID), slog.Any("error", err))
+			delete(keep, g.ID)
+			continue
+		}
 
+		if old, ok := f.clients[g.ID]; ok {
+			stale = append(stale, old)
+		}
 		f.gateways[g.ID] = g
 		f.clients[g.ID] = clients
-		f.apps[g.ID] = app
-		f.backends = append(f.backends, fleet.Backend{ID: g.ID, Name: g.Name, LinkURL: g.ConsoleURL})
+		f.apps[g.ID] = newEmbeddedApp(clients, g)
+		changed = append(changed, g.ID)
 	}
 
-	f.registry = fleet.New(f.backends, f.discover, fleet.Options{Logger: logger})
-	return f, nil
+	for id := range f.gateways {
+		if _, ok := keep[id]; ok {
+			continue
+		}
+		if c, ok := f.clients[id]; ok {
+			stale = append(stale, c)
+		}
+		delete(f.gateways, id)
+		delete(f.clients, id)
+		delete(f.apps, id)
+		changed = append(changed, id)
+	}
+
+	f.backends = f.backends[:0]
+	for _, b := range backends {
+		if _, ok := keep[b.ID]; ok {
+			f.backends = append(f.backends, b)
+		}
+	}
+	live := append([]fleet.Backend(nil), f.backends...)
+	f.mu.Unlock()
+
+	added, removed := f.registry.SetBackends(live)
+	// The router caches handlers by gateway id, and an id outlives the App behind
+	// it. Without this a rebuilt gateway keeps serving the App built for its old
+	// configuration — the exact drift this discovery exists to remove.
+	f.router.Forget(changed...)
+
+	for _, c := range stale {
+		c.Close()
+	}
+
+	if len(added) > 0 || len(removed) > 0 {
+		f.logger.Info("OpenShell fleet membership changed",
+			slog.Any("added", added),
+			slog.Any("removed", removed),
+			slog.String("source", f.source.Describe()))
+	}
+	return nil
+}
+
+// newEmbeddedApp builds the upstream OpenShell BFF bound to one gateway.
+func newEmbeddedApp(clients *openshellsdk.GatewayClients, g Gateway) *openshellapi.App {
+	// staticDir "" keeps this API-only: the embedding host renders the UI from
+	// the npm package, not from the console's static assets.
+	return openshellapi.NewApp(
+		clients.SDK,
+		clients.UploadExec,
+		openshellauth.New(openshellauth.Config{}),
+		"",
+		openshellapi.AuthConfigResponse{
+			Issuer:   g.Issuer,
+			ClientID: g.ClientID,
+			Audience: g.Audience,
+			Scope:    g.Scope,
+			Features: embeddedFeatureFlags(),
+		},
+	)
 }
 
 // embeddedFeatureFlags is what each embedded App advertises on its own
@@ -196,7 +318,9 @@ func embeddedFeatureFlags() openshellapi.FeatureFlags {
 // discover asks the gateway itself whether it is reachable, over gRPC.
 func (f *OpenShellFleet) discover(ctx context.Context, b fleet.Backend, _ *http.Client) (Discovery, error) {
 	var d Discovery
+	f.mu.RLock()
 	clients, ok := f.clients[b.ID]
+	f.mu.RUnlock()
 	if !ok {
 		return d, fmt.Errorf("no client for gateway %q", b.ID)
 	}
@@ -213,11 +337,13 @@ func (f *OpenShellFleet) discover(ctx context.Context, b fleet.Backend, _ *http.
 	return d, nil
 }
 
-// Len reports how many gateways are configured.
+// Len reports how many gateways are currently in the fleet.
 func (f *OpenShellFleet) Len() int {
 	if f == nil {
 		return 0
 	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	return len(f.backends)
 }
 
@@ -227,19 +353,47 @@ func (f *OpenShellFleet) Ready(id string) bool                   { return f.regi
 
 // Handler returns the embedded App for a gateway.
 func (f *OpenShellFleet) Handler(b fleet.Backend) (http.Handler, error) {
+	f.mu.RLock()
 	app, ok := f.apps[b.ID]
+	f.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("no app for gateway %q", b.ID)
 	}
 	return mapRefusals(app.Routes(), b.Name), nil
 }
 
-// Start begins background discovery so a gateway that is down at boot recovers
-// on its own rather than staying unconnectable until someone reloads.
+// Router serves /openshell/{gatewayId}/... It is owned by the fleet rather than
+// built per call so that Sync can invalidate its handler cache.
+func (f *OpenShellFleet) Router() http.Handler { return f.router }
+
+// Start begins background discovery, and — for a source whose answer can change —
+// a resync loop, so a gateway installed or removed after startup is picked up
+// without restarting the process.
 func (f *OpenShellFleet) Start(ctx context.Context) {
-	if f != nil && f.registry != nil {
-		f.registry.Start(ctx)
+	if f == nil || f.registry == nil {
+		return
 	}
+	f.registry.Start(ctx)
+
+	if f.resync <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(f.resync)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := f.Sync(ctx); err != nil {
+					// Non-fatal by construction: Sync left the fleet untouched.
+					f.logger.Warn("OpenShell gateway resync failed; keeping the current fleet",
+						slog.Any("error", err))
+				}
+			}
+		}
+	}()
 }
 
 // Close stops discovery and releases every gateway connection.
@@ -250,9 +404,15 @@ func (f *OpenShellFleet) Close() {
 	if f.registry != nil {
 		f.registry.Stop()
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, c := range f.clients {
 		c.Close()
 	}
+	f.clients = map[string]*openshellsdk.GatewayClients{}
+	f.apps = map[string]*openshellapi.App{}
+	f.gateways = map[string]Gateway{}
+	f.backends = nil
 }
 
 // Views renders every gateway for the frontend.
@@ -268,7 +428,9 @@ func (f *OpenShellFleet) Views(ctx context.Context) []GatewayView {
 }
 
 func (f *OpenShellFleet) viewOf(e fleet.Entry[Discovery]) GatewayView {
+	f.mu.RLock()
 	g := f.gateways[e.Backend.ID]
+	f.mu.RUnlock()
 	view := GatewayView{
 		ID:         g.ID,
 		Name:       e.Backend.Name,
@@ -288,10 +450,19 @@ func (f *OpenShellFleet) viewOf(e fleet.Entry[Discovery]) GatewayView {
 	}
 
 	view.GatewayVersion = e.Discovery.GatewayVersion
-	// The browser needs an issuer and a client id to run a flow at all.
-	view.Connectable = g.Issuer != "" && g.ClientID != ""
+	// The browser needs an issuer and a client id to run a flow at all. The two
+	// come from different places and are fixed in different places, so say which
+	// is missing rather than reporting one opaque "not configured".
+	var missing []string
+	if g.Issuer == "" {
+		missing = append(missing, "OIDC issuer (from the gateway's own config)")
+	}
+	if g.ClientID == "" {
+		missing = append(missing, "OIDC client id (from the "+AnnotationClientID+" annotation on the gateway Service)")
+	}
+	view.Connectable = len(missing) == 0
 	if !view.Connectable {
-		view.Error = "gateway has no OIDC issuer and client id configured"
+		view.Error = "gateway is missing " + strings.Join(missing, " and ")
 	}
 	return view
 }

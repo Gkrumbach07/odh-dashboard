@@ -130,8 +130,36 @@ type EnvConfig struct {
 	// issuer/clientId/audience must match what the gateway itself was started
 	// with (--oidc-issuer / --oidc-audience): a mismatch surfaces only as a
 	// gateway refusal, with no useful diagnostic anywhere earlier.
-	// Empty disables the OpenShell routes.
+	//
+	// Setting this disables cluster discovery: an explicit list is taken as
+	// meaning "these, exactly". Leave it empty and enable OpenShellDiscovery to
+	// find gateways from the cluster instead, which is what removes the
+	// hand-copied issuer and audience.
 	OpenShellGateways string
+
+	// OpenShellDiscovery finds gateways by asking the cluster rather than being
+	// told about them. The dashboard's own service account lists Services
+	// carrying the OpenShell label and reads each gateway's ConfigMap for the
+	// OIDC issuer and audience it actually runs with, so those two cannot drift
+	// out of step with the gateway.
+	OpenShellDiscovery bool
+
+	// OpenShellGatewaySelector is the label selector matching gateway Services.
+	// Empty uses the OpenShell chart's own label.
+	OpenShellGatewaySelector string
+
+	// OpenShellGatewayNamespaces bounds discovery to named namespaces. Empty
+	// searches the whole cluster, which needs a cluster-scoped list; naming them
+	// keeps the dashboard's RBAC namespaced.
+	OpenShellGatewayNamespaces []string
+
+	// OpenShellClientID and OpenShellScope are the browser's OIDC public client
+	// for gateways whose Service does not annotate their own. The gateway has no
+	// notion of a browser client — its config carries issuer and audience only —
+	// so unlike those two, this genuinely is dashboard-side configuration and
+	// cannot be discovered.
+	OpenShellClientID string
+	OpenShellScope    string
 
 	// ─── DEPRECATED ─────────────────────────────────────────────
 	// The following fields are deprecated and maintained for backward compatibility

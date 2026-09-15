@@ -32,3 +32,27 @@ rules:
       - create
     resources:
       - subjectaccessreviews
+  # OpenShell gateway discovery. The BFF finds gateways by listing Services
+  # carrying the OpenShell chart's label, and reads each one's OIDC issuer and
+  # audience from the gateway's own ConfigMap so they cannot drift out of step
+  # with the gateway that has to accept the resulting token.
+  #
+  # Deliberately no `list` on configmaps: with `get` only, the BFF can read a
+  # ConfigMap whose exact name it derived from a gateway Service it already
+  # found, and cannot enumerate anything else. To narrow further, set
+  # OPENSHELL_GATEWAY_NAMESPACES and move these two rules into a Role in each
+  # of those namespaces.
+  - apiGroups:
+      - ""
+    verbs:
+      - get
+      - list
+      - watch
+    resources:
+      - services
+  - apiGroups:
+      - ""
+    verbs:
+      - get
+    resources:
+      - configmaps

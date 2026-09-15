@@ -155,6 +155,23 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	handler.ServeHTTP(w, outbound)
 }
 
+// Forget drops cached handlers so the next request rebuilds them.
+//
+// The cache is keyed by backend ID, which stays stable while what it points at
+// can change — a rediscovered backend may have a new URL, or new credentials
+// baked into an embedded handler. Call this whenever membership or a backend's
+// details change, or the router keeps serving the handler built for the old one.
+func (r *Router) Forget(ids ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.proxies == nil {
+		return
+	}
+	for _, id := range ids {
+		delete(r.proxies, id)
+	}
+}
+
 func (r *Router) handlerFor(backend Backend) (http.Handler, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

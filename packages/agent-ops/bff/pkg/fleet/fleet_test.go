@@ -283,3 +283,116 @@ func TestRouter(t *testing.T) {
 		}
 	})
 }
+
+// Membership changes when a fleet is discovered rather than configured, so the
+// registry has to absorb that without losing what it already knows.
+func TestSetBackendsAddsAndRemovesWithoutDisturbingSurvivors(t *testing.T) {
+	calls := map[string]int{}
+	r := fleet.New([]fleet.Backend{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}},
+		func(_ context.Context, b fleet.Backend, _ *http.Client) (string, error) {
+			calls[b.ID]++
+			return "doc-" + b.ID, nil
+		}, fleet.Options{Logger: quietLogger()})
+
+	// Prime both so "a" has a cached document to preserve.
+	r.Entries(context.Background())
+	if !r.Ready("a") || !r.Ready("b") {
+		t.Fatalf("setup: both backends should be ready")
+	}
+
+	added, removed := r.SetBackends([]fleet.Backend{{ID: "a", Name: "A renamed"}, {ID: "c", Name: "C"}})
+	if len(added) != 1 || added[0] != "c" {
+		t.Errorf("added = %v, want [c]", added)
+	}
+	if len(removed) != 1 || removed[0] != "b" {
+		t.Errorf("removed = %v, want [b]", removed)
+	}
+
+	if _, stillThere := r.Lookup("b"); stillThere {
+		t.Error("a removed backend must stop resolving")
+	}
+
+	// "a" survived: it keeps its readiness, so a resync does not briefly take a
+	// working backend out of service, and its Backend struct is refreshed.
+	if !r.Ready("a") {
+		t.Error("a surviving backend must stay ready across a resync")
+	}
+	kept, ok := r.Lookup("a")
+	if !ok || kept.Name != "A renamed" {
+		t.Errorf("surviving backend not refreshed: %+v (found=%v)", kept, ok)
+	}
+	if calls["a"] != 1 {
+		t.Errorf("a surviving backend was rediscovered %d times, want 1", calls["a"])
+	}
+
+	// "c" is new and therefore not yet routable.
+	if r.Ready("c") {
+		t.Error("a newly added backend must not be routable before discovery")
+	}
+}
+
+func TestSetBackendsToEmptyClearsTheFleet(t *testing.T) {
+	r := fleet.New([]fleet.Backend{{ID: "a"}},
+		func(context.Context, fleet.Backend, *http.Client) (string, error) { return "", nil },
+		fleet.Options{Logger: quietLogger()})
+
+	_, removed := r.SetBackends(nil)
+	if len(removed) != 1 || removed[0] != "a" {
+		t.Errorf("removed = %v, want [a]", removed)
+	}
+	if r.Len() != 0 {
+		t.Errorf("Len = %d, want 0", r.Len())
+	}
+	if got := r.Entries(context.Background()); len(got) != 0 {
+		t.Errorf("Entries = %v, want none", got)
+	}
+}
+
+// The router caches handlers by backend id, and an id outlives what it points at.
+// Without invalidation a rediscovered backend keeps being served by the handler
+// built for its previous configuration.
+func TestRouterForgetRebuildsTheHandler(t *testing.T) {
+	built := 0
+	r := &fleet.Router{
+		Prefix:   "/p",
+		Backends: staticLookup{{ID: "a", Name: "A"}},
+		Handlers: func(fleet.Backend) (http.Handler, error) {
+			built++
+			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}), nil
+		},
+		Logger: quietLogger(),
+	}
+
+	serve := func() {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/p/a/thing", nil))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+		}
+	}
+
+	serve()
+	serve()
+	if built != 1 {
+		t.Fatalf("handler built %d times, want 1 (handlers are cached)", built)
+	}
+
+	r.Forget("a")
+	serve()
+	if built != 2 {
+		t.Errorf("handler built %d times after Forget, want 2", built)
+	}
+}
+
+type staticLookup []fleet.Backend
+
+func (s staticLookup) Lookup(id string) (fleet.Backend, bool) {
+	for _, b := range s {
+		if b.ID == id {
+			return b, true
+		}
+	}
+	return fleet.Backend{}, false
+}

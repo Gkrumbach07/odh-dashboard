@@ -57,8 +57,8 @@ func main() {
 	// ─── OpenShell (double auth) ─────────────────────────────────
 	flag.StringVar(&cfg.OpenShellGateways, "openshell-gateways",
 		getEnvAsString("OPENSHELL_GATEWAYS", ""),
-		`JSON array of OpenShell installs, e.g. [{"id":"prod","name":"Production","bffUrl":"https://...","consoleUrl":"https://..."}]. `+
-			`Each install's OIDC issuer/clientId/audience is discovered from its own /api/v1/auth/config. Empty disables the OpenShell routes.`)
+		`JSON array of OpenShell installs, e.g. [{"id":"prod","name":"Production","gatewayUrl":"openshell.openshell.svc.cluster.local:8080","issuer":"https://dex.example/","clientId":"openshell-dashboard","audience":"openshell-dashboard"}]. `+
+			`The upstream BFF is embedded per gateway, so each entry names the gateway gRPC endpoint. Empty disables the OpenShell routes.`)
 
 	// Deprecated flags - kept for backward compatibility
 	flag.BoolVar(&cfg.StandaloneMode, "standalone-mode", false, "DEPRECATED: Use -deployment-mode=standalone instead")

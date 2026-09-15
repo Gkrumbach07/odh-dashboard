@@ -51,8 +51,18 @@ type Router struct {
 	// Readiness gates routing on discovery having succeeded. Optional; when nil,
 	// requests are proxied regardless of discovery state.
 	Readiness ReadyChecker
-	// Transport is used for every outbound proxy connection. Optional.
+	// Transport is used for every outbound proxy connection. Optional, and
+	// ignored when Handlers is set.
 	Transport http.RoundTripper
+	// Handlers returns the handler for a backend, letting a consumer serve it
+	// in-process instead of proxying over the network. When nil, the Router
+	// reverse-proxies to Backend.URL.
+	//
+	// This is what lets one process front several backends by *embedding* them —
+	// importing each backend's own handler and mounting it — rather than running
+	// a separate service per backend and forwarding HTTP to it. The result is
+	// cached per backend id.
+	Handlers func(b Backend) (http.Handler, error)
 	// Rewrite adapts an outbound request for its backend — typically swapping
 	// credentials. Runs after the target host is set. Optional but almost always
 	// wanted: without it the host's own headers travel onward untouched.
@@ -70,7 +80,7 @@ type Router struct {
 	Codes      Codes
 
 	mu      sync.Mutex
-	proxies map[string]*httputil.ReverseProxy
+	proxies map[string]http.Handler
 }
 
 func (r *Router) logger() *slog.Logger {
@@ -130,9 +140,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	proxy, err := r.proxyFor(backend)
+	handler, err := r.handlerFor(backend)
 	if err != nil {
-		r.logger().Error("building proxy failed",
+		r.logger().Error("building backend handler failed",
 			slog.String("backend", backend.ID), slog.Any("error", err))
 		r.fail(w, http.StatusInternalServerError,
 			r.Codes.or(r.Codes.UnknownID, "backend_misconfigured"),
@@ -142,20 +152,33 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	outbound := req.Clone(req.Context())
 	outbound.URL.Path = rest
-	proxy.ServeHTTP(w, outbound)
+	handler.ServeHTTP(w, outbound)
 }
 
-func (r *Router) proxyFor(backend Backend) (*httputil.ReverseProxy, error) {
+func (r *Router) handlerFor(backend Backend) (http.Handler, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.proxies == nil {
-		r.proxies = map[string]*httputil.ReverseProxy{}
+		r.proxies = map[string]http.Handler{}
 	}
 	if p, ok := r.proxies[backend.ID]; ok {
 		return p, nil
 	}
 
+	// Embedded: the consumer supplies the backend's own handler.
+	if r.Handlers != nil {
+		h, err := r.Handlers(backend)
+		if err != nil {
+			return nil, err
+		}
+		r.proxies[backend.ID] = h
+		return h, nil
+	}
+
+	if backend.URL == "" {
+		return nil, fmt.Errorf("backend %q has no url and no Handlers hook is set", backend.ID)
+	}
 	target, err := url.Parse(backend.URL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url %q: %w", backend.URL, err)

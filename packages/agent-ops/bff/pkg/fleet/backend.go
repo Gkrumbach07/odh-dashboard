@@ -81,6 +81,11 @@ func ParseBackends(raw string) ([]Backend, error) {
 	if err := Validate(backends); err != nil {
 		return nil, err
 	}
+	for _, b := range backends {
+		if b.URL == "" {
+			return nil, fmt.Errorf("backend %q has no url", b.ID)
+		}
+	}
 	return backends, nil
 }
 
@@ -98,10 +103,10 @@ func Validate(backends []Backend) error {
 		}
 		seen[b.ID] = struct{}{}
 
-		if b.URL == "" {
-			return fmt.Errorf("backend %q has no url", b.ID)
-		}
-		if !strings.HasPrefix(b.URL, "http://") && !strings.HasPrefix(b.URL, "https://") {
+		// URL is optional: an embedded backend is served in-process by a
+		// Router.Handlers hook and has no HTTP target to proxy to.
+		if b.URL != "" &&
+			!strings.HasPrefix(b.URL, "http://") && !strings.HasPrefix(b.URL, "https://") {
 			return fmt.Errorf("backend %q url must be http(s): %q", b.ID, b.URL)
 		}
 		if b.Name == "" {

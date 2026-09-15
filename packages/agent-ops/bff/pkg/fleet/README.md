@@ -40,5 +40,23 @@ for what a consumer supplies:
   and returns an honest "not ready" instead of a transport error.
 - **Background retry** — `Start` discovers asynchronously with exponential backoff,
   so a backend that is down at boot heals on its own and startup is never blocked.
-- **Router** — `/{prefix}/{id}/...` to the right backend, one cached reverse proxy
-  each, with hooks for the credential swap and response mapping.
+- **Router** — `/{prefix}/{id}/...` to the right backend, one cached handler
+  each, with a hook for the credential swap.
+
+## Proxying vs embedding
+
+The Router supports both, and the choice is one field:
+
+| | `Handlers` unset | `Handlers` set |
+|---|---|---|
+| target | reverse-proxies to `Backend.URL` | dispatches to an in-process `http.Handler` |
+| needs | a service per backend | nothing — the backend's handler is imported |
+| use when | the backend is only reachable over the network | the backend ships an importable handler |
+
+agent-ops uses the embedded form: it imports the upstream OpenShell BFF and
+mounts one App per gateway, so there is no relay service per gateway and no
+extra network hop. `Backend.URL` is then unused and left empty.
+
+Note that response rewriting (`OnResponse`) only applies to the proxied form —
+an embedded handler writes straight to the `ResponseWriter`, so a consumer that
+needs to remap statuses wraps its handler instead.

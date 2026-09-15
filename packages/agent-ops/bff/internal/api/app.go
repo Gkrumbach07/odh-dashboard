@@ -25,7 +25,6 @@ import (
 
 	"github.com/opendatahub-io/mod-arch-library/bff/internal/config"
 	"github.com/opendatahub-io/mod-arch-library/bff/internal/repositories"
-	"github.com/opendatahub-io/mod-arch-library/bff/pkg/fleet"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -81,7 +80,7 @@ type App struct {
 	bffClientFactory bffclient.BFFClientFactory
 	// openShell is the registry of configured OpenShell installs. Nil when none are
 	// configured, which disables the /openshell routes.
-	openShell *fleet.Registry[Discovery]
+	openShell *OpenShellFleet
 }
 
 func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
@@ -200,14 +199,19 @@ func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid OpenShell gateway registry: %w", err)
 	}
-	var openShell *fleet.Registry[Discovery]
+	var openShell *OpenShellFleet
 	if len(gateways) > 0 {
 		ids := make([]string, 0, len(gateways))
 		for _, g := range gateways {
 			ids = append(ids, g.ID)
 		}
 		logger.Info("OpenShell gateways configured", slog.Any("gateways", ids))
-		openShell = NewGatewayRegistry(gateways, rootCAs, cfg.InsecureSkipVerify, logger)
+		// Each gateway gets its own embedded App; a gateway that cannot be dialled
+		// is a configuration error rather than something discovery can heal.
+		openShell, err = NewOpenShellFleet(gateways, rootCAs, logger)
+		if err != nil {
+			return nil, fmt.Errorf("OpenShell fleet setup failed: %w", err)
+		}
 		// Discover in the background so a gateway that is down at startup heals
 		// on its own instead of staying unconnectable until someone reloads.
 		openShell.Start(context.Background())
@@ -230,7 +234,7 @@ func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
 func (app *App) Shutdown() error {
 	app.logger.Info("shutting down app...")
 	if app.openShell != nil {
-		app.openShell.Stop()
+		app.openShell.Close()
 	}
 	if app.testEnv == nil {
 		return nil

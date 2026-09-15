@@ -118,14 +118,18 @@ type EnvConfig struct {
 	// to reach a gateway the browser signs in to THAT gateway's OIDC provider and
 	// sends the resulting token on a dedicated header.
 	//
-	// An OpenShell install is a gateway plus its own relay BFF, so multi-gateway is
-	// multi-install. OpenShellGateways is the registry of installs, as a JSON array:
+	// The upstream OpenShell BFF is embedded (imported from its pkg/ and mounted
+	// per gateway), not proxied to, so there is no relay service to deploy. Each
+	// entry therefore names the gateway's own gRPC endpoint:
 	//
-	//   [{"id":"prod","name":"Production","bffUrl":"https://openshell-dashboard.openshell.svc.cluster.local:8443","consoleUrl":"https://openshell.apps.example.com"}]
+	//   [{"id":"prod","name":"Production",
+	//     "gatewayUrl":"openshell.openshell.svc.cluster.local:8080",
+	//     "issuer":"https://dex.example/","clientId":"openshell-dashboard",
+	//     "audience":"openshell-dashboard","consoleUrl":"https://..."}]
 	//
-	// Each install's issuer, client id and audience are NOT configured here — they
-	// are discovered from that install's public /api/v1/auth/config, so the value
-	// that mints a token and the value that validates it cannot drift apart.
+	// issuer/clientId/audience must match what the gateway itself was started
+	// with (--oidc-issuer / --oidc-audience): a mismatch surfaces only as a
+	// gateway refusal, with no useful diagnostic anywhere earlier.
 	// Empty disables the OpenShell routes.
 	OpenShellGateways string
 

@@ -41,8 +41,10 @@ spec:
           protocol: TCP
         - port: 80
           protocol: TCP
-        # OpenShell installs: their BFF serves HTTPS on 8443 with an OpenShift
-        # serving cert. Without this the router cannot reach any gateway and
-        # every install reports itself unconnectable.
+        # OpenShell gateways: the embedded BFF dials each gateway's gRPC
+        # endpoint directly. Without this no install can be reached and every
+        # gateway reports itself unconnectable.
+        - port: 8080
+          protocol: TCP
         - port: 8443
           protocol: TCP

@@ -131,3 +131,52 @@ func (f *OpenShellFleet) gatewayFor(t *testing.T, id string) Gateway {
 	require.True(t, ok, "no gateway %q in the fleet", id)
 	return g
 }
+
+// The gateway accepts only its own audience. When that audience is not the
+// browser's client id, the browser has to request it explicitly — and when it
+// does not, the token is minted for the client id and the gateway refuses it,
+// several hops from anything that names the cause.
+func TestAudienceWarning(t *testing.T) {
+	tests := []struct {
+		name     string
+		gateway  Gateway
+		wantWarn bool
+	}{
+		{
+			name:     "audience differs and is not requested",
+			gateway:  Gateway{ClientID: "openshell-rhoai-embed", Audience: "openshell-dashboard", Scope: "openid profile email groups"},
+			wantWarn: true,
+		},
+		{
+			name: "audience differs but is requested via Dex's cross-client scope",
+			gateway: Gateway{
+				ClientID: "openshell-rhoai-embed",
+				Audience: "openshell-dashboard",
+				Scope:    "openid profile email groups audience:server:client_id:openshell-dashboard",
+			},
+			wantWarn: false,
+		},
+		{
+			name:     "audience is the client id, so nothing extra is needed",
+			gateway:  Gateway{ClientID: "openshell-cli", Audience: "openshell-cli", Scope: "openid"},
+			wantWarn: false,
+		},
+		{
+			name:     "nothing to compare",
+			gateway:  Gateway{ClientID: "openshell-cli"},
+			wantWarn: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := audienceWarning(tt.gateway)
+			if tt.wantWarn {
+				assert.NotEmpty(t, got)
+				// The warning has to name the fix, not just the symptom.
+				assert.Contains(t, got, "audience:server:client_id:openshell-dashboard")
+			} else {
+				assert.Empty(t, got)
+			}
+		})
+	}
+}

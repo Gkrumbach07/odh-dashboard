@@ -79,7 +79,37 @@ type GatewayView struct {
 	Scope          string          `json:"scope,omitempty"`
 	GatewayVersion string          `json:"gatewayVersion,omitempty"`
 	Error          string          `json:"error,omitempty"`
-	Connectable    bool            `json:"connectable"`
+	// Warning names a configuration that will probably fail at the gateway but
+	// cannot be proven wrong from here, so it does not gate Connectable.
+	Warning     string `json:"warning,omitempty"`
+	Connectable bool   `json:"connectable"`
+}
+
+// audienceWarning reports when a gateway's OIDC settings look like they will
+// produce a token the gateway then refuses.
+//
+// A gateway accepts only tokens carrying its own audience. When that audience is
+// not simply the browser's client id, the browser has to ask for it explicitly,
+// and how it asks is provider-specific — Dex wants the scope
+// "audience:server:client_id:<audience>", others use a separate request
+// parameter or a mapped client scope. So the audience being absent from the
+// requested scopes is a strong hint and not a proof.
+//
+// It is reported rather than enforced for exactly that reason. The value is in
+// turning the failure it predicts — a refusal at the gateway, several hops from
+// anything that names the cause — into something visible before anyone signs in.
+func audienceWarning(g Gateway) string {
+	if g.Audience == "" || g.ClientID == "" || g.Audience == g.ClientID {
+		return ""
+	}
+	if strings.Contains(g.Scope, g.Audience) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"gateway audience %q differs from the browser client id %q but is not requested in scope %q; "+
+			"the token will likely be minted for the client id and refused by the gateway "+
+			"(for Dex, add the scope \"audience:server:client_id:%s\")",
+		g.Audience, g.ClientID, g.Scope, g.Audience)
 }
 
 // embeddedUnsupportedFeatures are capabilities a gateway offers on its own
@@ -228,6 +258,11 @@ func (f *OpenShellFleet) Sync(ctx context.Context) error {
 		if old, ok := f.clients[g.ID]; ok {
 			stale = append(stale, old)
 		}
+		if w := audienceWarning(g); w != "" {
+			f.logger.Warn("OpenShell gateway OIDC settings look inconsistent",
+				slog.String("gateway", g.ID), slog.String("detail", w))
+		}
+
 		f.gateways[g.ID] = g
 		f.clients[g.ID] = clients
 		f.apps[g.ID] = newEmbeddedApp(clients, g)
@@ -463,7 +498,9 @@ func (f *OpenShellFleet) viewOf(e fleet.Entry[Discovery]) GatewayView {
 	view.Connectable = len(missing) == 0
 	if !view.Connectable {
 		view.Error = "gateway is missing " + strings.Join(missing, " and ")
+		return view
 	}
+	view.Warning = audienceWarning(g)
 	return view
 }
 

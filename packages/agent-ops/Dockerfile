@@ -43,6 +43,9 @@ RUN go mod download
 # Copy the go source files
 COPY ${BFF_SOURCE_CODE}/cmd/ cmd/
 COPY ${BFF_SOURCE_CODE}/internal/ internal/
+# pkg/ holds fleet, imported by internal/api. It is part of this module, so
+# the build needs the directory itself — go mod download cannot supply it.
+COPY ${BFF_SOURCE_CODE}/pkg/ pkg/
 COPY api/openapi/agent-ops.yaml openapi/src/agent-ops.yaml
 
 # Build the Go application

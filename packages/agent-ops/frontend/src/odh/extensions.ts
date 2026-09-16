@@ -15,10 +15,11 @@ const extensions: (AreaExtension | TabRouteTabExtension | RouteExtension)[] = [
       featureFlags: ['agentOps'],
     },
   },
-  // --- Provider chooser — the "Deployments" tab ---
+  // --- Gateway list — the "Deployments" tab ---
   // ONE tab on the shared `agents-tab-page` (model-registry contributes
-  // "Catalog", a future module "Registry"). Its landing compares sandbox
-  // providers; selecting OpenShell opens the workspace-scoped sandbox view.
+  // "Catalog", a future module "Registry"). Its landing lists the OpenShell
+  // gateways discovered on the cluster; choosing one opens that gateway's
+  // workspace-scoped sandbox view.
   // When sibling tabs are enabled the bar shows them all; when
   // only this one is active, core's single-tab mode hides the lone bar and
   // renders just the page title + this component. Workspaces/projects are

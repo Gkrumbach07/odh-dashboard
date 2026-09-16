@@ -1,32 +1,52 @@
 import * as React from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { Breadcrumb, BreadcrumbItem, PageBreadcrumb } from '@patternfly/react-core';
 import { SandboxDetailPage } from 'openshell-dashboard/pages';
-import { OpenShellConnectGate } from './OpenShellConnection';
+import { OpenShellConnectGate, useOpenShellConnection } from './OpenShellConnection';
 import OpenShellProviders from './OpenShellProviders';
-import { DEPLOYMENTS_PATH, OPENSHELL_PROVIDER_PATH } from './providerRoutes';
+import { DEPLOYMENTS_PATH, gatewayRoute } from './gatewayRoutes';
+
+/**
+ * Trail back out of a sandbox. Rendered inside OpenShellProviders so the middle
+ * crumb can name the gateway the sandbox actually belongs to; it falls back to
+ * the raw id when that gateway has dropped out of discovery, which is still a
+ * true and useful thing to show.
+ */
+const SandboxBreadcrumb: React.FC<{ gatewayId: string; sandbox: string }> = ({
+  gatewayId,
+  sandbox,
+}) => {
+  const { gateway } = useOpenShellConnection();
+
+  return (
+    <PageBreadcrumb hasBodyWrapper={false}>
+      <Breadcrumb>
+        <BreadcrumbItem>
+          <Link to={DEPLOYMENTS_PATH}>All gateways</Link>
+        </BreadcrumbItem>
+        <BreadcrumbItem>
+          <Link to={gatewayRoute(gatewayId)}>{gateway?.name || gatewayId}</Link>
+        </BreadcrumbItem>
+        <BreadcrumbItem isActive>{sandbox}</BreadcrumbItem>
+      </Breadcrumb>
+    </PageBreadcrumb>
+  );
+};
 
 const SandboxDetailWrapper: React.FC = () => {
-  const { workspace, sandbox } = useParams<{
+  const { gatewayId, workspace, sandbox } = useParams<{
+    gatewayId: string;
     workspace: string;
     sandbox: string;
   }>();
-  if (!workspace || !sandbox) {
-    return null;
+
+  if (!gatewayId || !workspace || !sandbox) {
+    return <Navigate to={DEPLOYMENTS_PATH} replace />;
   }
+
   return (
-    <OpenShellProviders requireConnection={false}>
-      <PageBreadcrumb hasBodyWrapper={false}>
-        <Breadcrumb>
-          <BreadcrumbItem>
-            <Link to={DEPLOYMENTS_PATH}>All providers</Link>
-          </BreadcrumbItem>
-          <BreadcrumbItem>
-            <Link to={OPENSHELL_PROVIDER_PATH}>OpenShell</Link>
-          </BreadcrumbItem>
-          <BreadcrumbItem isActive>{sandbox}</BreadcrumbItem>
-        </Breadcrumb>
-      </PageBreadcrumb>
+    <OpenShellProviders gatewayId={gatewayId} requireConnection={false}>
+      <SandboxBreadcrumb gatewayId={gatewayId} sandbox={sandbox} />
       <OpenShellConnectGate>
         <SandboxDetailPage workspace={workspace} sandboxName={sandbox} />
       </OpenShellConnectGate>

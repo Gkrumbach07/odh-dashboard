@@ -87,21 +87,29 @@ func (f *OpenShellFleet) newRouter() *fleet.Router {
 
 // swapToOpenShellToken is the trust boundary.
 //
-// The RHOAI credentials must NOT reach OpenShell. The fronting gateway
-// (kube-auth-proxy) OWNS `Authorization` and `x-forwarded-access-token`, rewriting
-// both to the platform's OpenShift access token — a credential that could be
-// replayed against the cluster API as the user. So the OpenShell token arrives on
-// a dedicated header the gateway passes through untouched, and every RHOAI
-// credential is destroyed here regardless of what follows.
+// The RHOAI credentials must NOT reach OpenShell. A request arrives here having
+// passed two RHOAI hops, and the second one rewrites `Authorization`:
+//
+//	browser → Route → kube-rbac-proxy → dashboard backend → this BFF
+//
+// kube-rbac-proxy authenticates the caller and adds `X-Auth-Request-*`. The
+// dashboard backend then proxies /openshell onward with `authorize: true`, and
+// that hook (backend/src/utils/proxy.ts, setAuthorizationHeader) overwrites
+// `Authorization` with the platform's OWN OpenShift access token — a credential
+// replayable against the cluster API as the user.
+//
+// Neither hop touches any other header, which is what makes a dedicated header
+// the right carrier for the OpenShell token: it arrives untouched, while every
+// RHOAI credential is destroyed here regardless of what follows.
 //
 // This still matters when embedding: the App's auth middleware falls back to
 // `Authorization` when its token header is absent, so leaving the RHOAI token in
 // place would hand it straight to the gateway.
 func swapToOpenShellToken(req *http.Request, _ fleet.Backend) {
 	// ONLY the dedicated header is trusted. There is deliberately no fallback to
-	// Authorization: RHOAI's fronting gateway rewrites that header to the
-	// platform's OWN OpenShift token, so a request that merely omits the
-	// OpenShell token would forward the RHOAI one to the OpenShell gateway
+	// Authorization: by the time a request reaches here that header holds the
+	// platform's OWN OpenShift token (see above), so a request that merely omits
+	// the OpenShell token would forward the RHOAI one to the OpenShell gateway
 	// instead of failing closed. Absent the header, no token is forwarded and
 	// the gateway answers 401, which the browser turns into a sign-in prompt.
 	token := strings.TrimSpace(strings.TrimPrefix(req.Header.Get(OpenShellAuthHeader), "Bearer "))

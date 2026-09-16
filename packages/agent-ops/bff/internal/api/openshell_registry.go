@@ -15,6 +15,9 @@ import (
 	openshellauth "github.com/Gkrumbach07/openshell-dashboard/backend/pkg/auth"
 	openshellsdk "github.com/Gkrumbach07/openshell-dashboard/backend/pkg/sdkclient"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/opendatahub-io/mod-arch-library/bff/pkg/fleet"
 )
 
@@ -351,6 +354,17 @@ func embeddedFeatureFlags() openshellapi.FeatureFlags {
 }
 
 // discover asks the gateway itself whether it is reachable, over gRPC.
+//
+// Readiness here can only ever mean "the gateway answered", never "the gateway
+// served us". This BFF holds no OpenShell credential of its own and must not:
+// every OpenShell token belongs to one browser session, and minting or storing a
+// service-level one would put a credential for the gateway inside the RHOAI
+// trust domain — the thing this whole design exists to prevent.
+//
+// So a gateway running OIDC refuses this call, and that refusal is the strongest
+// evidence of health available: it completed a round trip and answered from
+// application code. Treating it as unreachable would hold every properly secured
+// gateway out of service permanently.
 func (f *OpenShellFleet) discover(ctx context.Context, b fleet.Backend, _ *http.Client) (Discovery, error) {
 	var d Discovery
 	f.mu.RLock()
@@ -362,6 +376,14 @@ func (f *OpenShellFleet) discover(ctx context.Context, b fleet.Backend, _ *http.
 
 	info, err := clients.SDK.Health().GetGatewayInfo(ctx)
 	if err != nil {
+		// An auth refusal is a healthy gateway declining an anonymous caller,
+		// which is exactly what it should do. Anything else — a dial failure, a
+		// timeout, an unimplemented method — means it is genuinely not usable.
+		switch status.Code(err) {
+		case codes.Unauthenticated, codes.PermissionDenied:
+			d.Status = "reachable; gateway requires authentication"
+			return d, nil
+		}
 		return d, fmt.Errorf("gateway unreachable: %w", err)
 	}
 	d.GatewayVersion = info.Version

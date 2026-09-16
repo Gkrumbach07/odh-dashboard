@@ -135,10 +135,19 @@ GET /api/v1/openshell/gateways      (RHOAI embedding — gateway registry, ours,
                                      the gateway's own API, deliberately unversioned)
 ```
 
-In federated mode the browser reaches the `/api` routes through the module's one
-proxy entry, which the dashboard strips: `/agent-ops/api/v1/user` arrives here as
-`/api/v1/user`. `/healthcheck` is not proxied and is called on the BFF port
-directly. Why the two OpenShell paths sit under different parents is in
+The browser always calls `/agent-ops/api/...` — `mod-arch-core` builds one URL
+shape and has no deployment-mode branch — so every `/api` route above is also
+mounted under `/agent-ops`. Federated, the dashboard's proxy entry strips the
+prefix and `/agent-ops/api/v1/user` arrives here as `/api/v1/user`; standalone,
+nothing is in front of the BFF, so the BFF strips it at the mount instead. Both
+spellings reach the same handlers through the same identity middleware; the
+`/agent-ops` alias is not a way around it.
+
+`/healthcheck` has no `/agent-ops` alias: it is probed on the BFF port directly
+and the dashboard proxies only `/agent-ops/api`, so a prefixed healthcheck would
+work standalone and 404 into the dashboard's SPA when federated.
+
+Why the two OpenShell paths sit under different parents is in
 [OpenShell gateway discovery](../docs/openshell-gateway-discovery.md#routing).
 
 ### Sample local calls

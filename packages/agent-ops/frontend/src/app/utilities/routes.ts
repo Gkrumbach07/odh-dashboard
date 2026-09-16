@@ -43,6 +43,25 @@ export const openShellSandboxRoute = (
     workspace,
   )}/sandboxes/${encodeURIComponent(sandbox)}${tab ? `?tab=${encodeURIComponent(tab)}` : ''}`;
 
+/**
+ * Where an OpenShell gateway's IdP sends the browser back to.
+ *
+ * These are the same two paths `openShellAuth` stamps into every UserManager's
+ * `redirect_uri`/`silent_redirect_uri`, spelled here as well because the
+ * standalone router has to register them and importing them from openShellAuth
+ * would drag `oidc-client-ts` into the entry chunk for two strings. The copy is
+ * pinned to the original by `__tests__/routes.spec.ts`, which fails if either
+ * side moves — a drifted redirect URI is one no IdP has been told about, and it
+ * fails at the IdP with no diagnostic in our own logs.
+ *
+ * Both must stay OUTSIDE `proxiedBffPathPrefix` (declared below; asserted by
+ * `__tests__/routes.spec.ts` and `src/odh/__tests__/extensions.spec.ts`): under
+ * it they would be reverse-proxied to the BFF carrying the IdP's authorization
+ * code, and the sign-in they exist to complete would never run in the browser.
+ */
+export const oidcCallbackPath = `${agentsRootPath}/oidc/callback`;
+export const oidcSilentCallbackPath = `${agentsRootPath}/oidc/silent-callback`;
+
 // ─── BFF URLs ────────────────────────────────────────────────────────────────
 // Where the browser reaches this module's BFF. Everything the module sends to
 // its BFF lives under ONE prefix, because the module declares exactly one

@@ -27,13 +27,40 @@ import (
 )
 
 const (
-	Version         = "1.0.0"
-	PathPrefix      = "/mod-arch"
-	ApiPathPrefix   = "/api/v1"
+	Version       = "1.0.0"
+	PathPrefix    = "/mod-arch"
+	ApiPathPrefix = "/api/v1"
+
+	// FrontendPathPrefix is the prefix the BROWSER puts on every request, in both
+	// deployment modes — mod-arch-core builds one URL shape
+	// (`${URL_PREFIX}/api/${BFF_API_VERSION}/...`) and has no deployment-mode
+	// branch to build a second one. Federated, the dashboard's module proxy strips
+	// this prefix before the BFF sees the request; standalone, nothing sits in
+	// front of us, so the BFF strips it itself at the mount. That symmetry is the
+	// point: one URL means no client — and no future client — has to know which
+	// mode it is running in, and a request that is authenticated in one mode
+	// cannot silently take a different route in the other.
+	//
+	// It must stay equal to the `module-federation.proxy[].path` entry in the
+	// package's package.json; that entry is what performs the federated-mode strip.
+	FrontendPathPrefix = "/agent-ops"
+
 	HealthCheckPath = "/healthcheck"
 	UserPath        = ApiPathPrefix + "/user"
 	NamespacePath   = ApiPathPrefix + "/namespaces"
 )
+
+// apiMountPrefixes are every prefix apiRouter answers under, spelled as the
+// BROWSER sends them. Routes() mounts one alias per entry and
+// InjectRequestIdentity gates on the same list, because the middleware wraps the
+// outer mux and so runs BEFORE any StripPrefix — it only ever sees the
+// unstripped path. Two separately maintained lists is how an alias becomes an
+// unauthenticated door into endpoints the other aliases gate, so there is one
+// list and both sites read it.
+//
+// "" is the bare /api/v1 mount the BFF has always served (http.StripPrefix with
+// an empty prefix is the identity wrapper, so it needs no special case).
+var apiMountPrefixes = []string{"", PathPrefix, FrontendPathPrefix}
 
 var hashPattern = regexp.MustCompile(`[.\-][0-9a-f]{8,}`)
 var staticAssetPattern = regexp.MustCompile(`(?i)\.(woff2?|ttf|eot|png|jpe?g|gif|svg|ico|webp|avif|bmp)$`)
@@ -254,9 +281,12 @@ func (app *App) Routes() http.Handler {
 	// App Router
 	appMux := http.NewServeMux()
 
-	// handler for api calls
-	appMux.Handle(ApiPathPrefix+"/", apiRouter)
-	appMux.Handle(PathPrefix+ApiPathPrefix+"/", http.StripPrefix(PathPrefix, apiRouter))
+	// handler for api calls, once per prefix the browser may address us with.
+	// Driven by apiMountPrefixes rather than written out here so the mux and
+	// InjectRequestIdentity cannot disagree about which prefixes exist.
+	for _, prefix := range apiMountPrefixes {
+		appMux.Handle(prefix+ApiPathPrefix+"/", http.StripPrefix(prefix, apiRouter))
+	}
 
 	// The OpenShell tunnel (RHOAI embedding), and only the tunnel. The two
 	// OpenShell surfaces are split by who owns the contract:
@@ -274,7 +304,20 @@ func (app *App) Routes() http.Handler {
 	// Both patterns live under /api and ServeMux matches the longest one, so
 	// "/api/v1/" keeps /api/v1/openshell/gateways on apiRouter while
 	// "/api/openshell/" takes the tunnel.
-	appMux.Handle(OpenShellPathPrefix+"/", app.OpenShellProxyHandler())
+	//
+	// Resolved ONCE and shared by both mounts below: OpenShellProxyHandler logs
+	// "OpenShell routes disabled" when no fleet is configured, and calling it per
+	// mount would print that line once per alias — a startup log that reads like
+	// the same fault happening twice.
+	openShellTunnel := app.OpenShellProxyHandler()
+	appMux.Handle(OpenShellPathPrefix+"/", openShellTunnel)
+	// The standalone alias of the tunnel. Not folded into apiMountPrefixes: that
+	// list is apiRouter's, and every prefix on it is identity-gated, which the
+	// tunnel deliberately is not (its credentials are the gateway's, swapped in
+	// swapToOpenShellToken). The mod-arch alias is absent for the same reason the
+	// tunnel is not versioned — /mod-arch is the starter's own docs/API prefix,
+	// and no browser addresses the tunnel through it.
+	appMux.Handle(FrontendPathPrefix+OpenShellPathPrefix+"/", http.StripPrefix(FrontendPathPrefix, openShellTunnel))
 
 	// file server for the frontend file and SPA routes
 	staticDir := http.Dir(app.config.StaticAssetsDir)
@@ -306,6 +349,13 @@ func (app *App) Routes() http.Handler {
 	// Combines the healthcheck endpoint with the rest of the routes
 	// Apply middleware to appMux which contains the API routes
 	combinedMux := http.NewServeMux()
+	// Deliberately no FrontendPathPrefix alias for the healthcheck. Everything
+	// that probes it — kubelet, the contract-test harness, the Cypress wait-on,
+	// the dev server's own '/healthcheck' proxy entry — reaches this BFF directly,
+	// with no prefix to strip. And in federated mode the dashboard only proxies
+	// "/agent-ops/api", so "/agent-ops/healthcheck" would reach the dashboard's
+	// SPA instead of us: mounting it would manufacture exactly the mode-dependent
+	// URL that FrontendPathPrefix exists to eliminate.
 	combinedMux.Handle(HealthCheckPath, healthcheckMux)
 	if app.openAPI != nil {
 		combinedMux.Handle(OpenAPIPath, app.RecoverPanic(app.EnableTelemetry(http.HandlerFunc(app.openAPI.HandleOpenAPIRedirectWrapper))))

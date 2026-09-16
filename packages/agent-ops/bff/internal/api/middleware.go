@@ -31,10 +31,28 @@ func (app *App) RecoverPanic(next http.Handler) http.Handler {
 	})
 }
 
+// requiresRequestIdentity reports whether a path targets the versioned API and
+// therefore must carry a caller identity.
+//
+// It reads apiMountPrefixes — the same list Routes() mounts apiRouter under —
+// because this middleware wraps the OUTER mux and so runs before any
+// StripPrefix: it sees "/agent-ops/api/v1/user", never the "/api/v1/user" the
+// router will see. Matching only the stripped spelling would let each alias in
+// unauthenticated while the bare mount stayed gated, which is the same endpoint
+// reachable with and without a token depending on how it is spelled.
+func requiresRequestIdentity(path string) bool {
+	for _, prefix := range apiMountPrefixes {
+		if strings.HasPrefix(path, prefix+ApiPathPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (app *App) InjectRequestIdentity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		//skip use headers check if we are not on /api/v1 (i.e. we are on /healthcheck and / (static fe files) )
-		if !strings.HasPrefix(r.URL.Path, ApiPathPrefix) && !strings.HasPrefix(r.URL.Path, PathPrefix+ApiPathPrefix) {
+		if !requiresRequestIdentity(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

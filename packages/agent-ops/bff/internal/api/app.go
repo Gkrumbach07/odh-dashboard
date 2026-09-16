@@ -11,9 +11,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/opendatahub-io/mod-arch-library/bff/internal/integrations/agents"
-	agentsk8s "github.com/opendatahub-io/mod-arch-library/bff/internal/integrations/agents/kubernetes"
-	agentsmock "github.com/opendatahub-io/mod-arch-library/bff/internal/integrations/agents/mock"
 	"github.com/opendatahub-io/mod-arch-library/bff/internal/integrations/bffclient"
 	"github.com/opendatahub-io/mod-arch-library/bff/internal/integrations/bffclient/bffmocks"
 	k8s "github.com/opendatahub-io/mod-arch-library/bff/internal/integrations/kubernetes"
@@ -30,18 +27,12 @@ import (
 )
 
 const (
-	Version                = "1.0.0"
-	PathPrefix             = "/mod-arch"
-	ApiPathPrefix          = "/api/v1"
-	HealthCheckPath        = "/healthcheck"
-	UserPath               = ApiPathPrefix + "/user"
-	NamespacePath          = ApiPathPrefix + "/namespaces"
-	AgentRuntimesPath      = ApiPathPrefix + "/agents/runtimes"
-	AgentRuntimeDetailPath = ApiPathPrefix + "/agents/runtimes/:ns/:name"
-	AgentDeployPath        = ApiPathPrefix + "/agents/deploy"
-	AgentStopPath          = AgentRuntimeDetailPath + "/stop"
-	AgentStartPath         = AgentRuntimeDetailPath + "/start"
-	AgentRestartPath       = AgentRuntimeDetailPath + "/restart"
+	Version         = "1.0.0"
+	PathPrefix      = "/mod-arch"
+	ApiPathPrefix   = "/api/v1"
+	HealthCheckPath = "/healthcheck"
+	UserPath        = ApiPathPrefix + "/user"
+	NamespacePath   = ApiPathPrefix + "/namespaces"
 )
 
 var hashPattern = regexp.MustCompile(`[.\-][0-9a-f]{8,}`)
@@ -125,10 +116,6 @@ func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
 		}
 	}
 
-	if cfg.AuthMethod == config.AuthMethodDisabled && !cfg.MockAgentClient {
-		return nil, fmt.Errorf("AUTH_METHOD=disabled requires MOCK_AGENT_CLIENT=true: Kubernetes-backed agent routes need authenticated access")
-	}
-
 	if cfg.AuthMethod != config.AuthMethodDisabled || cfg.MockK8Client {
 		if cfg.MockK8Client {
 			//mock all k8s calls with 'env test'
@@ -178,15 +165,6 @@ func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
 		bffFactory = bffclient.NewRealClientFactory(bffConfig, rootCAs, cfg.InsecureSkipVerify, logger)
 	}
 
-	var agentSourceFactory agents.ClientFactory
-	if cfg.MockAgentClient {
-		logger.Warn("MOCK_AGENT_CLIENT is enabled (local development only): agent routes serve fabricated demo data without RBAC checks; do not enable in staging or production")
-		agentSourceFactory = &agentsmock.Factory{Client: agentsmock.NewDemoClient()}
-	} else {
-		logger.Info("Using Kubernetes agent data client")
-		agentSourceFactory = agentsk8s.NewFactory(k8sFactory, logger)
-	}
-
 	openAPIHandler, err := NewOpenAPIHandler(logger)
 	if err != nil {
 		logger.Error("failed to create OpenAPI handler; docs routes disabled", slog.Any("error", err))
@@ -216,7 +194,7 @@ func NewApp(cfg config.EnvConfig, logger *slog.Logger) (*App, error) {
 		config:                  cfg,
 		logger:                  logger,
 		kubernetesClientFactory: k8sFactory,
-		repositories:            repositories.NewRepositories(agentSourceFactory),
+		repositories:            repositories.NewRepositories(),
 		openAPI:                 openAPIHandler,
 		testEnv:                 testEnv,
 		rootCAs:                 rootCAs,
@@ -253,28 +231,6 @@ func (app *App) Routes() http.Handler {
 	apiRouter.GET(NamespacePath, app.handlerWithOverride(HandlerNamespacesID, func() httprouter.Handle {
 		return app.GetNamespacesHandler
 	}))
-
-	// Agent routes — K8s RBAC is enforced on actual API calls via impersonation
-	// (AuthMethodInternal) or user token (AuthMethodUser). Detail/mutation routes
-	// have no pre-flight SAR; 403s from K8s are surfaced directly. List uses SAR
-	// in the agent client layer to filter namespaces (performance, not security).
-	apiRouter.GET(AgentRuntimesPath, app.RequireAuthenticatedForAgents(app.ListAgentRuntimesHandler))
-	apiRouter.GET(AgentRuntimeDetailPath,
-		app.AttachNamespaceFromParam("ns",
-			app.RequireAuthenticatedForAgents(app.GetAgentRuntimeDetailHandler)))
-	apiRouter.POST(AgentDeployPath, app.RequireAuthenticatedForAgents(app.DeployAgentHandler))
-	apiRouter.POST(AgentStopPath,
-		app.AttachNamespaceFromParam("ns",
-			app.RequireAuthenticatedForAgents(app.StopAgentHandler)))
-	apiRouter.POST(AgentStartPath,
-		app.AttachNamespaceFromParam("ns",
-			app.RequireAuthenticatedForAgents(app.StartAgentHandler)))
-	apiRouter.POST(AgentRestartPath,
-		app.AttachNamespaceFromParam("ns",
-			app.RequireAuthenticatedForAgents(app.RestartAgentHandler)))
-	apiRouter.DELETE(AgentRuntimeDetailPath,
-		app.AttachNamespaceFromParam("ns",
-			app.RequireAuthenticatedForAgents(app.DeleteAgentHandler)))
 
 	// Inter-BFF Communication routes — wire your target BFF endpoints here.
 	// Example:

@@ -107,11 +107,6 @@ type EnvConfig struct {
 	// When true, BFF clients return mock responses instead of making real HTTP calls.
 	MockBFFClients bool
 
-	// MockAgentClient enables mock mode for the agent data source client.
-	// When true, agent APIs return built-in demo data instead of querying the cluster.
-	// Local development only — routes are live with no RBAC gate; do not enable in staging or production.
-	MockAgentClient bool
-
 	// ─── OPENSHELL (DOUBLE AUTH) ─────────────────────────────────
 	// OpenShell is a *separate* service with its own identity domain. The RHOAI
 	// token authenticates the user to RHOAI and stops at the dashboard boundary;

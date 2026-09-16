@@ -51,9 +51,6 @@ func main() {
 	flag.BoolVar(&cfg.MockBFFClients, "mock-bff-clients",
 		getEnvAsBool("MOCK_BFF_CLIENTS", false),
 		"Enable mock BFF clients (no real HTTP calls to other BFFs)")
-	flag.BoolVar(&cfg.MockAgentClient, "mock-agent-client",
-		getEnvAsBool("MOCK_AGENT_CLIENT", false),
-		"Enable mock agent data client (demo data instead of Kubernetes; local development only)")
 
 	// ─── OpenShell (double auth) ─────────────────────────────────
 	flag.StringVar(&cfg.OpenShellGateways, "openshell-gateways",

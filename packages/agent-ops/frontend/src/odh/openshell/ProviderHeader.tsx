@@ -15,20 +15,15 @@ import {
   StackItem,
   type MenuToggleElement,
 } from '@patternfly/react-core';
-import { CubesIcon, ServerIcon } from '@patternfly/react-icons';
+import { ServerIcon } from '@patternfly/react-icons';
 import { OpenShellConnectionChip } from './OpenShellConnection';
-import { DEPLOYMENTS_PATH, NATIVE_PROVIDER_PATH, OPENSHELL_PROVIDER_PATH } from './providerRoutes';
+import { DEPLOYMENTS_PATH, OPENSHELL_PROVIDER_PATH } from './providerRoutes';
 
-type ProviderHeaderProps = {
-  provider?: 'openshell' | 'native';
-};
+const providerName = 'OpenShell';
 
-const ProviderHeader: React.FC<ProviderHeaderProps> = ({ provider = 'openshell' }) => {
+const ProviderHeader: React.FC = () => {
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = React.useState(false);
-  const isOpenShell = provider === 'openshell';
-  const providerName = isOpenShell ? 'OpenShell' : 'Agent sandbox CRs';
-  const ProviderIcon = isOpenShell ? ServerIcon : CubesIcon;
 
   return (
     <PageSection hasBodyWrapper={false} className="pf-v6-u-py-md">
@@ -57,7 +52,7 @@ const ProviderHeader: React.FC<ProviderHeaderProps> = ({ provider = 'openshell' 
                     ref={toggleRef}
                     isExpanded={isOpen}
                     onClick={() => setIsOpen((open) => !open)}
-                    icon={<ProviderIcon />}
+                    icon={<ServerIcon />}
                     data-testid="provider-selector-toggle"
                   >
                     {providerName}
@@ -67,17 +62,10 @@ const ProviderHeader: React.FC<ProviderHeaderProps> = ({ provider = 'openshell' 
                 <DropdownList>
                   <DropdownItem
                     icon={<ServerIcon />}
-                    isSelected={isOpenShell}
+                    isSelected
                     onClick={() => navigate(OPENSHELL_PROVIDER_PATH)}
                   >
                     OpenShell
-                  </DropdownItem>
-                  <DropdownItem
-                    icon={<CubesIcon />}
-                    isSelected={!isOpenShell}
-                    onClick={() => navigate(NATIVE_PROVIDER_PATH)}
-                  >
-                    Agent sandbox CRs
                   </DropdownItem>
                   <DropdownItem onClick={() => navigate(DEPLOYMENTS_PATH)}>
                     Compare all providers
@@ -85,18 +73,15 @@ const ProviderHeader: React.FC<ProviderHeaderProps> = ({ provider = 'openshell' 
                 </DropdownList>
               </Dropdown>
             </FlexItem>
-            {isOpenShell && (
-              <FlexItem>
-                <OpenShellConnectionChip />
-              </FlexItem>
-            )}
+            <FlexItem>
+              <OpenShellConnectionChip />
+            </FlexItem>
           </Flex>
         </StackItem>
         <StackItem>
           <Content component="p" className="pf-v6-u-mb-0">
-            {isOpenShell
-              ? 'Separate service with its own sign-in. Access is scoped by workspace, independent of your platform projects.'
-              : 'Upstream agent-sandbox custom resources running in your projects, governed by the same RBAC as your other workloads.'}
+            Separate service with its own sign-in. Access is scoped by workspace, independent of
+            your platform projects.
           </Content>
         </StackItem>
       </Stack>

@@ -126,7 +126,7 @@ func TestRequireAccessToService_Allowed(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/runtimes/demo-ns/demo-agent", nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	ctx := context.WithValue(req.Context(), constants.RequestIdentityKey, &k8s.RequestIdentity{UserID: "user@test.com"})
 	ctx = context.WithValue(ctx, constants.NamespaceHeaderParameterKey, "demo-ns")
 	req = req.WithContext(ctx)
@@ -145,7 +145,7 @@ func TestRequireAccessToService_Forbidden(t *testing.T) {
 		t.Fatal("handler should not be called when access is denied")
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/runtimes/demo-ns/demo-agent", nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	ctx := context.WithValue(req.Context(), constants.RequestIdentityKey, &k8s.RequestIdentity{UserID: "user@test.com"})
 	ctx = context.WithValue(ctx, constants.NamespaceHeaderParameterKey, "demo-ns")
 	req = req.WithContext(ctx)
@@ -164,7 +164,7 @@ func TestAttachNamespaceFromParam_InvalidNamespace(t *testing.T) {
 		called = true
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/runtimes/INVALID_NS/demo-agent", nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	rr := httptest.NewRecorder()
 	handler(rr, req, httprouter.Params{{Key: "ns", Value: "INVALID_NS"}})
 
@@ -181,7 +181,7 @@ func TestRequireAuthenticatedForAgents_Allowed(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, AgentRuntimesPath, nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	ctx := context.WithValue(req.Context(), constants.RequestIdentityKey, &k8s.RequestIdentity{UserID: "user@test.com"})
 	req = req.WithContext(ctx)
 
@@ -199,7 +199,7 @@ func TestRequireAuthenticatedForAgents_Unauthorized(t *testing.T) {
 		t.Fatal("handler should not be called without identity")
 	})
 
-	req := httptest.NewRequest(http.MethodGet, AgentRuntimesPath, nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	rr := httptest.NewRecorder()
 	handler(rr, req, nil)
 
@@ -215,7 +215,7 @@ func TestRequireAuthenticatedForAgents_AuthDisabled(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, AgentRuntimesPath, nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	rr := httptest.NewRecorder()
 	handler(rr, req, nil)
 
@@ -234,7 +234,7 @@ func TestRequireAuthenticatedForAgents_DoesNotCallGetClient(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodPost, AgentRuntimesPath, nil)
+	req := httptest.NewRequest(http.MethodPost, NamespacePath, nil)
 	ctx := context.WithValue(req.Context(), constants.RequestIdentityKey, &k8s.RequestIdentity{UserID: "user@test.com"})
 	req = req.WithContext(ctx)
 
@@ -265,7 +265,7 @@ func TestInjectRequestIdentity_SkipsAuthWhenDisabled(t *testing.T) {
 		config: config.EnvConfig{AuthMethod: config.AuthMethodDisabled},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, ApiPathPrefix+"/agents/runtimes", nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	rr := httptest.NewRecorder()
 
 	handlerCalled := false
@@ -285,7 +285,7 @@ func TestInjectRequestIdentity_NilFactoryPanicsWithoutDisabledAuth(t *testing.T)
 		config: config.EnvConfig{AuthMethod: config.AuthMethodInternal},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, ApiPathPrefix+"/agents/runtimes", nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	rr := httptest.NewRecorder()
 
 	assert.Panics(t, func() {

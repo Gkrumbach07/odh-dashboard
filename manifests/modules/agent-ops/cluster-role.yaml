@@ -4,29 +4,6 @@ metadata:
   name: odh-dashboard-agent-ops
 rules:
   - apiGroups:
-      - agents.x-k8s.io
-    verbs:
-      - get
-      - list
-      - patch
-    resources:
-      - sandboxes
-  - apiGroups:
-      - route.openshift.io
-    verbs:
-      - get
-      - list
-    resources:
-      - routes
-  - apiGroups:
-      - mcp.kuadrant.io
-      - mcp.kagenti.com
-    verbs:
-      - get
-      - list
-    resources:
-      - mcpserverregistrations
-  - apiGroups:
       - authorization.k8s.io
     verbs:
       - create

@@ -70,6 +70,7 @@ func (app *App) serverErrorResponse(w http.ResponseWriter, r *http.Request, err 
 	app.errorResponse(w, r, httpError)
 }
 
+//nolint:unused
 func (app *App) serviceUnavailableResponse(w http.ResponseWriter, r *http.Request, err error) {
 	app.LogError(r, err)
 
@@ -77,6 +78,7 @@ func (app *App) serviceUnavailableResponse(w http.ResponseWriter, r *http.Reques
 	app.errorResponse(w, r, httpError)
 }
 
+//nolint:unused
 func (app *App) conflictResponse(w http.ResponseWriter, r *http.Request, err error) {
 	app.LogError(r, err)
 

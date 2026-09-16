@@ -2,7 +2,6 @@
 import type { GenericStaticResponse, RouteHandlerController } from 'cypress/types/net-stubbing';
 import type { Namespace, UserSettings } from 'mod-arch-core';
 import { mockModArchResponse } from 'mod-arch-core';
-import type { AgentRuntimesList, AgentRuntimeDetail } from '~/app/types/agentRuntimes';
 import type { RoleBindingKind } from '../../../shared/types';
 
 export const CLIENT_API_VERSION = 'v1';
@@ -40,16 +39,6 @@ declare global {
           type: 'GET /api/:apiVersion/settings/role_bindings',
           options: { path: { apiVersion: string } },
           response: ApiResponse<RoleBindingKind[]>,
-        ) => Cypress.Chainable<null>) &
-        ((
-          type: 'GET /api/:apiVersion/agents/runtimes',
-          options: { path: { apiVersion: string } },
-          response: ApiResponse<AgentRuntimesList>,
-        ) => Cypress.Chainable<null>) &
-        ((
-          type: 'GET /api/:apiVersion/agents/runtimes/:namespace/:name',
-          options: { path: { apiVersion: string; namespace: string; name: string } },
-          response: ApiResponse<AgentRuntimeDetail>,
         ) => Cypress.Chainable<null>);
     }
   }

@@ -49,32 +49,6 @@ rules:
       - users
       - groups
       - serviceaccounts
-  # Agent Ops — Sandbox CR discovery (list/detail enrichment when modules SA reads on behalf of user)
-  - apiGroups:
-      - agents.x-k8s.io
-    verbs:
-      - get
-      - list
-      - patch
-    resources:
-      - sandboxes
-  # Agent Ops — OpenShift Route lookup for external agent card URL
-  - apiGroups:
-      - route.openshift.io
-    verbs:
-      - get
-      - list
-    resources:
-      - routes
-  # Agent Ops — MCP tool connection discovery (optional CRD)
-  - apiGroups:
-      - mcp.kuadrant.io
-      - mcp.kagenti.com
-    verbs:
-      - get
-      - list
-    resources:
-      - mcpserverregistrations
   # Agent Ops — OpenShell gateway discovery. Gateways are found by listing
   # Services carrying the OpenShell chart's label, and each one's OIDC issuer
   # and audience are read from that gateway's own ConfigMap so they cannot

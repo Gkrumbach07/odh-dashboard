@@ -15,13 +15,6 @@ const extensions: (AreaExtension | TabRouteTabExtension | RouteExtension)[] = [
       featureFlags: ['agentOps'],
     },
   },
-  {
-    type: 'app.area',
-    properties: {
-      id: 'agent-ops-deploy',
-      featureFlags: ['agentOpsDeploy'],
-    },
-  },
   // --- Provider chooser — the "Deployments" tab ---
   // ONE tab on the shared `agents-tab-page` (model-registry contributes
   // "Catalog", a future module "Registry"). Its landing compares sandbox

@@ -18,33 +18,6 @@ func testAppLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
-func TestAgentRoutes_Registered(t *testing.T) {
-	app := testRoutesApp(t)
-
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, AgentRuntimesPath, nil)
-	app.Routes().ServeHTTP(rr, req)
-	assert.Equal(t, http.StatusOK, rr.Code)
-}
-
-func TestAgentRuntimeDetailRoute_Registered(t *testing.T) {
-	app := testRoutesApp(t)
-
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/runtimes/agent-ops-demo/sample-support-agent", nil)
-	app.Routes().ServeHTTP(rr, req)
-	assert.Equal(t, http.StatusOK, rr.Code)
-}
-
-func TestNewApp_AuthDisabledRequiresMockAgentClient(t *testing.T) {
-	_, err := NewApp(config.EnvConfig{
-		AuthMethod:      config.AuthMethodDisabled,
-		MockAgentClient: false,
-	}, testAppLogger())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "MOCK_AGENT_CLIENT")
-}
-
 func TestNewApp_OpenAPIHandlerFailureNonFatal(t *testing.T) {
 	originalWd, err := os.Getwd()
 	require.NoError(t, err)
@@ -57,7 +30,6 @@ func TestNewApp_OpenAPIHandlerFailureNonFatal(t *testing.T) {
 
 	app, err := NewApp(config.EnvConfig{
 		AuthMethod:      config.AuthMethodDisabled,
-		MockAgentClient: true,
 		StaticAssetsDir: t.TempDir(),
 	}, testAppLogger())
 	require.NoError(t, err)
@@ -82,7 +54,7 @@ func TestInjectRequestIdentity_UnauthorizedWithoutToken(t *testing.T) {
 	}))
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, AgentRuntimesPath, nil)
+	req := httptest.NewRequest(http.MethodGet, NamespacePath, nil)
 	handler.ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)

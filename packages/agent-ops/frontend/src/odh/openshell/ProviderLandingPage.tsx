@@ -13,9 +13,9 @@ import {
   StackItem,
   Title,
 } from '@patternfly/react-core';
-import { CheckCircleIcon, CubesIcon, DisconnectedIcon, ServerIcon } from '@patternfly/react-icons';
+import { CheckCircleIcon, DisconnectedIcon, ServerIcon } from '@patternfly/react-icons';
 import { useOpenShellConnection } from './OpenShellConnection';
-import { NATIVE_PROVIDER_PATH, OPENSHELL_PROVIDER_PATH } from './providerRoutes';
+import { OPENSHELL_PROVIDER_PATH } from './providerRoutes';
 
 const ProviderLandingPage: React.FC = () => {
   const navigate = useNavigate();
@@ -84,34 +84,6 @@ const ProviderLandingPage: React.FC = () => {
                       </Button>
                     </FlexItem>
                   )}
-                </Flex>
-              </CardHeader>
-            </Card>
-          </StackItem>
-          <StackItem>
-            <Card isClickable data-testid="native-provider-card">
-              <CardHeader
-                selectableActions={{
-                  selectableActionAriaLabel: 'Open agent sandbox CRs',
-                  onClickAction: () => navigate(NATIVE_PROVIDER_PATH),
-                }}
-              >
-                <Flex alignItems={{ default: 'alignItemsCenter' }} gap={{ default: 'gapLg' }}>
-                  <FlexItem>
-                    <CubesIcon className="pf-v6-u-color-200 pf-v6-u-font-size-2xl" />
-                  </FlexItem>
-                  <FlexItem grow={{ default: 'grow' }}>
-                    <Flex alignItems={{ default: 'alignItemsCenter' }} gap={{ default: 'gapSm' }}>
-                      <FlexItem>
-                        <Title headingLevel="h3" size="xl">
-                          Agent sandbox CRs
-                        </Title>
-                      </FlexItem>
-                    </Flex>
-                    <Content component="p" className="pf-v6-u-mt-sm pf-v6-u-mb-0">
-                      Uses your platform session · scoped by project · terminal and logs only
-                    </Content>
-                  </FlexItem>
                 </Flex>
               </CardHeader>
             </Card>

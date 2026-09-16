@@ -888,12 +888,3 @@ export type AutoragTestData = {
   maxRagPatterns: number;
   optimizationMetric?: string;
 };
-
-export type AgentRuntimesTestData = {
-  pageTitle: string;
-  projectResourceName: string;
-  filterSearchTerm: string;
-  filterOptionStatus: string;
-  statusPending: string;
-  statusReady: string;
-};

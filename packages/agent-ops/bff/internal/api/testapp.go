@@ -4,7 +4,6 @@ import (
 	"log/slog"
 
 	"github.com/opendatahub-io/mod-arch-library/bff/internal/config"
-	agentsmock "github.com/opendatahub-io/mod-arch-library/bff/internal/integrations/agents/mock"
 	k8s "github.com/opendatahub-io/mod-arch-library/bff/internal/integrations/kubernetes"
 	"github.com/opendatahub-io/mod-arch-library/bff/internal/repositories"
 )
@@ -24,9 +23,8 @@ func WithOpenAPIHandler(h *OpenAPIHandler) TestAppOption {
 //   - Downstream code that needs to construct custom App instances
 //   - Integration tests with mocked dependencies
 //
-// When repos is nil, repositories are created without an agent data source.
-// Pass an explicit repositories instance (for example from test helpers) to
-// exercise agent handlers.
+// When repos is nil, a default set of repositories is created. Pass an explicit
+// repositories instance (for example from test helpers) to override them.
 //
 // Tests that call Routes() must pass WithOpenAPIHandler(NewOpenAPIHandler(...)).
 func NewTestApp( //nolint:unused
@@ -37,7 +35,7 @@ func NewTestApp( //nolint:unused
 	opts ...TestAppOption,
 ) *App {
 	if repos == nil {
-		repos = repositories.NewRepositories(&agentsmock.Factory{Client: agentsmock.NewDemoClient()})
+		repos = repositories.NewRepositories()
 	}
 	if logger == nil {
 		logger = slog.Default()

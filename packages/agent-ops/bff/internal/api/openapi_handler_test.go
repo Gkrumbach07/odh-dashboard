@@ -42,7 +42,7 @@ func testRoutesApp(t *testing.T) *App {
 		},
 		testAppLogger(),
 		nil,
-		testRepositoriesWithAgents(),
+		nil,
 		WithOpenAPIHandler(requireTestOpenAPIHandler(t)),
 	)
 }

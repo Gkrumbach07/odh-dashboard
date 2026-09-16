@@ -1,7 +1,6 @@
 import extensions from '~/odh/extensions';
 
 const AGENT_OPS = 'agent-ops';
-const AGENT_OPS_DEPLOY = 'agent-ops-deploy';
 
 const tabs = () => extensions.filter((e) => e.type === 'app.tab-route/tab');
 const routes = () => extensions.filter((e) => e.type === 'app.route');
@@ -18,19 +17,6 @@ describe('agent-ops extensions', () => {
       properties: {
         id: AGENT_OPS,
         featureFlags: ['agentOps'],
-      },
-    });
-  });
-
-  it('should register the deploy mode area with feature flag', () => {
-    const area = extensions.find(
-      (extension) => extension.type === 'app.area' && extension.properties.id === AGENT_OPS_DEPLOY,
-    );
-    expect(area).toMatchObject({
-      type: 'app.area',
-      properties: {
-        id: AGENT_OPS_DEPLOY,
-        featureFlags: ['agentOpsDeploy'],
       },
     });
   });

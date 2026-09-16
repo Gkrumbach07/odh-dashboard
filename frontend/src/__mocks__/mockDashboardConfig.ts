@@ -65,7 +65,6 @@ export type MockDashboardConfigType = {
   globalProjectPrompts?: boolean;
   nimWizard?: boolean;
   agentOps?: boolean;
-  agentOpsDeploy?: boolean;
   agentsCatalog?: boolean;
   roleManagement?: boolean;
   gpuaas?: boolean;
@@ -138,7 +137,6 @@ export const mockDashboardConfig = ({
   globalProjectPrompts = false,
   nimWizard = false,
   agentOps = false,
-  agentOpsDeploy = false,
   agentsCatalog = false,
   roleManagement = true,
   gpuaas = true,
@@ -334,7 +332,6 @@ export const mockDashboardConfig = ({
       globalProjectPrompts,
       nimWizard,
       agentOps,
-      agentOpsDeploy,
       agentsCatalog,
       roleManagement,
       gpuaas,

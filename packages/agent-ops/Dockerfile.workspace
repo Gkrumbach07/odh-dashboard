@@ -70,6 +70,11 @@ ARG TARGETARCH
 
 WORKDIR /usr/src/app
 
+# go-toolset's default user is uid 1001, but buildah creates WORKDIR owned by
+# root, so `go build -o bff` cannot write its output here. Builder stage only —
+# the runtime image below is a separate stage with its own user.
+USER root
+
 # Copy the Go Modules manifests
 COPY ${BFF_SOURCE_CODE}/go.mod ${BFF_SOURCE_CODE}/go.sum ./
 

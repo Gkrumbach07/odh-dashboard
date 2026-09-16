@@ -40,9 +40,10 @@ func (c Codes) or(v, fallback string) string {
 
 // Router dispatches /{Prefix}/{id}/... to the matching backend.
 //
-// It owns the trust boundary: Rewrite runs on every proxied request, which is where
-// a consumer swaps whichever credential the host injected for the one its backend
-// actually accepts. Nothing here knows what those credentials are.
+// It owns the trust boundary: Rewrite runs on every dispatched request — proxied
+// or embedded alike — which is where a consumer swaps whichever credential the
+// host injected for the one its backend actually accepts. Nothing here knows what
+// those credentials are.
 type Router struct {
 	// Prefix is the path segment the router is mounted under, e.g. "/openshell".
 	Prefix string
@@ -64,8 +65,9 @@ type Router struct {
 	// cached per backend id.
 	Handlers func(b Backend) (http.Handler, error)
 	// Rewrite adapts an outbound request for its backend — typically swapping
-	// credentials. Runs after the target host is set. Optional but almost always
-	// wanted: without it the host's own headers travel onward untouched.
+	// credentials. Runs on every dispatched request, proxied or embedded alike,
+	// before the backend sees it. Optional but almost always wanted: without it
+	// the host's own headers travel onward untouched.
 	Rewrite func(req *http.Request, b Backend)
 	// OnResponse may rewrite the backend's response, e.g. to map status codes onto
 	// the consumer's error envelope. Optional.
@@ -152,6 +154,13 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	outbound := req.Clone(req.Context())
 	outbound.URL.Path = rest
+	// Applied here, on the one path every request takes, rather than inside the
+	// reverse proxy's Director. Rewrite is where a consumer destroys the host's
+	// credentials, so it must be impossible for a dispatch mode to skip it: an
+	// embedded backend that missed it would receive the host's own credentials.
+	if r.Rewrite != nil {
+		r.Rewrite(outbound, backend)
+	}
 	handler.ServeHTTP(w, outbound)
 }
 
@@ -207,13 +216,9 @@ func (r *Router) handlerFor(backend Backend) (http.Handler, error) {
 	}
 
 	origDirector := proxy.Director
-	rewrite := r.Rewrite
 	proxy.Director = func(req *http.Request) {
 		origDirector(req)
 		req.Host = target.Host
-		if rewrite != nil {
-			rewrite(req, backend)
-		}
 	}
 
 	if r.OnResponse != nil {

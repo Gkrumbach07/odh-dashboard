@@ -396,3 +396,75 @@ func (s staticLookup) Lookup(id string) (fleet.Backend, bool) {
 	}
 	return fleet.Backend{}, false
 }
+
+// Rewrite is the trust boundary: it is where a consumer destroys the host's
+// credentials and projects the backend's own. A Router that skips it on one of
+// its two dispatch paths forwards the host's credentials to the backend, so this
+// must hold identically whether the backend is proxied to or embedded.
+func TestRewriteRunsOnBothDispatchPaths(t *testing.T) {
+	const hostCred = "Bearer host-credential-that-must-not-escape"
+
+	check := func(t *testing.T, r *fleet.Router) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/p/a/thing", nil)
+		req.Header.Set("Authorization", hostCred)
+		req.Header.Set("X-Backend-Authorization", "Bearer backend-credential")
+		r.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	// The credential swap a consumer would install.
+	swap := func(req *http.Request, _ fleet.Backend) {
+		tok := req.Header.Get("X-Backend-Authorization")
+		req.Header.Del("X-Backend-Authorization")
+		req.Header.Del("Authorization")
+		if tok != "" {
+			req.Header.Set("Authorization", tok)
+		}
+	}
+
+	t.Run("embedded", func(t *testing.T) {
+		var saw string
+		r := &fleet.Router{
+			Prefix:   "/p",
+			Backends: staticLookup{{ID: "a", Name: "A"}},
+			Rewrite:  swap,
+			Logger:   quietLogger(),
+			Handlers: func(fleet.Backend) (http.Handler, error) {
+				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					saw = req.Header.Get("Authorization")
+					w.WriteHeader(http.StatusNoContent)
+				}), nil
+			},
+		}
+		check(t, r)
+		if saw == hostCred {
+			t.Fatalf("the host credential reached the embedded backend: Rewrite was skipped")
+		}
+		if saw != "Bearer backend-credential" {
+			t.Errorf("Authorization = %q, want the backend credential", saw)
+		}
+	})
+
+	t.Run("proxied", func(t *testing.T) {
+		var saw string
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			saw = req.Header.Get("Authorization")
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer upstream.Close()
+
+		r := &fleet.Router{
+			Prefix:   "/p",
+			Backends: staticLookup{{ID: "a", Name: "A", URL: upstream.URL}},
+			Rewrite:  swap,
+			Logger:   quietLogger(),
+		}
+		check(t, r)
+		if saw == hostCred {
+			t.Fatalf("the host credential reached the proxied backend: Rewrite was skipped")
+		}
+		if saw != "Bearer backend-credential" {
+			t.Errorf("Authorization = %q, want the backend credential", saw)
+		}
+	})
+}

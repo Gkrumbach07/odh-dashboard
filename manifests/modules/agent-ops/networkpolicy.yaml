@@ -41,9 +41,21 @@ spec:
           protocol: TCP
         - port: 80
           protocol: TCP
-        # OpenShell gateways: the embedded BFF dials each gateway's gRPC
-        # endpoint directly. Without this no install can be reached and every
-        # gateway reports itself unconnectable.
+    # OpenShell gateways: the embedded BFF dials each gateway's gRPC endpoint
+    # directly, so without this every gateway reports itself unconnectable.
+    #
+    # Selected by the same label discovery keys on, in ANY namespace, rather
+    # than by naming one. Gateways are discovered wherever they are installed,
+    # so pinning a single namespace here silently caps the fleet at whichever
+    # one was named — the rest are found, listed, and then time out.
+    # This is also tighter than opening the ports to 0.0.0.0/0: it reaches
+    # exactly the set of pods discovery is able to find.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openshell
+      ports:
         - port: 8080
           protocol: TCP
         - port: 8443

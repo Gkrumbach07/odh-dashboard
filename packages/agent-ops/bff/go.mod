@@ -1,15 +1,15 @@
 module github.com/opendatahub-io/mod-arch-library/bff
 
-go 1.25.1
+go 1.25.13
 
 require (
-	github.com/Gkrumbach07/openshell-dashboard/backend v0.0.0-20260915144053-73b47ee72ec5
+	github.com/Gkrumbach07/openshell-dashboard/backend v0.0.0-20260916180940-45d3f1f22227
 	github.com/getkin/kin-openapi v0.132.0
 	github.com/google/uuid v1.6.0
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/rs/cors v1.11.1
 	github.com/stretchr/testify v1.11.1
-	google.golang.org/grpc v1.82.1
+	google.golang.org/grpc v1.83.2
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
@@ -17,7 +17,7 @@ require (
 )
 
 require (
-	github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20260902135142-387aea069a8b // indirect
+	github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20260910203850-90dbe5454bb8 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -57,15 +57,15 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/term v0.42.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/term v0.45.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect

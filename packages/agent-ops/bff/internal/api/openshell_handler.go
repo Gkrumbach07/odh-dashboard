@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/julienschmidt/httprouter"
 	"github.com/opendatahub-io/mod-arch-library/bff/pkg/fleet"
 )
 
@@ -19,9 +20,31 @@ import (
 // dispatched to an in-process App instead of forwarded over the network. What
 // remains OpenShell-specific here is the credential swap and how a refusal is
 // reported back.
+//
+// The two OpenShell paths below are DELIBERATELY NOT derived from one another.
+// They sit under different parents because they are owned by different parties:
+//
+//   - OpenShellGatewaysPath is OURS. It is this BFF's own registry endpoint,
+//     versioned under /api/v1 and described in our OpenAPI spec, so it moves when
+//     we version our API.
+//   - OpenShellPathPrefix is the GATEWAY'S API. Everything past /{gatewayId} is
+//     the gateway's own contract, relayed opaquely; stamping a RHOAI version onto
+//     someone else's surface would be a lie about who owns it, so the tunnel is
+//     mounted unversioned under /api.
+//
+// Deriving one from the other collapses that distinction: writing the registry as
+// OpenShellPathPrefix+"/gateways" silently moves it to /api/openshell/gateways,
+// where the tunnel mount swallows it and answers it as gateway id "gateways".
 const (
-	OpenShellPathPrefix   = "/openshell"
-	OpenShellGatewaysPath = OpenShellPathPrefix + "/gateways"
+	// OpenShellPathPrefix is the opaque tunnel: /api/openshell/{gatewayId}/...
+	// relays the gateway's own unversioned API. Not ApiPathPrefix-based on
+	// purpose — see the note above.
+	OpenShellPathPrefix = "/api/openshell"
+
+	// OpenShellGatewaysPath is the registry endpoint we own and version:
+	// /api/v1/openshell/gateways. Spelled out rather than built from
+	// OpenShellPathPrefix on purpose — see the note above.
+	OpenShellGatewaysPath = ApiPathPrefix + "/openshell/gateways"
 
 	// OpenShellAuthHeader is the dedicated header the browser uses to carry the
 	// OpenShell token. RHOAI's data-science-gateway ext-authz rewrites
@@ -33,7 +56,10 @@ const (
 
 // OpenShellGatewaysHandler lists the configured installs with their discovery
 // state. Returns only non-secret client metadata, never a token.
-func (app *App) OpenShellGatewaysHandler(w http.ResponseWriter, r *http.Request) {
+//
+// An httprouter.Handle because it is registered on the BFF's apiRouter alongside
+// every other /api/v1 endpoint, per the BFF handler convention.
+func (app *App) OpenShellGatewaysHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	views := []GatewayView{}
 	if app.openShell != nil {
 		views = app.openShell.Views(r.Context())
@@ -41,8 +67,9 @@ func (app *App) OpenShellGatewaysHandler(w http.ResponseWriter, r *http.Request)
 	writeOpenShellJSON(w, http.StatusOK, map[string]any{"gateways": views})
 }
 
-// OpenShellProxyHandler routes /openshell/{gatewayId}/... to that install's
-// embedded App.
+// OpenShellProxyHandler routes /api/openshell/{gatewayId}/... to that install's
+// embedded App. The browser reaches it at /agent-ops/api/openshell/{gatewayId}/...;
+// the dashboard strips the module prefix before this BFF sees the request.
 //
 // The router belongs to the fleet, not to this call: membership is discovered and
 // can change while the process runs, so the handler registered at startup has to
@@ -93,8 +120,9 @@ func (f *OpenShellFleet) newRouter() *fleet.Router {
 //	browser → Route → kube-rbac-proxy → dashboard backend → this BFF
 //
 // kube-rbac-proxy authenticates the caller and adds `X-Auth-Request-*`. The
-// dashboard backend then proxies /openshell onward with `authorize: true`, and
-// that hook (backend/src/utils/proxy.ts, setAuthorizationHeader) overwrites
+// dashboard backend then proxies the module's single `/agent-ops/api` entry
+// onward (rewritten to `/api`) with `authorize: true`, and that hook
+// (backend/src/utils/proxy.ts, setAuthorizationHeader) overwrites
 // `Authorization` with the platform's OWN OpenShift access token — a credential
 // replayable against the cluster API as the user.
 //
@@ -115,13 +143,32 @@ func swapToOpenShellToken(req *http.Request, _ fleet.Backend) {
 	token := strings.TrimSpace(strings.TrimPrefix(req.Header.Get(OpenShellAuthHeader), "Bearer "))
 
 	req.Header.Del(OpenShellAuthHeader)
-	req.Header.Del("X-Forwarded-Access-Token")
 	req.Header.Del("Authorization")
-	req.Header.Del("X-Auth-Request-User")
-	req.Header.Del("X-Auth-Request-Groups")
-	req.Header.Del("X-Auth-Request-Email")
-	req.Header.Del("X-Auth-Request-Preferred-Username")
+	req.Header.Del("Proxy-Authorization")
 	req.Header.Del("Cookie")
+
+	// Dropped by PREFIX rather than by name. An enumerated list only destroys the
+	// credentials someone remembered to enumerate, and this one already missed
+	// `X-Auth-Request-Access-Token` — which carries the platform's OpenShift token
+	// on 4.19+, where the ext-authz filter COPIES it onto `Authorization` and
+	// `X-Forwarded-Access-Token` rather than moving it (see docs/architecture.md).
+	// The whole `X-Auth-Request-*` family is oauth2-proxy identity, so the family
+	// is the right unit: a new member added upstream is destroyed by default
+	// instead of silently becoming a leak.
+	for name := range req.Header {
+		if strings.HasPrefix(http.CanonicalHeaderKey(name), "X-Auth-Request-") {
+			req.Header.Del(name)
+		}
+	}
+
+	// The oauth2-proxy identity subset of X-Forwarded-*, named explicitly because
+	// the rest of that family (For, Host, Proto) is routing metadata the upstream
+	// legitimately needs, not a credential.
+	req.Header.Del("X-Forwarded-Access-Token")
+	req.Header.Del("X-Forwarded-User")
+	req.Header.Del("X-Forwarded-Email")
+	req.Header.Del("X-Forwarded-Groups")
+	req.Header.Del("X-Id-Token")
 
 	if token != "" {
 		// Project onto both so no RHOAI token value can reach the gateway

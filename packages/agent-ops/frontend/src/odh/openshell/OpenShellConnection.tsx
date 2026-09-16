@@ -29,6 +29,7 @@ import {
   ServerIcon,
 } from '@patternfly/react-icons';
 import { setApiBasePath, setAuthTokenGetter, setAuthTokenHeader } from 'openshell-dashboard/api';
+import { openShellGatewayApiBasePath } from '~/app/utilities/routes';
 import {
   connect,
   disconnect,
@@ -71,9 +72,11 @@ export type GatewayRegistryValue = {
   /** A refresh is in flight over data already on screen. */
   isRefreshing: boolean;
   /**
-   * OpenShell discovery is not set up on this cluster at all: the router does
-   * not serve the routes and answers 404. Not an error — a calm "nothing here
-   * yet" that reads differently from "we could not find out".
+   * Nothing serves the gateway registry endpoint on this deployment: it
+   * answered 404. Not an error — a calm "nothing here yet" that reads
+   * differently from "we could not find out". (A BFF that IS there but has no
+   * gateway discovery configured answers 200 with an empty list, which arrives
+   * as zero gateways rather than as this flag.)
    */
   isNotConfigured: boolean;
   /** Discovery failed and there is nothing behind it to show. */
@@ -334,12 +337,16 @@ let boundGatewayId: string | null = null;
  * Points the package's client at one gateway. Base path and token getter move
  * together and are never written apart, so a token minted for one gateway can
  * only ever be sent to that gateway's subtree.
+ *
+ * The base path is derived (see routes.ts) so that every request this client
+ * makes rides the module's single reverse-proxied prefix, the same one every
+ * other agent-ops request uses.
  */
 const bindGateway = (gatewayId: string): void => {
   if (boundGatewayId === gatewayId) {
     return;
   }
-  setApiBasePath(`/openshell/${gatewayId}`);
+  setApiBasePath(openShellGatewayApiBasePath(gatewayId));
   setAuthTokenHeader(OPENSHELL_AUTH_HEADER);
   setAuthTokenGetter(() => getToken(gatewayId));
   boundGatewayId = gatewayId;

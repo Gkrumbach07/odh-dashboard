@@ -85,15 +85,28 @@ func TestParseBackends(t *testing.T) {
 }
 
 func TestSplitPath(t *testing.T) {
-	for _, c := range []struct{ in, id, rest string }{
-		{"/p/a/x/y", "a", "/x/y"},
-		{"/p/a/", "a", "/"},
-		{"/p/a", "a", "/"},
-		{"/p/", "", "/"},
+	for _, c := range []struct{ prefix, in, id, rest string }{
+		{"/p", "/p/a/x/y", "a", "/x/y"},
+		{"/p", "/p/a/", "a", "/"},
+		{"/p", "/p/a", "a", "/"},
+		{"/p", "/p/", "", "/"},
+
+		// A Router may be mounted several segments deep — agent-ops mounts its
+		// OpenShell fleet at "/api/openshell". SplitPath trims the prefix
+		// literally, not segment by segment, so a multi-segment prefix works;
+		// this pins that contract here rather than only in the consumer, because
+		// pkg/fleet is meant to be lifted by other teams.
+		{"/a/b", "/a/b/one/x/y", "one", "/x/y"},
+		{"/a/b", "/a/b/one/", "one", "/"},
+		{"/a/b", "/a/b/one", "one", "/"},
+		{"/a/b", "/a/b/", "", "/"},
+		// The id must come from the segment after the whole prefix, not from a
+		// segment inside it.
+		{"/a/b", "/a/b/b/x", "b", "/x"},
 	} {
-		id, rest := fleet.SplitPath("/p", c.in)
+		id, rest := fleet.SplitPath(c.prefix, c.in)
 		if id != c.id || rest != c.rest {
-			t.Errorf("SplitPath(%q) = %q,%q want %q,%q", c.in, id, rest, c.id, c.rest)
+			t.Errorf("SplitPath(%q, %q) = %q,%q want %q,%q", c.prefix, c.in, id, rest, c.id, c.rest)
 		}
 	}
 }
@@ -467,4 +480,50 @@ func TestRewriteRunsOnBothDispatchPaths(t *testing.T) {
 			t.Errorf("Authorization = %q, want the backend credential", saw)
 		}
 	})
+}
+
+// `Upgrade` is a protocol LIST. A guard that compares the whole header against
+// "websocket" refuses the plain form and waves through the same request with a
+// second protocol appended — so the refusal is worth exactly nothing against a
+// caller who adds one. These are the strings that used to get through.
+func TestRejectUpgradesParsesTheProtocolList(t *testing.T) {
+	r := &fleet.Router{
+		Prefix:         "/p",
+		Backends:       staticLookup{{ID: "a", Name: "A"}},
+		Logger:         quietLogger(),
+		RejectUpgrades: true,
+		Handlers: func(fleet.Backend) (http.Handler, error) {
+			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}), nil
+		},
+	}
+
+	for _, header := range []string{
+		"websocket",
+		"WebSocket",
+		" websocket ",
+		"websocket, h2c",
+		"h2c, websocket",
+		"h2c,WebSocket",
+	} {
+		t.Run(header, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/p/a/x", nil)
+			req.Header.Set("Upgrade", header)
+			rr := httptest.NewRecorder()
+			r.ServeHTTP(rr, req)
+			if rr.Code != http.StatusNotImplemented {
+				t.Fatalf("Upgrade: %q was dispatched (status %d); it must be refused", header, rr.Code)
+			}
+		})
+	}
+
+	// Not an upgrade request: an unrelated protocol must still route normally.
+	req := httptest.NewRequest(http.MethodGet, "/p/a/x", nil)
+	req.Header.Set("Upgrade", "h2c")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("a non-websocket upgrade must still route: got %d", rr.Code)
+	}
 }

@@ -1,5 +1,5 @@
 import { UserManager, WebStorageStateStore, type User } from 'oidc-client-ts';
-import { agentsRootPath, gatewayRoute } from '~/app/utilities/routes';
+import { agentsRootPath, gatewayRoute, openShellGatewayRegistryUrl } from '~/app/utilities/routes';
 
 /**
  * Browser-side OpenShell authentication for the RHOAI embedding.
@@ -67,10 +67,15 @@ export type OpenShellGateway = {
 };
 
 /**
- * Outcome of asking the router for the gateway registry. A cluster with no
- * OpenShell discovery configured is not a failure — the router disables the
- * whole `/openshell` subtree and answers 404 — so it gets its own variant
- * rather than being reported as a broken request.
+ * Outcome of asking the BFF for the gateway registry. A 404 is not a failure —
+ * it means nothing serves the registry endpoint at this URL, which is what a
+ * deployment without this module's BFF behind the dashboard proxy looks like —
+ * so it gets its own variant rather than being reported as a broken request.
+ *
+ * It is NOT what a cluster with OpenShell discovery switched off looks like:
+ * the BFF registers the registry route unconditionally and answers 200 with an
+ * empty gateway list (OpenShellGatewaysHandler), which lands in `ok` with no
+ * gateways. Only the per-gateway tunnel is refused in that case, with 503.
  */
 export type GatewayRegistrySnapshot =
   | { status: 'ok'; gateways: OpenShellGateway[] }
@@ -79,11 +84,16 @@ export type GatewayRegistrySnapshot =
 
 /**
  * Dedicated request header that carries the OpenShell token from the browser to
- * the dashboard's OpenShell router. RHOAI's data-science-gateway ext-authz
- * (kube-auth-proxy) rewrites `Authorization` and `x-forwarded-access-token` to the
- * platform's own OpenShift token, so the OpenShell token cannot ride either — it
- * travels on this custom header (passed through untouched) and the router
- * translates it into the relay's x-forwarded-access-token.
+ * the agent-ops BFF. RHOAI's data-science-gateway ext-authz (kube-auth-proxy)
+ * rewrites `Authorization` and `x-forwarded-access-token` to the platform's own
+ * OpenShift token, so the OpenShell token cannot ride either — it travels on this
+ * custom header, which every RHOAI hop passes through untouched.
+ *
+ * At the BFF this header is the only credential trusted: swapToOpenShellToken
+ * deletes every RHOAI credential from the request and projects this token onto
+ * both `Authorization` and `x-forwarded-access-token` for the OpenShell App. That
+ * App is EMBEDDED in the agent-ops BFF and dispatched to in-process — there is no
+ * relay service and no extra network hop (see bff/internal/api/openshell_registry.go).
  * Must match OpenShellAuthHeader in openshell_handler.go.
  */
 export const OPENSHELL_AUTH_HEADER = 'X-OpenShell-Authorization';
@@ -96,11 +106,17 @@ export const OPENSHELL_SESSION_EXPIRED_EVENT = 'openshell:session-expired';
 // redirect URIs no IdP has ever been told about.
 const AGENTS_ROOT = agentsRootPath;
 /**
- * Callback routes are registered as SPA routes OUTSIDE the /openshell/* prefix
- * (which is reverse-proxied to the BFF) so they resolve in the browser. One path
- * serves every gateway; the gateway being completed is carried in sessionStorage
- * and cross-checked against the OIDC `state`, so each gateway's IdP only needs
- * this single redirect URI registered.
+ * Callback routes are registered as SPA routes OUTSIDE `proxiedBffPathPrefix`
+ * (`/agent-ops/api/*`, the module's one reverse-proxied prefix) so they resolve
+ * in the browser. That is an invariant, not a preference: a callback under the
+ * proxied prefix would be forwarded to the BFF carrying the IdP's authorization
+ * code in its query string, handing a credential to a service that has no
+ * business seeing it — and the sign-in it was meant to complete would never run.
+ * Asserted by src/odh/__tests__/extensions.spec.ts.
+ *
+ * One path serves every gateway; the gateway being completed is carried in
+ * sessionStorage and cross-checked against the OIDC `state`, so each gateway's
+ * IdP only needs this single redirect URI registered.
  */
 export const OIDC_CALLBACK_PATH = `${AGENTS_ROOT}/oidc/callback`;
 export const OIDC_SILENT_CALLBACK_PATH = `${AGENTS_ROOT}/oidc/silent-callback`;
@@ -231,17 +247,21 @@ const toGateway = (entry: unknown): OpenShellGateway | null => {
 };
 
 /**
- * Fetches the registry of installs from the dashboard's OpenShell router.
+ * Fetches the registry of installs from the agent-ops BFF.
  *
  * Never rejects: the caller has to tell three outcomes apart to render them
- * differently — gateways, a cluster where OpenShell was never configured (404,
- * because the router does not register the subtree at all), and a request that
- * genuinely failed — and a thrown error collapses the first two into the third.
+ * differently — gateways, a deployment that serves no registry endpoint at this
+ * URL at all (404), and a request that genuinely failed — and a thrown error
+ * collapses the first two into the third.
+ *
+ * The URL is derived (see routes.ts) rather than written out here: it has to
+ * agree with the module's single module-federation proxy entry, and it is the
+ * one request in this file that is NOT made by the openshell-dashboard client.
  */
 export const fetchGateways = async (): Promise<GatewayRegistrySnapshot> => {
   let res: Response;
   try {
-    res = await fetch('/openshell/gateways', { credentials: 'same-origin' });
+    res = await fetch(openShellGatewayRegistryUrl, { credentials: 'same-origin' });
   } catch (e) {
     return { status: 'error', message: e instanceof Error ? e.message : 'Network error' };
   }

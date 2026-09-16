@@ -55,6 +55,26 @@ paths:
       operationId: getNamespaces
       summary: Get Available Namespaces
       description: Returns available namespaces in the cluster.
+  /api/v1/openshell/gateways:
+    summary: Path used to list the configured OpenShell gateways.
+    description: >-
+      The REST endpoint/path used to list the OpenShell gateways this deployment
+      knows about, together with their discovery state.
+    get:
+      tags:
+        - OpenShell
+      responses:
+        "200":
+          $ref: "#/components/responses/OpenShellGatewaysResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+      operationId: getOpenShellGateways
+      summary: Get OpenShell gateways
+      description: >-
+        Returns every configured OpenShell gateway with its discovery state. Only
+        non-secret client metadata is returned, never a token.
   /api/v1/user:
     summary: Path used to Retrieve a user based on the header.
     description: >-
@@ -108,6 +128,85 @@ components:
           type: string
           example: "1.0.0"
           description: BFF version string
+    OpenShellGateway:
+      description: >-
+        One OpenShell gateway as this deployment sees it: its identity, the public
+        OIDC client metadata a browser needs to sign in to it, and whatever the
+        gateway has reported about itself so far.
+      type: object
+      required:
+        - features
+        - id
+        - name
+        - connectable
+      properties:
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: >-
+            The gateway's feature surface as embedded here. Capabilities the
+            embedding cannot carry are reported false: terminal needs a WebSocket,
+            and a browser cannot put a bearer on a protocol upgrade.
+          example:
+            terminal: false
+            fileTransfer: true
+            settings: true
+        id:
+          type: string
+          description: Stable identifier for this gateway.
+          example: production
+        name:
+          type: string
+          description: Display name, as shown in the gateway switcher.
+          example: Production
+        consoleUrl:
+          type: string
+          description: >-
+            Link to this install's standalone console, for capabilities the
+            embedding cannot carry. Absent when the gateway configures none.
+          example: "https://openshell.apps.example.com"
+        issuer:
+          type: string
+          description: >-
+            OIDC issuer for this gateway's identity domain. Absent when the gateway
+            does not configure one, in which case it is not connectable.
+          example: "https://dex.apps.example.com"
+        clientId:
+          type: string
+          description: >-
+            Public OIDC client id the browser signs in with. Absent when the gateway
+            does not configure one, in which case it is not connectable.
+          example: rhoai-dashboard
+        audience:
+          type: string
+          description: Audience the gateway requires on the token it is sent.
+          example: openshell-gateway
+        scope:
+          type: string
+          description: Scopes the browser should request for this gateway.
+          example: openid profile
+        gatewayVersion:
+          type: string
+          description: >-
+            Version the gateway reported about itself. Present only once the gateway
+            has answered.
+          example: "1.4.0"
+        error:
+          type: string
+          description: Why this gateway is not usable, when it is not.
+          example: gateway has not been reached yet
+        warning:
+          type: string
+          description: >-
+            A configuration that will probably fail at the gateway but cannot be
+            proven wrong from here, so it does not gate connectable.
+        connectable:
+          type: boolean
+          description: >-
+            Whether the browser has everything it needs to start a sign-in flow
+            against this gateway.
+          example: true
     Error:
       description: Error code and message.
       required:
@@ -191,6 +290,22 @@ components:
               data:
                 $ref: "#/components/schemas/Config"
       description: A response containing a list of Config entities.
+    OpenShellGatewaysResponse:
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - gateways
+            properties:
+              gateways:
+                type: array
+                description: >-
+                  Every configured gateway, including those not currently
+                  connectable. Empty when none is configured.
+                items:
+                  $ref: "#/components/schemas/OpenShellGateway"
+      description: A response containing the configured OpenShell gateways.
 
   securitySchemes:
     Bearer:
@@ -203,3 +318,5 @@ security:
 tags:
   - name: K8SOperation
     description: Operation performed in Kubernetes
+  - name: OpenShell
+    description: Operation against the OpenShell gateway registry

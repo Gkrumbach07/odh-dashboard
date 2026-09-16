@@ -328,9 +328,9 @@ const GatewayLandingPage: React.FC = () => {
       </EmptyState>
     );
   } else if (isNotConfigured) {
-    // The router does not serve /openshell at all on this cluster. Nothing is
-    // broken and nothing was searched — a different sentence from "we looked and
-    // found none".
+    // Nothing served the gateway registry endpoint at all — it answered 404.
+    // Nothing is broken and nothing was searched: a different sentence from "we
+    // looked and found none".
     body = (
       <EmptyState
         variant="lg"

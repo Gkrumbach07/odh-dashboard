@@ -168,14 +168,14 @@ func TestOpenShellRoutesDisabledWithoutGateways(t *testing.T) {
 	app := newTestApp(config.EnvConfig{})
 
 	rr := httptest.NewRecorder()
-	app.OpenShellProxyHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/openshell/x/y", nil))
+	app.OpenShellProxyHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/openshell/x/y", nil))
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 	var body map[string]string
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
 	assert.Equal(t, "openshell_disabled", body["code"])
 
 	rr = httptest.NewRecorder()
-	app.OpenShellGatewaysHandler(rr, httptest.NewRequest(http.MethodGet, OpenShellGatewaysPath, nil))
+	app.OpenShellGatewaysHandler(rr, httptest.NewRequest(http.MethodGet, OpenShellGatewaysPath, nil), nil)
 	require.Equal(t, http.StatusOK, rr.Code)
 	var list struct {
 		Gateways []GatewayView `json:"gateways"`
@@ -184,13 +184,15 @@ func TestOpenShellRoutesDisabledWithoutGateways(t *testing.T) {
 	assert.Empty(t, list.Gateways)
 }
 
-// SplitPath is generic; this pins the OpenShell prefix behaviour the routes rely on.
+// SplitPath is generic; this pins the OpenShell prefix behaviour the routes rely
+// on. The prefix is multi-segment ("/api/openshell"), which SplitPath handles
+// because it trims the prefix literally rather than segment by segment.
 func TestSplitGatewayPath(t *testing.T) {
 	for _, c := range []struct{ in, wantID, wantRest string }{
-		{"/openshell/prod/api/v1/workspaces", "prod", "/api/v1/workspaces"},
-		{"/openshell/prod/", "prod", "/"},
-		{"/openshell/prod", "prod", "/"},
-		{"/openshell/", "", "/"},
+		{"/api/openshell/prod/api/v1/workspaces", "prod", "/api/v1/workspaces"},
+		{"/api/openshell/prod/", "prod", "/"},
+		{"/api/openshell/prod", "prod", "/"},
+		{"/api/openshell/", "", "/"},
 	} {
 		id, rest := fleet.SplitPath(OpenShellPathPrefix, c.in)
 		assert.Equal(t, c.wantID, id, "id for %q", c.in)

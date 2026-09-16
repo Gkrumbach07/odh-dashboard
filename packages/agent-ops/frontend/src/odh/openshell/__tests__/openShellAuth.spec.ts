@@ -81,7 +81,33 @@ describe('fetchGateways', () => {
     window.fetch = mockFetch;
   });
 
-  it('should report a cluster without OpenShell discovery as not-configured rather than an error', async () => {
+  it('should request the registry under the proxied BFF prefix, not the gateway tunnel', async () => {
+    respondWith(200, { gateways: [] });
+
+    await fetchGateways();
+
+    // Asserted as the literal wire path rather than against the constant the
+    // code builds it from: this path has to line up with two things outside
+    // this repo's type system — the module-federation proxy entry
+    // ('/agent-ops/api' -> '/api') and the BFF's OpenShellGatewaysPath
+    // ('/api/v1/openshell/gateways') — and a test that re-derived it would
+    // agree with the code no matter where the code moved.
+    expect(mockFetch).toHaveBeenCalledWith('/agent-ops/api/v1/openshell/gateways', {
+      credentials: 'same-origin',
+    });
+
+    // The registry is ours and versioned; the tunnel is the gateway's API and
+    // is not. Under the tunnel mount the next segment IS the gateway id, so a
+    // registry request sent there is answered as a request for a gateway called
+    // "gateways" — a wrong answer, not an error.
+    const url = String(mockFetch.mock.calls[0][0]);
+    expect(url.startsWith('/agent-ops/api/openshell/')).toBe(false);
+  });
+
+  // A 404 means nothing serves the registry endpoint at this URL. It is NOT what
+  // a BFF with gateway discovery switched off looks like — that one answers 200
+  // with an empty list.
+  it('should report a deployment that serves no registry endpoint as not-configured', async () => {
     respondWith(404);
 
     await expect(fetchGateways()).resolves.toStrictEqual({ status: 'not-configured' });
@@ -427,5 +453,33 @@ describe('handleCallback', () => {
     const after = getConnectionState('gw');
     expect(after.status).toBe('connected');
     expect(after.error).toBe('gateway unreachable');
+  });
+});
+
+/**
+ * These two constants become the `redirect_uri` and `silent_redirect_uri` that
+ * every gateway's IdP has registered, so they are pinned as literals.
+ *
+ * Nothing in the type system connects them to the SPA routes in extensions.ts —
+ * that file hardcodes its own copy of the same strings. Both copies are asserted
+ * against the SAME literal (here, and in odh/__tests__/extensions.spec.ts) so a
+ * drift on either side fails a test. Asserting them against each other, or
+ * re-deriving either from the constant, would follow the value wherever it moved
+ * and prove nothing.
+ */
+describe('OIDC callback paths', () => {
+  it('should stay on the exact paths registered with every gateway IdP', () => {
+    expect(OIDC_CALLBACK_PATH).toBe('/ai-hub/agents/oidc/callback');
+    expect(OIDC_SILENT_CALLBACK_PATH).toBe('/ai-hub/agents/oidc/silent-callback');
+  });
+
+  it('should stay out of the reverse-proxied BFF prefix', () => {
+    // A callback under /agent-ops/api is proxied to the BFF, so the IdP would
+    // deliver the authorization code to a service that has no business seeing
+    // it, and the browser-side sign-in would never run.
+    [OIDC_CALLBACK_PATH, OIDC_SILENT_CALLBACK_PATH].forEach((p) => {
+      expect(p.startsWith('/agent-ops/api/')).toBe(false);
+      expect(p).not.toBe('/agent-ops/api');
+    });
   });
 });

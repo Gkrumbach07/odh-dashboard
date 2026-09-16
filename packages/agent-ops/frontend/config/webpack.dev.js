@@ -78,17 +78,29 @@ module.exports = smp.wrap(
         hot: true,
         open: false,
         proxy: [
+          // ORDER IS LOAD-BEARING — this entry MUST stay before the one below.
+          // http-proxy-middleware is first-match-wins, and this context is a
+          // strict prefix-subset of '/agent-ops/api' in that entry. Reorder them
+          // and every OpenShell gateway request goes to the agent-ops BFF
+          // instead of the gateway, with no error anywhere to say so.
           {
-            // LOCAL DEV: OpenShell API → port-forwarded relay BFF, translating
-            // the dedicated dev header into what the relay expects (mirrors the
-            // agent-ops BFF's translation) so no local BFF is needed. Trailing
-            // slash so it does NOT catch the SPA route '/openshell-preview'.
-            context: ['/openshell/'],
+            // LOCAL DEV: the per-gateway OpenShell tunnel → a port-forwarded
+            // OpenShell backend, translating the dedicated dev header into what
+            // that backend expects (mirrors the agent-ops BFF's
+            // swapToOpenShellToken) so no local agent-ops BFF is needed to work
+            // on gateway pages. Trailing slash so it matches only the subtree.
+            //
+            // The gateway REGISTRY is deliberately NOT here: it lives at
+            // /agent-ops/api/v1/openshell/gateways, is served by the agent-ops
+            // BFF itself, and falls through to the entry below.
+            context: ['/agent-ops/api/openshell/'],
             target: process.env.OPENSHELL_RELAY_URL || 'http://localhost:8081',
             changeOrigin: true,
-            // Strip the /openshell prefix so the relay sees its own /api/v1/...
-            // (mirrors the agent-ops BFF's director).
-            pathRewrite: { '^/openshell': '' },
+            // Strip the prefix the dashboard proxy would strip in a real
+            // deployment, leaving '/{gatewayId}/api/v1/...'. Note this does NOT
+            // strip the gateway id the way the BFF's fleet router does — kept as
+            // it was, so a dev target still sees the id segment.
+            pathRewrite: { '^/agent-ops/api/openshell': '' },
             onProxyReq: (proxyReq) => {
               const t = proxyReq.getHeader('x-openshell-authorization');
               if (t) {

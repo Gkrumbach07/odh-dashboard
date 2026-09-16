@@ -45,7 +45,7 @@ open http://localhost:4000/mod-arch/swagger-ui
 curl -s http://localhost:4000/mod-arch/openapi.json | jq .info
 ```
 
-**Federated dev note:** the Module Federation dev proxy forwards `/agent-ops/api` and `/healthcheck` only. Open Swagger against the BFF port directly (for example `4021` when using `bffConfig.port`).
+**Federated dev note:** agent-ops declares a single Module Federation proxy entry, `/agent-ops/api` → `/api`, so only `/agent-ops/api/...` reaches this BFF through the dashboard — the `/mod-arch/...` Swagger routes and `/healthcheck` do not. Open Swagger against the BFF port directly (for example `4021` when using `bffConfig.port`).
 
 ## Development
 
@@ -130,7 +130,16 @@ JSON API endpoints plus static asset serving (index.html fallback):
 GET /healthcheck
 GET /api/v1/user
 GET /api/v1/namespaces              (dev / mock mode only)
+GET /api/v1/openshell/gateways      (RHOAI embedding — gateway registry, ours, versioned)
+    /api/openshell/{gatewayId}/...  (RHOAI embedding — opaque tunnel to that gateway,
+                                     the gateway's own API, deliberately unversioned)
 ```
+
+In federated mode the browser reaches the `/api` routes through the module's one
+proxy entry, which the dashboard strips: `/agent-ops/api/v1/user` arrives here as
+`/api/v1/user`. `/healthcheck` is not proxied and is called on the BFF port
+directly. Why the two OpenShell paths sit under different parents is in
+[OpenShell gateway discovery](../docs/openshell-gateway-discovery.md#routing).
 
 ### Sample local calls
 

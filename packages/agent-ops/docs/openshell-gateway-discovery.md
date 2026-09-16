@@ -87,6 +87,28 @@ gateway the moment a second one appeared.
 
 Use the `id` annotation only to *preserve* an id already in use.
 
+## Routing
+
+agent-ops declares **one** module-federation proxy entry, the same as every other
+module: `/agent-ops/api` → `/api`. Both OpenShell surfaces live under it, so the
+module's traffic stays inside the module's own prefix rather than one module
+claiming a top-level `/openshell` path on the dashboard.
+
+| Browser | What the BFF sees | Whose contract |
+|---|---|---|
+| `/agent-ops/api/v1/openshell/gateways` | `/api/v1/openshell/gateways` | ours — the gateway registry |
+| `/agent-ops/api/openshell/{gatewayId}/...` | `/api/openshell/{gatewayId}/...` | the gateway's — the opaque tunnel |
+
+The registry is versioned and described in `api/openapi/agent-ops.yaml`; it moves
+when we version our API. The tunnel is deliberately **not** versioned: everything
+past `{gatewayId}` is the gateway's own surface, relayed as-is, and stamping an
+RHOAI version onto someone else's contract would misstate who owns it.
+
+The two are therefore spelled out separately in the BFF rather than one derived
+from the other. Writing the registry as *tunnel prefix* + `/gateways` silently
+moves it to `/api/openshell/gateways`, where the tunnel mount swallows it and
+answers it as a gateway with the id `gateways`.
+
 ## Dashboard configuration
 
 | Param | Meaning |
@@ -134,6 +156,6 @@ found, and cannot enumerate anything else. To narrow further, set
 ## Not covered
 
 Discovery finds gateways; it does not decide who may use one. Every gateway listed
-by `/openshell/gateways` is visible to any RHOAI user who can reach the Agents
-area, and authorization happens at the gateway, against the OpenShell token. A user
-who cannot sign in to a gateway's IdP sees it listed and fails at Connect.
+by `/api/v1/openshell/gateways` is visible to any RHOAI user who can reach the
+Agents area, and authorization happens at the gateway, against the OpenShell token.
+A user who cannot sign in to a gateway's IdP sees it listed and fails at Connect.

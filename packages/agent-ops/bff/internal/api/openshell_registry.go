@@ -34,7 +34,7 @@ import (
 
 // Gateway is one OpenShell install as configured for this dashboard.
 type Gateway struct {
-	// ID is the stable path segment: /openshell/{id}/...
+	// ID is the stable path segment: /api/openshell/{id}/...
 	ID string `json:"id"`
 	// Name is what the gateway switcher shows.
 	Name string `json:"name"`
@@ -419,7 +419,7 @@ func (f *OpenShellFleet) Handler(b fleet.Backend) (http.Handler, error) {
 	return mapRefusals(app.Routes(), b.Name), nil
 }
 
-// Router serves /openshell/{gatewayId}/... It is owned by the fleet rather than
+// Router serves /api/openshell/{gatewayId}/... It is owned by the fleet rather than
 // built per call so that Sync can invalidate its handler cache.
 func (f *OpenShellFleet) Router() http.Handler { return f.router }
 

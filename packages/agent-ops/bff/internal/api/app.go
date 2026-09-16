@@ -70,7 +70,7 @@ type App struct {
 	// bffClientFactory creates clients for inter-BFF communication
 	bffClientFactory bffclient.BFFClientFactory
 	// openShell is the registry of configured OpenShell installs. Nil when none are
-	// configured, which disables the /openshell routes.
+	// configured, which disables the /api/openshell routes.
 	openShell *OpenShellFleet
 }
 
@@ -232,6 +232,17 @@ func (app *App) Routes() http.Handler {
 		return app.GetNamespacesHandler
 	}))
 
+	// The OpenShell gateway registry belongs on apiRouter: it is agent-ops' OWN
+	// versioned endpoint, described in this BFF's OpenAPI spec, so it lives with
+	// the rest of /api/v1 and inherits the identity middleware that guards that
+	// prefix. Its sibling — the /api/openshell/{gatewayId}/... tunnel — is
+	// mounted on the outer mux instead, because it relays the gateway's own
+	// unversioned API and its wildcard tail would collide with httprouter's
+	// pattern matching. No handlerWithOverride here: that mechanism exists for
+	// the mod-arch starter's replaceable endpoints (HandlerUserID,
+	// HandlerNamespacesID), not for agent-ops' own surface.
+	apiRouter.GET(OpenShellGatewaysPath, app.OpenShellGatewaysHandler)
+
 	// Inter-BFF Communication routes — wire your target BFF endpoints here.
 	// Example:
 	//
@@ -247,10 +258,22 @@ func (app *App) Routes() http.Handler {
 	appMux.Handle(ApiPathPrefix+"/", apiRouter)
 	appMux.Handle(PathPrefix+ApiPathPrefix+"/", http.StripPrefix(PathPrefix, apiRouter))
 
-	// OpenShell routes (RHOAI embedding). Registered on the outer mux beside /api/v1
-	// so they don't conflict with httprouter's wildcards. The exact /openshell/gateways
-	// path takes precedence over the /openshell/{gatewayId}/ subtree.
-	appMux.HandleFunc(OpenShellGatewaysPath, app.OpenShellGatewaysHandler)
+	// The OpenShell tunnel (RHOAI embedding), and only the tunnel. The two
+	// OpenShell surfaces are split by who owns the contract:
+	//
+	//   /api/v1/openshell/gateways      — ours, versioned, on apiRouter above.
+	//   /api/openshell/{gatewayId}/...  — the gateway's own unversioned API,
+	//                                     relayed opaquely, mounted here.
+	//
+	// The tunnel belongs on the outer mux because its tail is an arbitrary
+	// gateway path that httprouter's wildcards cannot express. The registry does
+	// NOT get a second registration here: a duplicate would answer the same path
+	// outside apiRouter and so bypass the /api/v1 prefix check in
+	// InjectRequestIdentity.
+	//
+	// Both patterns live under /api and ServeMux matches the longest one, so
+	// "/api/v1/" keeps /api/v1/openshell/gateways on apiRouter while
+	// "/api/openshell/" takes the tunnel.
 	appMux.Handle(OpenShellPathPrefix+"/", app.OpenShellProxyHandler())
 
 	// file server for the frontend file and SPA routes

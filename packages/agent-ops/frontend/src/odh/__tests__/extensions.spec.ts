@@ -1,3 +1,4 @@
+import { proxiedBffPathPrefix } from '~/app/utilities/routes';
 import extensions from '~/odh/extensions';
 
 const AGENT_OPS = 'agent-ops';
@@ -43,13 +44,25 @@ describe('agent-ops extensions', () => {
     ]);
   });
 
-  it('registers the OpenShell OIDC callback routes outside the /openshell proxy prefix', () => {
+  it('registers the OpenShell OIDC callback routes outside the proxied BFF prefix', () => {
     const paths = routePaths();
     expect(paths).toContain('/ai-hub/agents/oidc/callback');
     expect(paths).toContain('/ai-hub/agents/oidc/silent-callback');
-    // Callbacks must be SPA routes, never under the reverse-proxied /openshell/*.
-    paths
-      .filter((p) => p.includes('/oidc/'))
-      .forEach((p) => expect(p.startsWith('/openshell')).toBe(false));
+
+    // The module reverse-proxies exactly one prefix to its BFF, and this is it.
+    // Pinned to the literal as well as the derived value: the point of the
+    // assertion is the real wire prefix, and a test that only compared a
+    // constant to itself would still pass if that constant moved.
+    expect(proxiedBffPathPrefix).toBe('/agent-ops/api');
+
+    // Callbacks must stay SPA routes. Under the proxied prefix they would be
+    // forwarded to the BFF with the IdP's authorization code in the query
+    // string, and the sign-in would never complete in the browser.
+    const callbacks = paths.filter((p) => p.includes('/oidc/'));
+    expect(callbacks).not.toHaveLength(0);
+    callbacks.forEach((p) => {
+      expect(p.startsWith(`${proxiedBffPathPrefix}/`)).toBe(false);
+      expect(p).not.toBe(proxiedBffPathPrefix);
+    });
   });
 });

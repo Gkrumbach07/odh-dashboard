@@ -2,10 +2,11 @@
 
 Fronts a set of externally-deployed backend services from a single dashboard module BFF.
 
-The module-federation proxy maps **one path to one service**. That is enough while a
+The module-federation proxy maps **one path to one service**, and a module declares
+exactly one such entry (agent-ops: `/agent-ops/api` → `/api`). That is enough while a
 module fronts a single external gateway, and stops working the moment it fronts
 several — you need per-request target selection, per-backend discovery, and a place
-to swap credentials. That is this package.
+to swap credentials, all *behind* that single path. That is this package.
 
 ## Why it is separate
 
@@ -42,7 +43,9 @@ for what a consumer supplies:
 - **Background retry** — `Start` discovers asynchronously with exponential backoff,
   so a backend that is down at boot heals on its own and startup is never blocked.
 - **Router** — `/{prefix}/{id}/...` to the right backend, one cached handler
-  each, with a hook for the credential swap.
+  each, with a hook for the credential swap. `Prefix` is trimmed literally rather
+  than segment-wise, so it can be multi-segment: agent-ops mounts the fleet at
+  `/api/openshell`, inside its own module proxy prefix, not at the root.
 - **Dynamic membership** — `SetBackends` swaps the fleet's roster while it is
   serving. Backends that survive keep their cached discovery document and their
   readiness, so a resync never briefly takes a working backend out of service.

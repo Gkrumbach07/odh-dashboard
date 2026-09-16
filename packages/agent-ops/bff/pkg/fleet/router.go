@@ -45,7 +45,8 @@ func (c Codes) or(v, fallback string) string {
 // host injected for the one its backend actually accepts. Nothing here knows what
 // those credentials are.
 type Router struct {
-	// Prefix is the path segment the router is mounted under, e.g. "/openshell".
+	// Prefix is the path the router is mounted under, e.g. "/api/openshell". It
+	// may span several segments: SplitPath trims it literally, not segment-wise.
 	Prefix string
 	// Backends resolves IDs. Required.
 	Backends Lookuper
@@ -110,7 +111,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if r.RejectUpgrades && strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
+	if r.RejectUpgrades && requestsWebSocketUpgrade(req) {
 		r.fail(w, http.StatusNotImplemented,
 			r.Codes.or(r.Codes.UpgradeUnsupported, "upgrade_unsupported"),
 			"Protocol upgrades are not available through this proxy")
@@ -255,4 +256,21 @@ func SplitPath(prefix, p string) (id, rest string) {
 		return id, "/"
 	}
 	return id, "/" + remainder
+}
+
+// requestsWebSocketUpgrade reports whether the request asks to upgrade to
+// WebSocket.
+//
+// `Upgrade` is a comma-separated list of protocols, not a single value, and
+// WebSocket libraries parse it that way. Comparing the whole header string
+// against "websocket" therefore refuses `Upgrade: websocket` but waves through
+// `Upgrade: websocket, h2c` — a guard that is trivially stepped around by a
+// caller who simply names a second protocol.
+func requestsWebSocketUpgrade(req *http.Request) bool {
+	for _, tok := range strings.Split(req.Header.Get("Upgrade"), ",") {
+		if strings.EqualFold(strings.TrimSpace(tok), "websocket") {
+			return true
+		}
+	}
+	return false
 }

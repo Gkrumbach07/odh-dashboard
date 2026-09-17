@@ -76,10 +76,7 @@ var moduleProxyPaths = map[string][]proxyRoute{
 	"evalHub":       {{Path: "/eval-hub/api", PathRewrite: "/api"}},
 	"automl":        {{Path: "/automl/api", PathRewrite: "/api"}},
 	"autorag":       {{Path: "/autorag/api", PathRewrite: "/api"}},
-	"agentOps": {
-		{Path: "/agent-ops/api", PathRewrite: "/api"},
-		{Path: "/agent-ops/healthcheck", PathRewrite: "/healthcheck"},
-	},
+	"agentOps":      {{Path: "/agent-ops/api", PathRewrite: "/api"}},
 }
 
 // --- Service discovery env vars (inter-BFF injection) ---

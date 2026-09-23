@@ -2,6 +2,12 @@ base: https://raw.githubusercontent.com/fullsend-ai/agents/91f61f3441baedf3f912c
 
 agent: agents/review.md
 
+# Lets the runner create the run-scoped OpenAI provider. The inherited review
+# harness supplies the required policy; the sandbox receives a placeholder,
+# never the repository secret.
+providers:
+  - openai
+
 skills:
   # This local skill replaces Fullsend's inherited pr-review with the
   # registry-driven dimensions orchestrator. ODH-owned reviewer skills are
@@ -33,11 +39,11 @@ timeout_minutes: 40
 
 env:
   runner:
-    REVIEW_FINDING_SEVERITY_THRESHOLD: "low"
-    REVIEW_PROTECTED_PATHS: ".claude/,.cursor/,.gitattributes,.github/,.pre-commit-config.yaml,AGENTS.md,agents/,api-servers/,CLAUDE.md,CODEOWNERS,Containerfile,Dockerfile,harness/,images/,plugins/,policies/,scripts/,skills/"
+    REVIEW_FINDING_SEVERITY_THRESHOLD: 'low'
+    REVIEW_PROTECTED_PATHS: '.claude/,.cursor/,.gitattributes,.github/,.pre-commit-config.yaml,AGENTS.md,agents/,api-servers/,CLAUDE.md,CODEOWNERS,Containerfile,Dockerfile,harness/,images/,plugins/,policies/,scripts/,skills/'
   sandbox:
-    REVIEW_FINDING_SEVERITY_THRESHOLD: "low"
-    REVIEW_PROTECTED_PATHS: ".claude/,.cursor/,.gitattributes,.github/,.pre-commit-config.yaml,AGENTS.md,agents/,api-servers/,CLAUDE.md,CODEOWNERS,Containerfile,Dockerfile,harness/,images/,plugins/,policies/,scripts/,skills/"
+    REVIEW_FINDING_SEVERITY_THRESHOLD: 'low'
+    REVIEW_PROTECTED_PATHS: '.claude/,.cursor/,.gitattributes,.github/,.pre-commit-config.yaml,AGENTS.md,agents/,api-servers/,CLAUDE.md,CODEOWNERS,Containerfile,Dockerfile,harness/,images/,plugins/,policies/,scripts/,skills/'
 
 validation_loop:
   script: scripts/validate-output-schema.sh

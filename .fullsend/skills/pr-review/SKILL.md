@@ -14,8 +14,7 @@ at harness pin `91f61f3`. Local change: dimensions come from
 `.fullsend/dimensions.json`. Discriminator is `output`:
 `findings` (LLM + CLI → merge + challenger), `context` (host
 snapshot, not challenger), `section:<name>` (schema field, not
-challenger), `check:<name>` (readiness result), and
-`classifier:<name>` (structured classification). This file must not
+challenger), and `check:<name>` (readiness result). This file must not
 hardcode dimension names, count, or kind.
 
 (This skill's design departs from ADR-0018 "scripted pipelines for
@@ -48,7 +47,7 @@ named, or that every producer is an LLM sub-agent.
 
 Also read `/sandbox/workspace/.fullsend/.run/collected.json` once when it
 exists and index its adapter envelopes by `dimension`. Treat a missing file as
-an empty adapter set. Use this index for both `context_dimension` lookup and
+an empty adapter set. Use this index for adapter
 findings collection; never invoke a host adapter from the sandbox.
 
 Each `dimensions[]` object:
@@ -57,7 +56,7 @@ Each `dimensions[]` object:
 | --- | --- |
 | `id` | Stable dimension key |
 | `kind` | `llm-subagent`, `llm-skill`, or `cli-adapter` |
-| `output` | `findings` (default) · `context` · `section:<name>` · `check:<name>` · `classifier:<name>` |
+| `output` | `findings` (default) · `context` · `section:<name>` · `check:<name>` |
 | `result_fields` | Optional schema members returned by a `section:*` row; defaults to the section named by `output` |
 | `include_findings` | For a `section:*` LLM, also collect its returned `findings[]` into synthesis |
 | `dispatch` | `always` or `conditional` |
@@ -65,15 +64,15 @@ Each `dimensions[]` object:
 | `definition` | Prompt/skill markdown path (LLM rows only) |
 | `meta_prompt` | Fullsend-owned output contract path for an LLM row; compose it after `meta-prompts/common-review.md` |
 | `inline_skill` | Optional extra skill to inline when spawning (e.g. docs-review) |
-| `pre_pass` | Optional classifier sub-agent path, run only if this **findings** LLM is selected |
+| `pre_pass` | Optional triage sub-agent path, run only if this **findings** LLM is selected |
 | `categories` | Category strings used to group prior findings for this id |
 | `failure_severity` | `high` or `info` when this **findings** producer returns nothing |
 | `fallback` | If true, unrecognized prior-finding categories go here |
 | `budget_priority` | Lower runs deeper when attention is scarce (**findings** LLM only) |
 | `re_review` | `full` / `trivial` / `skip-unless-requalified` when this **findings** dimension had no prior findings |
-| `producer_file` | Host JSON path (`cli-adapter` only), under `.fullsend/.run/`. It may contain findings, a `check`, a `classifier`, or trusted context. Every adapter envelope also appears in `.fullsend/.run/collected.json` |
+| `producer_file` | Host JSON path (`cli-adapter` only), under `.fullsend/.run/`. It may contain findings, a `check`, or trusted context. Every adapter envelope also appears in `.fullsend/.run/collected.json` |
 | `host` | Trusted execution metadata for a `cli-adapter`: `workflow` or `pre_review` execution plus any artifact, setup, checkout, and credential-name requirements |
-| `context_dimension` | Optional `cli-adapter` dimension whose context envelope is supplied to an LLM (do not fetch it yourself) |
+| `context_file` | Optional trusted-host snapshot an LLM must read (do not fetch it yourself) |
 
 **Not in the registry as dimensions:**
 
@@ -81,8 +80,8 @@ Each `dimensions[]` object:
   `sub-agents/challenger.md`. Sees **findings** only.
 - **CLI adapters** — do not `Task()` them and do not invoke their
   CLIs. The host already wrote their envelopes into `collected.json`.
-  Include **findings** payloads at collect. Supply `output: context`
-  envelopes only to rows that name them with `context_dimension`; do not send them
+  Include **findings** payloads at collect. LLM rows read `output: context`
+  snapshots only by their `context_file` path; do not send them
   through the challenger.
 
 Treat missing `output` as `findings`. Treat `llm-subagent` and
@@ -396,9 +395,8 @@ missing `output`):
 - `dispatch: conditional` → in scope only when the PR matches that
   row's `when` text.
 
-For a findings row with `context_dimension`, select that dimension's envelope
-from `.fullsend/.run/collected.json` before selection. Skip the row when the
-envelope is missing or its `status` is
+For a findings row with `context_file`, also inspect that JSON before
+selection. Skip the row when the file is missing or its `status` is
 `none` / `error`. Never replace missing trusted context by calling the
 external service from the sandbox.
 
@@ -412,13 +410,12 @@ Select every in-scope **findings** `llm-subagent`. Run those in
 parallel with section LLMs (step 4b). Challenger runs later (step
 6d), alone. Do not spawn `cli-adapter` rows.
 
-**Structured-output LLMs** (`output` starts with `section:`, `check:`,
-or `classifier:`): dispatch when `dispatch` is `always`, or when
-`conditional` matches `when`. Skip a row requiring a missing
-`context_dimension` envelope or a snapshot whose `status` is `none` / `error`.
-For an unavailable section write its schema field as
-`{"status":"none"}`; for a check or classifier retain an explicit
-`could-not-verify` / `unavailable` result. Do **not** apply `re_review`
+**Structured-output LLMs** (`output` starts with `section:` or `check:`):
+dispatch when `dispatch` is `always`, or when `conditional` matches
+`when`. Skip a row requiring a missing `context_file` or a snapshot
+whose `status` is `none` / `error`. For an unavailable section write
+its schema field as `{"status":"none"}`; for a check retain an explicit
+`could-not-verify` result. Do **not** apply `re_review`
 skips to these rows; they are cheap and must re-run. Use the row's
 `meta_prompt`, never the findings contract by default.
 
@@ -459,7 +456,7 @@ Do not use a baked-in examples table as a second roster. Apply
 
 When step 2 selected **per-file mode** (the PR met both the
 `FILE_COUNT` and `LINE_COUNT` large-PR thresholds) **and** a selected
-`llm-subagent` row sets `pre_pass`, run that classifier before
+`llm-subagent` row sets `pre_pass`, run that triage sub-agent before
 preparing context packages. If no selected row has `pre_pass`, skip.
 For PRs handled in small-PR mode, skip this step — all files receive
 uniform attention.
@@ -631,8 +628,8 @@ dimension-specific remainder:
 - `changed_since_prior`: file set that changed since prior review
 - `pr_metadata`: title, body, author, labels, draft status
 - `issue_context`: linked issue title, body, comments
-- `trusted_context`: for a row with `context_dimension`, the exact sanitized
-  envelope selected from `.fullsend/.run/collected.json`; otherwise `none`
+- `trusted_context`: for a row with `context_file`, the exact sanitized
+  JSON loaded from that file; otherwise `none`
 - `cross_repo_context`: prior findings from 3a for this dimension when
   relevant
 - `scope_constraint`: exploration limit for this sub-agent (see 3e)
@@ -687,7 +684,7 @@ prioritization.
 ### 4. Dispatch findings sub-agents
 
 For each selected **findings** LLM row (from step 3c — excludes
-`pre_pass` classifiers which run in step 3c-1, `cli-adapter` rows,
+`pre_pass` triage sub-agents which run in step 3c-1, `cli-adapter` rows,
 `section:*` rows, and `challenger` which runs in step 6d):
 
 1. Compose the spawn prompt **by reference, not by transcription.** Every
@@ -753,9 +750,7 @@ For each selected **findings** LLM row (from step 3c — excludes
    <file list, "all", or "none — first review">
 
    ### Trusted context
-   Read /sandbox/workspace/.fullsend/.run/collected.json and use the
-   envelope whose `dimension` is {context_dimension} — or "none" when
-   this row names no context dimension.
+   <absolute path of this row's `context_file`, or "none">
 
    ### Scope constraint
    <scope_constraint value or "none">
@@ -784,13 +779,12 @@ Wait for all sub-agents to complete.
 Compose these prompts **before waiting**, and include their Agent
 calls in the **same message** as the findings sub-agents in step 4.
 
-For each LLM row whose `output` starts with `section:`, `check:`, or
-`classifier:` and was selected in step 3c:
+For each LLM row whose `output` starts with `section:` or `check:` and
+was selected in step 3c:
 
 1. Point at the shared context file whenever the domain skill needs the
-   diff or PR-head source; name this row's `context_dimension` only when
-   its envelope exists in
-   `/sandbox/workspace/.fullsend/.run/collected.json`.
+   diff or PR-head source; name the row's `context_file` by absolute path
+   only when that file exists.
 2. Compose the prompt with the same by-reference template as step 4 —
    the row's `definition`, then `meta-prompts/common-review.md`, then its
    `meta_prompt`, each given as a path for the sub-agent to read, never
@@ -799,15 +793,13 @@ For each LLM row whose `output` starts with `section:`, `check:`, or
    <row.result_fields or [name]>` and `Include findings: true|false` from
    the registry. State that the named output contract is a closed shape:
    fields outside it are dropped by the orchestrator, so supporting
-   context belongs in the contract's own string fields. Point at the
-   sanitized envelope selected by `context_dimension`; do not call Jira
+   context belongs in the contract's own string fields. Do not call Jira
    or GitHub issue APIs to replace an unavailable trusted snapshot.
 3. For `section:<name>`, copy every schema member named by `result_fields`
    (or its named section when omitted) onto `agent-result.json`;
    `include_findings: true` also contributes its
    `findings[]` to step 5. For `check:<name>`, append its `check` object
-   to `checks[]`. For `classifier:<name>`, append its `classifier` object
-   to `classifications[]`. None enters challenger synthesis directly.
+   to `checks[]`. None enters challenger synthesis directly.
 
 If a structured-output LLM times out or returns malformed JSON, record its
 explicit unavailable result. Do **not** fail the review and do **not** add a
@@ -825,7 +817,7 @@ cat > "${FULLSEND_OUTPUT_DIR}/producers.json" <<'JSON'
 {
   "dispatched": ["<id of every LLM row spawned in step 4 and 4b>"],
   "skipped": [
-    {"id": "<registry id not dispatched>", "reason": "<why: out of scope / re_review skip / missing context envelope>"}
+    {"id": "<registry id not dispatched>", "reason": "<why: out of scope / re_review skip / missing context_file>"}
   ],
   "adapters": ["<id of every cli-adapter row whose envelope you loaded>"],
   "challenger": "pending"
@@ -860,8 +852,8 @@ Do **not** include section payloads or context snapshots.
    returns here (those are step 4b / 7).
 2. **CLI adapters** from `/sandbox/workspace/.fullsend/.run/collected.json` (array
    of envelopes). Select only entries with `output: findings` and a
-   `findings[]` array; context envelopes are handled through `context_dimension`
-   and never enter synthesis. Do not re-run those tools. If the file is missing, treat CLI input as
+   `findings[]` array; context envelopes reach LLM rows only through
+   `context_file` and never enter synthesis. Do not re-run those tools. If the file is missing, treat CLI input as
    empty (do not fail the whole review). If an envelope `status` is
    `empty` / `skipped`, continue. If `status` is `error` and there is
    one `info` finding, keep it. CLI findings are external evidence,
@@ -925,13 +917,6 @@ sandbox. Also read structured LLM returns when such a row was dispatched.
   and append it to `checks[]`. On malformed, absent, or unavailable host
   output, append
   `{ "id": "<row id>", "status": "could-not-verify", "summary": "The producer did not return a valid check result." }`.
-- For every `classifier:<name>` row, validate that `classifier.id` equals the
-  row id and append it to `classifications[]`. On malformed, absent, or
-  unavailable host output,
-  append `{ "id": "<row id>", "status": "unavailable", "summary": "The producer did not return a valid classification.", "classifications": [] }`.
-- A classifier may inform a dependent check's explanation, but cannot by
-  itself create a blocker or alter a finding severity.
-
 ### 6. Synthesis
 
 Collate, deduplicate, and merge **all collected findings arrays**
@@ -1390,8 +1375,8 @@ Every non-failure result must include:
   Jira snapshot exists.
 - `jira_criteria[]` from the Jira section when explicit acceptance criteria were
   available, preserving each PASS/PARTIAL/MISS/SKIP verdict and evidence.
-- `checks[]` and `classifications[]` from structured-output LLMs. Preserve
-  unavailable results rather than converting them into findings.
+- `checks[]` from structured-output LLMs. Preserve unavailable results
+  rather than converting them into findings.
 - Optional `label_actions` from the `issue-labels` skill when contextual
   repository labels clearly apply.
 

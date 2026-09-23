@@ -67,6 +67,7 @@ const QuotaUsageSection: React.FC<QuotaUsageSectionProps> = ({
   onRegisterDetailRefresh,
 }) => {
   const [userSelection, setUserSelection] = React.useState<QuotaSelection | undefined>();
+  const tabLoadedAt = React.useRef(Date.now());
 
   const selection = React.useMemo(() => {
     if (!loaded || tree.length === 0) {
@@ -143,13 +144,11 @@ const QuotaUsageSection: React.FC<QuotaUsageSectionProps> = ({
       clusterQueueNames={selection?.type === 'clusterQueue' ? [selection.clusterQueueName] : []}
     >
       <QuotaUsageWorkloadRefreshBridge onRegister={onRegisterWorkloadRefresh} />
-      <Flex
-        direction={{ default: 'column' }}
-        grow={{ default: 'grow' }}
-        className="gpuaas-quota-usage-section"
+      <div
+        className="gpuaas-quota-usage-section pf-v6-u-display-flex pf-v6-u-flex-direction-column pf-v6-u-flex-fill pf-v6-u-min-height-0"
         data-testid="quota-usage-section"
       >
-        <Drawer isExpanded isInline>
+        <Drawer isExpanded isInline className="pf-v6-u-flex-fill pf-v6-u-min-height-0">
           <DrawerContent
             panelContent={
               <DrawerPanelContent
@@ -158,6 +157,7 @@ const QuotaUsageSection: React.FC<QuotaUsageSectionProps> = ({
                 defaultSize="75%"
                 minSize="60%"
                 maxSize="85%"
+                className="gpuaas-quota-usage-detail-drawer"
                 data-testid="quota-usage-detail-drawer"
               >
                 <QuotaUsageDetailPanel
@@ -167,20 +167,26 @@ const QuotaUsageSection: React.FC<QuotaUsageSectionProps> = ({
                   detail={detail}
                   detailLoaded={detailLoaded}
                   error={detailError}
+                  tabLoadedAt={tabLoadedAt}
                 />
               </DrawerPanelContent>
             }
           >
-            <DrawerContentBody style={drawerNavBodyStyle}>
+            <DrawerContentBody
+              className="gpuaas-quota-usage-nav"
+              style={drawerNavBodyStyle}
+              data-testid="quota-usage-nav-panel"
+            >
               <QuotaUsageNavPanel
                 tree={tree}
                 selection={selection}
                 onSelectionChange={setUserSelection}
+                tabLoadedAt={tabLoadedAt}
               />
             </DrawerContentBody>
           </DrawerContent>
         </Drawer>
-      </Flex>
+      </div>
     </KueueNamespaceWorkloadCacheProvider>
   );
 };

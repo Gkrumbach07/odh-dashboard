@@ -1,9 +1,10 @@
 /* eslint-disable camelcase */
+import { mockModArchResponse } from 'mod-arch-core';
 import { mockNamespace } from '~/__mocks__/mockNamespace';
 import { mockUserSettings } from '~/__mocks__/mockUserSettings';
-import { CLIENT_API_VERSION } from '~/__tests__/cypress/cypress/support/commands/api';
 
 const REGISTRY_API = '/data-registry/api/v1';
+const MAIN_API = '/data-registry/api/v1';
 
 const mockConnectionsResponse = [
   { name: 'my-s3-connection', displayName: 'My S3 Connection', connectionType: 's3' },
@@ -75,15 +76,15 @@ const mockLabelsResponse = {
 };
 
 const initIntercepts = (options = {}) => {
-  cy.interceptApi(
-    'GET /api/:apiVersion/user',
-    { path: { apiVersion: CLIENT_API_VERSION } },
-    mockUserSettings({ userId: 'test-user', ...options }),
-  );
-  cy.interceptApi('GET /api/:apiVersion/namespaces', { path: { apiVersion: CLIENT_API_VERSION } }, [
-    mockNamespace({ name: 'test-project' }),
-    mockNamespace({ name: 'other-project' }),
-  ]);
+  cy.intercept('GET', `${MAIN_API}/user`, {
+    body: mockModArchResponse(mockUserSettings({ userId: 'test-user', ...options })),
+  });
+  cy.intercept('GET', `${MAIN_API}/namespaces`, {
+    body: mockModArchResponse([
+      mockNamespace({ name: 'test-project' }),
+      mockNamespace({ name: 'other-project' }),
+    ]),
+  });
 
   cy.intercept('GET', `${REGISTRY_API}/test-project/namespaces`, {
     body: mockCollectionsResponse,
@@ -103,11 +104,9 @@ const initIntercepts = (options = {}) => {
   cy.intercept('GET', `${REGISTRY_API}/test-project/labels`, {
     body: mockLabelsResponse,
   }).as('getLabels');
-  cy.interceptApi(
-    'GET /api/:apiVersion/connections/:namespace',
-    { path: { apiVersion: CLIENT_API_VERSION, namespace: 'test-project' } },
-    mockConnectionsResponse,
-  ).as('getConnections');
+  cy.intercept('GET', `${MAIN_API}/connections/test-project`, {
+    body: mockModArchResponse(mockConnectionsResponse),
+  }).as('getConnections');
 };
 
 const visitWithData = () => {
@@ -405,9 +404,9 @@ describe('Register Volume', () => {
         location: '/data/docs',
       });
       expect(interception.request.body.properties).to.deep.include({
-        purpose: 'ML training',
-        license: 'apache-2.0',
-        maturity: 'production',
+        volume_purpose: 'ML training',
+        volume_license: 'apache-2.0',
+        volume_maturity: 'production',
         pii_status: 'none',
       });
     });
@@ -814,11 +813,9 @@ describe('Connection Selector', () => {
   });
 
   it('should show no connections available when empty', () => {
-    cy.interceptApi(
-      'GET /api/:apiVersion/connections/:namespace',
-      { path: { apiVersion: CLIENT_API_VERSION, namespace: 'test-project' } },
-      [],
-    ).as('getEmptyConnections');
+    cy.intercept('GET', `${MAIN_API}/connections/test-project`, {
+      body: mockModArchResponse([]),
+    }).as('getEmptyConnections');
 
     visitWithData();
     cy.findByTestId('register-data-button').click();
@@ -857,7 +854,10 @@ describe('Connection Selector', () => {
       expect(interception.request.body).to.deep.include({
         name: 'connected-volume',
         content_type: 'other',
-        connection_ref: 'my-s3-connection',
+        connection_ref: {
+          type: 'rhai',
+          secret_name: 'my-s3-connection',
+        },
       });
     });
   });
@@ -894,7 +894,10 @@ describe('Connection Selector', () => {
       expect(interception.request.body).to.deep.include({
         name: 'connected-table',
         format: 'iceberg',
-        connection_ref: 'my-uri-connection',
+        connection_ref: {
+          type: 'rhai',
+          secret_name: 'my-uri-connection',
+        },
       });
     });
   });

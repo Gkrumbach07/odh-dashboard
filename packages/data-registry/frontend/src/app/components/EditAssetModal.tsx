@@ -1,18 +1,16 @@
 /* eslint-disable camelcase */
 import React from 'react';
-import {
-  Alert,
-  Button,
-  Form,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-} from '@patternfly/react-core';
+import DashboardModalFooter from '@odh-dashboard/ui-core/components/DashboardModalFooter';
+import { Alert, Form, Modal, ModalBody, ModalFooter, ModalHeader } from '@patternfly/react-core';
 import { useForm, FormProvider } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AssetResponse, ConnectionRef, VolumeInfo } from '~/app/types';
-import { ApiError, createLabel, updateGenericTable, updateVolume } from '~/app/api/dataRegistry';
+import {
+  isConflictError,
+  createLabel,
+  updateGenericTable,
+  updateVolume,
+} from '~/app/api/dataRegistry';
 import { editAssetSchema, EditAssetFormData } from '~/app/schemas/editAsset.schema';
 import { getRawUnstructuredFormat, normalizeUnstructuredFormat } from '~/app/utilities/formatUtils';
 import AssetDetailsSection from './register-data/AssetDetailsSection';
@@ -48,6 +46,9 @@ const WELL_KNOWN_PROPERTIES = new Set([
   'license',
   'maturity',
   'pii_status',
+  'volume_purpose', // Backend storage format for volumes
+  'volume_license',
+  'volume_maturity',
   'description',
   'content-type',
   'connection-ref',
@@ -100,9 +101,9 @@ const buildFormDefaults = (props: EditAssetModalProps, idStart: number): EditAss
       ? getConnectionDisplayValue(asset.connection_ref)
       : asset.properties?.['connection-ref'] || '',
     path: isTable ? (asset.location ?? '') : asset['storage-location'],
-    purpose: properties.purpose || '',
-    license: properties.license || '',
-    maturity: properties.maturity || '',
+    purpose: isTable ? properties.purpose || '' : properties.volume_purpose || '',
+    license: isTable ? properties.license || '' : properties.volume_license || '',
+    maturity: isTable ? properties.maturity || '' : properties.volume_maturity || '',
     piiStatus: properties.pii_status || '',
     customProperties,
     schemaFields: isTable
@@ -165,7 +166,7 @@ const EditAssetModal: React.FC<EditAssetModalProps> = (props) => {
           await Promise.all(
             addLabels.map((label) =>
               createLabel(project, { name: label }).catch((err) => {
-                if (err instanceof ApiError && err.status === 409) {
+                if (isConflictError(err)) {
                   return;
                 }
                 throw err;
@@ -201,12 +202,13 @@ const EditAssetModal: React.FC<EditAssetModalProps> = (props) => {
             ...customProps,
             ...(persistedFormat ? { 'content-type': persistedFormat } : {}),
           };
-          allProperties.purpose = data.purpose;
+          // Always set volume_purpose to allow clearing it (empty string)
+          allProperties.volume_purpose = data.purpose;
           if (data.license) {
-            allProperties.license = data.license;
+            allProperties.volume_license = data.license;
           }
           if (data.maturity) {
-            allProperties.maturity = data.maturity;
+            allProperties.volume_maturity = data.maturity;
           }
           if (data.piiStatus) {
             allProperties.pii_status = data.piiStatus;
@@ -264,23 +266,16 @@ const EditAssetModal: React.FC<EditAssetModalProps> = (props) => {
         </FormProvider>
       </ModalBody>
       <ModalFooter>
-        <Button
-          variant="primary"
-          onClick={form.handleSubmit(handleSubmit)}
-          isDisabled={isSubmitting}
-          isLoading={isSubmitting}
-          data-testid="edit-asset-save"
-        >
-          Save
-        </Button>
-        <Button
-          variant="link"
-          onClick={onClose}
-          isDisabled={isSubmitting}
-          data-testid="edit-asset-cancel"
-        >
-          Cancel
-        </Button>
+        <DashboardModalFooter
+          submitLabel="Save"
+          onSubmit={form.handleSubmit(handleSubmit)}
+          onCancel={onClose}
+          isSubmitDisabled={isSubmitting}
+          isSubmitLoading={isSubmitting}
+          isCancelDisabled={isSubmitting}
+          submitButtonTestId="edit-asset-save"
+          cancelButtonTestId="edit-asset-cancel"
+        />
       </ModalFooter>
     </Modal>
   );

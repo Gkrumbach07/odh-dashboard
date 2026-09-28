@@ -17,9 +17,18 @@ agents:
     # Fork-only Pi OpenAI canary. Keep the repository default on Claude
     # so every non-review role remains on the production runtime.
     runtime: pi
-    # GPT-6 canary. With no persona overrides, every registered review
-    # subagent inherits this parent model.
+    # GPT-6 canary. Registered personas otherwise retain their frontmatter
+    # models, so map each one explicitly for an OpenAI-only review.
     model: openai/gpt-6-luna
+    subagents:
+      challenger: openai/gpt-6-luna
+      correctness: openai/gpt-6-luna
+      cross-repo-contracts: openai/gpt-6-luna
+      docs-currency: openai/gpt-6-luna
+      intent-coherence: openai/gpt-6-luna
+      security: openai/gpt-6-luna
+      security-triage: openai/gpt-6-luna
+      style-conventions: openai/gpt-6-luna
 allowed_remote_resources:
   - https://raw.githubusercontent.com/fullsend-ai/fullsend/
   - https://raw.githubusercontent.com/fullsend-ai/agents/

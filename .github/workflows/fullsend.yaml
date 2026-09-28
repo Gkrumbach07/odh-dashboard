@@ -232,8 +232,9 @@ jobs:
       pull-requests: write
     # Temporary post-v0.43.0 pin: adds the optional FULLSEND_OPENAI_API_KEY
     # reusable-workflow secret used by this fork-only Pi/OpenAI canary.
-    # Replace with the next tagged release that includes fullsend-ai/fullsend#7297.
-    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@4edccc7c43e9d1a319e45f9737c9daea5fed737b
+    # Main includes Pi 0.87.1 and its GPT-6 model catalog. Return to a release
+    # tag once v0.44.0 is published.
+    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@b246a295afd885b3080389e6da0160e3a8ab5bc1
     with:
       event_action: ${{ github.event.action }}
       install_mode: per-repo

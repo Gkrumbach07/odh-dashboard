@@ -1,6 +1,18 @@
 {
-  "comment": "Review dimension registry. Findings dimensions are dispatched by the local pr-review orchestrator and adjudicated by the challenger. Context adapters provide trusted host data and are never reviewed as findings.",
+  "comment": "Review dimension registry. Findings dimensions are dispatched by the local pr-review orchestrator and adjudicated by the challenger. Context adapters provide trusted host data and are never reviewed as findings. A pre-dispatch context LLM runs before the reviewers and briefs them; its brief is orientation, not trusted data.",
   "dimensions": [
+    {
+      "id": "investigator",
+      "kind": "llm-subagent",
+      "output": "context",
+      "stage": "pre-dispatch",
+      "dispatch": "conditional",
+      "when": "the change is not mechanical or value-only",
+      "definition": "skills/pr-review/sub-agents/investigator.md",
+      "meta_prompt": "meta-prompts/context-output.md",
+      "failure_severity": "info",
+      "notes": "Runs alone before the reviewer batch and returns a factual brief of the change and the code around it. Every findings and structured-output reviewer receives the brief by path as orientation. The challenger does not receive it, and it never enters synthesis."
+    },
     {
       "id": "correctness",
       "kind": "llm-subagent",

@@ -235,6 +235,54 @@ BARE_FILE_EXCEPTIONS = {"node.js", "next.js", "nest.js", "vue.js", "three.js", "
 # A directory the PR does not touch is the same claim in coarser form.
 DIR_TOKEN = re.compile(r"(?:[\w.-]+/){1,}")
 
+# change_summary is the first thing a reader sees, so it stays a glance rather
+# than a second PR description. The schema enforces the character cap inside
+# the sandbox; a sentence count cannot be expressed there, so the host trims.
+SUMMARY_MAX_SENTENCES = 3
+SUMMARY_MAX_CHARS = 500
+# Break only where a capital follows, so "utils.ts now" and "v1.2 adds" stay
+# inside their sentence. Too few breaks leaves a long summary alone; too many
+# would cut a short one.
+SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+NO_BREAK_AFTER = ("e.g.", "i.e.", "etc.", "vs.")
+LIST_MARKER = re.compile(r"^(?:[-*•]|\d+[.)])\s+")
+
+def summary_sentences(text):
+    """Sentences of a summary; each line of a list counts as one."""
+    sentences = []
+    for line in text.splitlines():
+        line = LIST_MARKER.sub("", line.strip())
+        if not line:
+            continue
+        merged = []
+        for piece in SENTENCE_BREAK.split(line):
+            if merged and merged[-1].lower().endswith(NO_BREAK_AFTER):
+                merged[-1] += " " + piece
+            else:
+                merged.append(piece)
+        sentences += merged
+    return sentences
+
+def clamp_change_summary(result):
+    summary = result.get("change_summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return result
+    text = summary.strip()
+    sentences = summary_sentences(text)
+    if len(sentences) > SUMMARY_MAX_SENTENCES:
+        text = " ".join(s if s[-1] in ".!?" else s + "."
+                        for s in sentences[:SUMMARY_MAX_SENTENCES])
+    if len(text) > SUMMARY_MAX_CHARS:
+        cut = text[:SUMMARY_MAX_CHARS - 1]
+        if " " in cut:
+            cut = cut.rsplit(" ", 1)[0]
+        # Never leave a code span open at the cut.
+        if cut.count("`") % 2:
+            cut = cut.rsplit("`", 1)[0]
+        text = cut.rstrip(" ,;:.") + "…"
+    result["change_summary"] = text
+    return result
+
 def summary_scope_problem(result):
     """File paths the change summary cites that this PR does not touch.
 
@@ -751,6 +799,7 @@ def render_body(result, previous_md, action):
 with open(sys.argv[1], encoding="utf-8") as fh:
     result = json.load(fh)
 previous_md = os.environ.get("REVIEW_PREVIOUS_MARKDOWN", "")
+result = clamp_change_summary(result)
 result = normalize_protected_findings(result)
 result = reconcile_producers(result)
 result = normalize_host_verification(result)
@@ -1104,6 +1153,38 @@ docs/admin-dashboard.md"
     fail=1
   else
     echo "PASS in-diff basenames and a library name pass clean"
+  fi
+
+  # The summary is capped at three sentences and 500 characters. A summary
+  # inside the cap must come through byte-for-byte, including the dots in file
+  # names and abbreviations that a naive sentence splitter would count.
+  local long_tail
+  long_tail="$(printf 'word %.0s' {1..140})"
+  summary_case() {
+    jq -n --arg summary "$2" "{${common}} | .change_summary = \$summary" > "${tmp}/$1.json"
+    transform_review_result "${tmp}/$1.json" | jq -r .change_summary
+  }
+  local kept trimmed listed chopped chopped_len
+  kept="$(summary_case sum-kept 'Updates utils.ts so quotas round down, e.g. 2.9 becomes 2. Callers in QuotaPanel.tsx now show v1.2 units. Tests cover the zero case.')"
+  trimmed="$(summary_case sum-trimmed 'First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence.')"
+  listed="$(summary_case sum-listed $'- adds a panel\n- styles it\n- documents it\n- wires the route\n- adds tests')"
+  chopped="$(summary_case sum-chopped "Adds \`useSmokeQuota\` and ${long_tail}")"
+  # Counted by jq so the check does not depend on the runner's locale.
+  chopped_len="$(jq -rn --arg summary "${chopped}" '$summary | length')"
+  if [[ "${kept}" != 'Updates utils.ts so quotas round down, e.g. 2.9 becomes 2. Callers in QuotaPanel.tsx now show v1.2 units. Tests cover the zero case.' ]]; then
+    echo "FAIL summary-cap: a three-sentence summary was altered: ${kept}" >&2
+    fail=1
+  elif [[ "${trimmed}" != 'First sentence. Second sentence. Third sentence.' ]]; then
+    echo "FAIL summary-cap: expected the first three sentences, got: ${trimmed}" >&2
+    fail=1
+  elif [[ "${listed}" != 'adds a panel. styles it. documents it.' ]]; then
+    echo "FAIL summary-cap: expected the first three list lines, got: ${listed}" >&2
+    fail=1
+  elif (( chopped_len > 500 )) || [[ "${chopped}" != *… ]] || [[ "${chopped}" != 'Adds `useSmokeQuota` and word'* ]]; then
+    echo "FAIL summary-cap: a 700-character sentence was not cut to 500 (${chopped_len} chars)" >&2
+    fail=1
+  else
+    echo "PASS change summary is capped at three sentences and 500 characters"
   fi
 
   # Every U+FE0F variation selector is stripped from the comment before it is

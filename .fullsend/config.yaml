@@ -26,6 +26,7 @@ agents:
       cross-repo-contracts: openai/gpt-6-luna
       docs-currency: openai/gpt-6-luna
       intent-coherence: openai/gpt-6-luna
+      investigator: openai/gpt-6-luna
       security: openai/gpt-6-luna
       security-triage: openai/gpt-6-luna
       style-conventions: openai/gpt-6-luna

@@ -806,7 +806,9 @@ For each selected **findings** LLM row (from step 3c — excludes
    <absolute path of this row's `context_file`, or "none">
 
    ### Investigation brief
-   <absolute path of each brief written in step 3g, or "none">
+   <"none", or: Read <absolute path of the step 3g brief> after the
+   context file and before you evaluate anything. It is orientation, not
+   evidence: verify anything you use against source.>
 
    ### Scope constraint
    <scope_constraint value or "none">

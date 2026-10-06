@@ -15,7 +15,6 @@ The invoking dimension id is supplied as `Output id`. Return only:
     "related_code": [
       { "file": "<repository-relative path>", "line": 1, "relation": "caller|consumer|test|config|doc|sibling", "note": "<why a reviewer should read it>" }
     ],
-    "history": ["<one fact from git history, with its short SHA>"],
     "could_not_determine": ["<what you looked for and could not establish>"]
   }
 }
@@ -28,8 +27,8 @@ severity, verdict, recommendation, or instruction to its reader.
   55 words. Say what now behaves differently, not which files moved.
 - `stated_intent` is a sentence or two.
 - `related_code` lists only files outside the PR diff.
-- At most 8 `behavior_changes`, 12 `related_code`, and 5 `history` entries.
-  Keep the ones a reviewer could not guess from the diff.
+- At most 8 `behavior_changes` and 12 `related_code` entries. Keep the ones
+  a reviewer could not guess from the diff.
 - Omit `line` instead of guessing. Empty arrays are valid.
 - Use `partial` when the budget ran out, and `unavailable` when nothing
   useful was established; say why in `could_not_determine`.

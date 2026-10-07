@@ -10,7 +10,12 @@ runtime: claude
 keep_history: false
 roles:
   - review
+  # Enables the fix stage (Fullsend maps fix to the coder role). The coder role
+  # also covers issue-driven /fs-code, which stays off via the code entry below.
+  - coder
 agents:
+  - name: code
+    enabled: false
   # Dashboard overlay; the base harness still supplies Fullsend's review skills.
   - name: review
     source: harness/review.yaml

@@ -112,6 +112,25 @@ export type CreateResponseRequest = {
   guardrail_config?: GuardrailInlineConfig;
   model_source_type?: string;
   subscription?: string;
+  attachments?: DocumentAttachmentPayload[];
+};
+
+export type DocumentAttachmentPayload = {
+  file_id: string;
+  filename: string;
+  text: string;
+};
+
+export type DocumentAttachment = DocumentAttachmentPayload & {
+  content_type: string;
+  size: number;
+};
+
+export type DocumentUploadResponse = {
+  id: string;
+  filename: string;
+  content_type: string;
+  text: string;
 };
 
 export type SimplifiedUsage = {
@@ -160,6 +179,34 @@ export type FileSearchCallData = {
   results: FileSearchResult[];
 };
 
+export type ToolCallStatus = 'in_progress' | 'completed' | 'failed';
+
+// A tool call as it progresses through a streamed Responses API request.
+export type StreamingToolCall = {
+  id: string;
+  type: string;
+  name: string;
+  category: 'RAG' | 'MCP';
+  status: ToolCallStatus;
+  serverLabel?: string;
+  arguments?: string;
+  output?: string;
+  error?: string;
+  // These timestamps are available only while processing a stream. The completed
+  // response payload does not include per-tool timing data.
+  startedAt?: number;
+  completedAt?: number;
+};
+
+// Raw tool-related event forwarded from the Responses API stream.
+export type ToolCallStreamEvent = {
+  type: string;
+  item_id?: string;
+  delta?: string;
+  arguments?: string;
+  item?: OutputItem;
+};
+
 // Backend response types (matches the actual API structure)
 export type ContentItem = {
   type: string;
@@ -174,9 +221,13 @@ export type OutputItem = {
   role?: string;
   status?: string;
   content?: ContentItem[];
-  output?: string;
+  output?: string | null;
   queries?: string[];
   results?: FileSearchResult[];
+  name?: string;
+  server_label?: string;
+  arguments?: string;
+  error?: string | null;
 };
 
 export type BackendResponseData = {
@@ -219,6 +270,7 @@ export type SimplifiedResponseData = {
   metrics?: ResponseMetrics; // Optional - response metrics (latency, TTFT, usage)
   reasoningContent?: string; // Optional - accumulated reasoning/thinking text from thinking models
   fileSearchData?: FileSearchCallData; // Optional - RAG retrieval context (queries, results with scores)
+  toolCalls?: StreamingToolCall[]; // Optional - completed tool calls from a non-streaming response
 };
 
 export type FileError = {
@@ -374,6 +426,7 @@ export type LlamaStackDistributionModel = {
 
 export type BFFConfig = {
   isCustomLSD: boolean;
+  sandboxesAvailable: boolean;
 };
 
 /** Status of the NemoGuardrails CR */
@@ -586,6 +639,7 @@ export type GenAiAPIs = {
   deleteVectorStoreFile: DeleteVectorStoreFile;
   createVectorStore: CreateVectorStore;
   uploadSource: UploadSource;
+  uploadDocument: UploadDocument;
   getFileUploadStatus: GetFileUploadStatus;
   createResponse: CreateResponse;
   getLSDModels: GetLSDModels;
@@ -614,6 +668,10 @@ export type GenAiAPIs = {
   updateAgentProfile: UpdateAgentProfile;
   deleteAgentProfile: DeleteAgentProfile;
   createAgentProfile: CreateAgentProfile;
+  listAgentDeployments: ListAgentDeployments;
+  createAgentDeployment: CreateAgentDeployment;
+  getAgentDeployment: GetAgentDeployment;
+  deleteAgentDeployment: DeleteAgentDeployment;
 };
 
 export interface SubscriptionInfo {
@@ -669,11 +727,13 @@ type CreateVectorStore = ModArchRestCREATE<VectorStore, CreateVectorStoreRequest
 type DeleteVectorStoreFile = ModArchRestDELETE<string, Record<string, never>>;
 type GetLSDModels = ModArchRestGET<LlamaModel[]>;
 type UploadSource = ModArchRestCREATE<FileUploadJobResponse, FormData>;
+type UploadDocument = ModArchRestCREATE<DocumentUploadResponse, FormData>;
 type GetFileUploadStatus = ModArchRestGET<FileUploadStatusResponse>;
 type CreateResponse = (
   data: CreateResponseRequest,
   opts?: APIOptions & {
     onStreamData?: (chunk: string, clearPrevious?: boolean, isReasoning?: boolean) => void;
+    onToolCall?: (event: ToolCallStreamEvent) => void;
     abortSignal?: AbortSignal;
   },
 ) => Promise<SimplifiedResponseData>;
@@ -714,6 +774,15 @@ type CreateAgentProfile = ModArchRestCREATE<
   import('./agentProfile/types').AgentProfileCreateResponse,
   import('./agentProfile/types').AgentProfileCreateRequest
 >;
+type ListAgentDeployments = ModArchRestGET<
+  import('./agentProfile/types').AgentDeploymentListResponse
+>;
+type CreateAgentDeployment = ModArchRestCREATE<
+  import('./agentProfile/types').AgentDeploymentCreateResponse,
+  import('./agentProfile/types').AgentDeploymentCreateRequest
+>;
+type GetAgentDeployment = ModArchRestGET<import('./agentProfile/types').AgentDeploymentSummary>;
+type DeleteAgentDeployment = ModArchRestDELETE<void, { id: string }>;
 
 export type ErrorPattern = 'full-failure' | 'partial-failure' | 'streaming-interruption';
 export type ErrorVariant = 'danger' | 'warning';

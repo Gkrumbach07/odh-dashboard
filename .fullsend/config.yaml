@@ -3,41 +3,46 @@
 #
 # This file configures fullsend for per-repo installation mode.
 # See https://fullsend.sh/docs/guides/infrastructure/layered-config-reference
-version: '1'
+version: "1"
 runtime: claude
 # Replace sticky comment bodies in-place (no collapsed "Previous run" history).
 # https://github.com/fullsend-ai/fullsend/pull/6930
 keep_history: false
+models:
+    # Pi includes configured aliases in the trusted subagent model set. Keep
+    # both GPT-6 models available so review personas can use the appropriate
+    # quality/cost tier within one OpenAI-backed run.
+    aliases:
+        opus: openai/gpt-6-sol
+        sonnet: openai/gpt-6-luna
 roles:
-  - review
+    - review
 agents:
-  # Dashboard overlay; the base harness still supplies Fullsend's review skills.
-  - name: review
-    source: harness/review.yaml
-    # Fork-only Pi OpenAI canary. Keep the repository default on Claude
-    # so every non-review role remains on the production runtime.
-    runtime: pi
-    # GPT-6 canary. Registered personas otherwise retain their frontmatter
-    # models, so map each one explicitly for an OpenAI-only review.
-    model: openai/gpt-6-luna
-    subagents:
-      challenger: openai/gpt-6-luna
-      correctness: openai/gpt-6-luna
-      cross-repo-contracts: openai/gpt-6-luna
-      docs-currency: openai/gpt-6-luna
-      intent-coherence: openai/gpt-6-luna
-      investigator: openai/gpt-6-luna
-      security: openai/gpt-6-luna
-      security-triage: openai/gpt-6-luna
-      style-conventions: openai/gpt-6-luna
+    # Dashboard overlay; the base harness still supplies Fullsend's review skills.
+    - name: review
+      source: harness/review.yaml
+      # Keep non-review roles on the production default while using Pi's
+      # per-persona model routing for reviews.
+      runtime: pi
+      model: openai/gpt-6-luna
+      subagents:
+          challenger: openai/gpt-6-sol
+          correctness: openai/gpt-6-sol
+          cross-repo-contracts: openai/gpt-6-sol
+          docs-currency: openai/gpt-6-luna
+          intent-coherence: openai/gpt-6-sol
+          investigator: openai/gpt-6-luna
+          security: openai/gpt-6-sol
+          security-triage: openai/gpt-6-luna
+          style-conventions: openai/gpt-6-luna
 allowed_remote_resources:
-  - https://raw.githubusercontent.com/fullsend-ai/fullsend/
-  - https://raw.githubusercontent.com/fullsend-ai/agents/
+    - https://raw.githubusercontent.com/fullsend-ai/fullsend/
+    - https://raw.githubusercontent.com/fullsend-ai/agents/
 create_issues:
-  allow_targets:
-    repos:
-      - opendatahub-io/odh-dashboard
-      - fullsend-ai/fullsend
+    allow_targets:
+        repos:
+            - opendatahub-io/odh-dashboard
+            - fullsend-ai/fullsend
 inference:
-  project: ambient-code-platform
-  wif_provider: projects/888214980327/locations/global/workloadIdentityPools/fullsend-inference/providers/gh-opendatahub-io-odh-dashboard
+    project: ambient-code-platform
+    wif_provider: projects/888214980327/locations/global/workloadIdentityPools/fullsend-inference/providers/gh-opendatahub-io-odh-dashboard

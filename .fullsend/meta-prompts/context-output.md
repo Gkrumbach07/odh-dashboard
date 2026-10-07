@@ -7,7 +7,6 @@ The invoking dimension id is supplied as `Output id`. Return only:
   "brief": {
     "id": "<Output id>",
     "status": "completed|partial|unavailable",
-    "change_summary": "<what the diff does, in behavior terms>",
     "stated_intent": "<what the PR body and linked issue say the change is for, or 'not stated'>",
     "behavior_changes": [
       { "what": "<what behaved one way before and another way now>", "file": "<repository-relative path>", "line": 1 }
@@ -23,8 +22,6 @@ The invoking dimension id is supplied as `Output id`. Return only:
 A brief is a set of facts for other reviewers to start from. It carries no
 severity, verdict, recommendation, or instruction to its reader.
 
-- `change_summary` is at most 3 sentences and 500 characters, which is about
-  55 words. Say what now behaves differently, not which files moved.
 - `stated_intent` is a sentence or two.
 - `related_code` lists only files outside the PR diff.
 - At most 8 `behavior_changes` and 12 `related_code` entries. Keep the ones

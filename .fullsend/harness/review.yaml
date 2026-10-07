@@ -4,7 +4,8 @@ agent: agents/review.md
 
 # The inherited ODH review base pins an older fullsend-code image without Pi.
 # Pin the multi-architecture Fullsend sandbox image that carries the Pi runtime.
-image: ghcr.io/fullsend-ai/fullsend-sandbox@sha256:03e142441eb11f632a6edba14d5dd96031844c72b3afef817a5ca51d09d5d925
+# 0.45.0 bundles Pi 0.99.2, the first release whose catalog has GPT-6.1 Sol.
+image: ghcr.io/fullsend-ai/fullsend-sandbox@sha256:dec698251c58eabcb0c0d6d08ab9ca4415929991cc1deec5d3f3a94de5db6cca
 
 # Lets the runner create the run-scoped OpenAI provider. The inherited review
 # harness supplies the required policy; the sandbox receives a placeholder,

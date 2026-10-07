@@ -199,6 +199,23 @@ export type WBTolerationsTestData = {
   deletedStatusBadge: string;
 };
 
+export type WBNodeSelectorsTestData = {
+  testNamespace: string;
+  testDescription: string;
+  workbenchNameA: string;
+  workbenchNameB: string;
+  notebookImageName: string;
+  resourceYamlPathA: string;
+  resourceYamlPathB: string;
+  hardwareProfileNameA: string;
+  hardwareProfileNameB: string;
+  hardwareProfileDeploymentSizeA: string;
+  hardwareProfileDeploymentSizeB: string;
+  nodeSelectorKey: string;
+  nodeSelectorValue: string;
+  tolerationValue: string;
+};
+
 export type ModifyHardwareProfileTestData = {
   wbTolerationsTestNamespace: string;
   wbTolerationsTestDescription: string;
@@ -589,7 +606,16 @@ export type ModelRegistryTestData = {
   modelFormatTensorflow: string;
   formatVersion3_0: string;
   uriVersion2: string;
+  /** Standard KServe (Knative/Serverless) — status.deploymentMode is 'Standard'. */
   deploymentType: string;
+  /**
+   * KServe RawDeployment — status.deploymentMode is 'RawDeployment'.
+   * Terminal load failures are signalled by:
+   *   targetModelState === 'FailedToLoad'
+   *   transitionStatus === 'BlockedByFailedLoad'
+   *   modelStatus.lastFailureInfo.reason / .message
+   */
+  rawDeploymentType: string;
 
   newNameSuffix: string;
   newDescription: string;
@@ -843,21 +869,28 @@ export type EvalHubTestData = {
 };
 
 export type EvalHubBenchmarkSuiteTestData = Omit<EvalHubTestData, 'benchmarkCardTitle'> & {
-  /** Resource ID of the benchmark suite / collection to select (matches `collection.resource.id`). */
-  collectionId: string;
-  /** Display name of the collection shown in the start-evaluation form after selection. */
-  collectionName: string;
-  /** Benchmark result IDs expected from the selected collection. */
+  /** Base name for the tenant suite created by this spec. */
+  suiteName: string;
+  /** Category IDs assigned to suites created from this fixture. */
+  suiteDomains: string[];
+  /** Provider ID used to disambiguate benchmark IDs in the catalog. */
+  benchmarkProviderId: string;
+  /** LM Evaluation Harness benchmarks added to each tenant suite. */
+  benchmarks: {
+    id: string;
+    name: string;
+    /** Value entered through this benchmark's dedicated Num examples field. */
+    numExamples: number;
+  }[];
+  /** Benchmark IDs expected on the completed suite results page. */
   expectedBenchmarkIds: string[];
 };
 
 export type ModelCatalogSourceTestData = {
-  sourceName: string;
-  redhatAiSourceId: string;
-  sourceName2: string;
-  redhatAiSourceId2: string;
-  sourceName3: string;
-  redhatAiSourceId3: string;
+  validatedSourceName: string;
+  validatedSourceId: string;
+  otherSourceName: string;
+  otherSourceId: string;
   toolCallingLabel: string;
   toolCallingArg: string;
   /** Catalog card title of a model that has servingConfig tool-calling args. */
@@ -902,6 +935,39 @@ export type ModelAsAServiceTestData = {
   kind: string;
 };
 
+export type ExternalModelTestData = {
+  kind: string;
+  projectResourceName: string;
+  existingSecretName: string;
+  createSecretName: string;
+  externalProviderName: string;
+  providerDescription: string;
+  providerReferenceName: string;
+  externalModelName: string;
+  externalModelDescription: string;
+  providerType: string;
+  providerEndpoint: string;
+  providerAuthType: string;
+  providerPhase: string;
+  providerConfigPair: {
+    key: string;
+    value: string;
+  };
+  targetModel: string;
+  weight: number;
+  weightPercentage: number;
+  providerRef: {
+    displayName: string;
+    providerType: string;
+    endpoint: string;
+    newSecret: {
+      name: string;
+      apiKey: string;
+    };
+  };
+  pathPlaceholderKey: string;
+};
+
 export enum ApiKeyStatus {
   active = 'Active',
   expired = 'Expired',
@@ -918,6 +984,16 @@ export enum PhaseStatus {
   UNAVAILABLE = 'Unavailable',
   UNHEALTHY = 'Unhealthy',
   UNKNOWN = 'Unknown',
+}
+
+export enum APIFormat {
+  OPENAI_CHAT = 'OpenAI Chat',
+  MESSAGES = 'Anthropic Messages',
+}
+
+export enum Path {
+  OPENAI_CHAT = '/v1/chat/completions',
+  MESSAGES = '/v1/messages',
 }
 
 export type TrainJobTestData = {
@@ -1038,15 +1114,6 @@ export type AutoragTestData = {
   awsBucket: 'BUCKET_2' | 'BUCKET_3';
   maxRagPatterns: number;
   optimizationMetric?: string;
-};
-
-export type AgentRuntimesTestData = {
-  pageTitle: string;
-  projectResourceName: string;
-  filterSearchTerm: string;
-  filterOptionStatus: string;
-  statusPending: string;
-  statusReady: string;
 };
 
 export type MlflowIrisRunData = {

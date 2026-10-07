@@ -7,24 +7,17 @@ import {
   FlexItem,
   Label,
   Popover,
-  Spinner,
   Title,
 } from '@patternfly/react-core';
-import { OutlinedQuestionCircleIcon, TimesIcon } from '@patternfly/react-icons';
+import { CheckCircleIcon, OutlinedQuestionCircleIcon, TimesIcon } from '@patternfly/react-icons';
 import { ChatbotHeaderMain } from '@patternfly/chatbot';
 import AiChatbotIcon from '~/app/images/icons/AiChatbotIcon';
-import { ResponseMetrics } from '~/app/types';
-import { formatDuration } from '~/app/Chatbot/ChatbotMessagesMetrics';
 
 interface ChatbotPaneHeaderProps {
   /** Compare mode label (e.g. "Chat 1"). When absent and no agentName, renders nothing. */
   label?: string;
   /** Optional close button handler (compare mode) */
   onCloseClick?: () => void;
-  /** Metrics from the last response (latency, tokens, TTFT) */
-  metrics?: ResponseMetrics | null;
-  /** Whether a response is currently being generated */
-  isLoading?: boolean;
   /** Whether to show a divider below the header */
   hasDivider?: boolean;
   /** Test ID prefix for the header elements */
@@ -36,6 +29,10 @@ interface ChatbotPaneHeaderProps {
   isProfileDirty?: boolean;
   /** Called when the user clicks "Clear agent" */
   onClearAgent?: () => void;
+  /** Number of deployments for the loaded agent profile */
+  deploymentCount?: number;
+  /** Called when the user opens the most recent deployment */
+  onDeploymentClick?: () => void;
   /** Whether the settings panel is open (highlights the active config label in compare mode) */
   isSettingsOpen?: boolean;
   /** Whether this pane is the active config in compare mode */
@@ -45,19 +42,19 @@ interface ChatbotPaneHeaderProps {
 const ChatbotPaneHeader: React.FC<ChatbotPaneHeaderProps> = ({
   label,
   onCloseClick,
-  metrics,
-  isLoading,
   hasDivider,
   testIdPrefix = 'chatbot',
   isDarkMode,
   agentName,
   isProfileDirty = false,
   onClearAgent,
+  deploymentCount = 0,
+  onDeploymentClick,
   isSettingsOpen,
   isActiveConfig,
 }) => {
-  // Nothing to show: no identity content and no metrics/loading content
-  if (!label && !agentName && !metrics && !isLoading) {
+  // Nothing to show: response metrics are available from each message's details section.
+  if (!label && !agentName) {
     return null;
   }
 
@@ -146,6 +143,18 @@ const ChatbotPaneHeader: React.FC<ChatbotPaneHeaderProps> = ({
                       />
                     </Popover>
                   </FlexItem>
+                  {deploymentCount > 0 && onDeploymentClick && (
+                    <FlexItem>
+                      <Label
+                        color="green"
+                        icon={<CheckCircleIcon />}
+                        onClick={onDeploymentClick}
+                        data-testid="agent-deployed-label"
+                      >
+                        {deploymentCount === 1 ? 'Deployed' : `Deployed (${deploymentCount})`}
+                      </Label>
+                    </FlexItem>
+                  )}
                   {isProfileDirty && (
                     <FlexItem>
                       <Content
@@ -188,55 +197,6 @@ const ChatbotPaneHeader: React.FC<ChatbotPaneHeaderProps> = ({
             </FlexItem>
           </Flex>
         </ChatbotHeaderMain>
-
-        {/* Response metrics row */}
-        {(metrics || isLoading) && (
-          <Flex gap={{ default: 'gapSm' }} style={{ marginTop: 'var(--pf-t--global--spacer--md)' }}>
-            {isLoading ? (
-              <FlexItem>
-                <Label variant="outline" isCompact data-testid={`${testIdPrefix}-loading`}>
-                  <Spinner size="sm" aria-label="Loading" />
-                </Label>
-              </FlexItem>
-            ) : (
-              metrics && (
-                <>
-                  <FlexItem>
-                    <Label
-                      variant="outline"
-                      isCompact
-                      data-testid={`${testIdPrefix}-latency-metric`}
-                    >
-                      {formatDuration(metrics.latency_ms)}
-                    </Label>
-                  </FlexItem>
-                  {metrics.usage && (
-                    <FlexItem>
-                      <Label
-                        variant="outline"
-                        isCompact
-                        data-testid={`${testIdPrefix}-tokens-metric`}
-                      >
-                        T: {metrics.usage.total_tokens}
-                      </Label>
-                    </FlexItem>
-                  )}
-                  {metrics.time_to_first_token_ms !== undefined && (
-                    <FlexItem>
-                      <Label
-                        variant="outline"
-                        isCompact
-                        data-testid={`${testIdPrefix}-ttft-metric`}
-                      >
-                        TTFT: {formatDuration(metrics.time_to_first_token_ms)}
-                      </Label>
-                    </FlexItem>
-                  )}
-                </>
-              )
-            )}
-          </Flex>
-        )}
       </div>
       {hasDivider && <Divider className="pf-v6-u-mt-md" />}
     </>

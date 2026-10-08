@@ -8,9 +8,11 @@ agent: agents/review.md
 # in the review writes inside it.
 readonly_repo: true
 
-# The image and the `openai` provider now come from the base: its pinned
-# fullsend-code image is built on the sandbox image with Pi 0.99.2, past the
-# 0.87.1 this overlay used to pin for the GPT-6 model catalog.
+# Pin the multi-architecture Fullsend sandbox image (v0.45.0) that carries
+# Pi 0.99.2, the first Pi release whose model catalog has GPT-6.1 Sol.
+image: ghcr.io/fullsend-ai/fullsend-sandbox@sha256:dec698251c58eabcb0c0d6d08ab9ca4415929991cc1deec5d3f3a94de5db6cca
+
+# The `openai` provider comes from the base, which now declares it.
 
 skills:
   # This local skill replaces Fullsend's inherited pr-review with the

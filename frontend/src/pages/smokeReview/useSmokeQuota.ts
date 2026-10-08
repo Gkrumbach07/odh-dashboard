@@ -38,6 +38,6 @@ export const useSmokeQuota = (endpoint: string): SmokeQuotaState => {
 };
 
 export const summarizeQuota = (quotas: SmokeQuota[]): string => {
-  const last = quotas[quotas.length];
+  const last = quotas[quotas.length - 1];
   return `${last.name}: ${last.used}/${last.limit}`;
 };

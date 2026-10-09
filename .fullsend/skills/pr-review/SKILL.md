@@ -1208,6 +1208,18 @@ gets posted if the sandbox is killed.
    format**: object with `adjudicated_findings` and `removed_findings`).
    A flat findings array is malformed.
 
+   **Part 2b — Justifications guidance:** the absolute path of
+   `meta-prompts/challenger-justifications.md`. This extends the
+   challenger's adjudication vocabulary with `challenger_action:
+   justified` for findings adequately rebutted by the PR body's
+   `## Justifications` section. Justified items follow the same
+   removed path (dual-write: adjudicated row + stub) and are
+   excluded from `findings[]` survivors. The orchestrator preserves
+   `challenger_action: justified` on expanded removed items so the
+   host can render them separately. In the spawn prompt, state that
+   Part 2b overrides Part 1 wherever they conflict on topics Part 2b
+   owns (do not imply Part 1 outranks later instruction files).
+
    **Part 3 — Context package:** the merged finding set from steps
    6a–6c (as a JSON array), plus the path of the shared context file
    from step 3d. Leave out the step 3g investigation brief and its
@@ -1284,6 +1296,14 @@ gets posted if the sandbox is killed.
      Match line-less inputs on the verbatim original description, never
      the amended `description`. `removed_findings` never apply to
      withheld findings.
+     One pairing is not a duplicate: an `adjudicated_findings` row whose
+     `challenger_action` is `justified` (Part 2b) or `removed`, together
+     with the `removed_findings` stub for the same input, counts as one
+     accounting of that input. Match such a row on its
+     `original_identity` when present, otherwise on its own `category` +
+     `file` + `line` (or `description` when line-less). A `justified`
+     row with no stub, or a stub with no row, is still one accounting.
+     Two stubs, or two rows, for the same input remain a duplicate.
      A `removal_reason` must cite evidence. Missing, incomplete,
      duplicated, ambiguous, unmatched, or evidence-free accounting is a
      failure.
@@ -1300,13 +1320,19 @@ gets posted if the sandbox is killed.
      synthesis in 6a–6c only. The challenger may remove, merge or
      downgrade any finding, a security finding included, when the
      accounting above holds and the removal or downgrade cites evidence.
+     The same holds for `justified` (Part 2b), with two limits: the
+     `challenger_reason` must cite the Justifications claim and what
+     was verified in the diff, and a `justified` row whose category is
+     `protected-path` or `approach-rejected` is treated as `kept`.
      That is its job; do not reject an adjudication for doing it.
 
    **Build survivors → final `findings[]`:**
 
    1. Start from `adjudicated_findings` where action is `kept`,
       `downgraded`, `merged`, or missing.
-   2. Drop any with action `removed`.
+   2. Drop any with action `removed` or `justified` (see audit
+      expansion below — `justified` entries preserve
+      `challenger_action: justified` on the expanded object).
    3. Strip `challenger_action`, `challenger_reason`,
       `original_identity`, and `merged_from`; log but do not emit them.
    4. Reattach standard fields (`dimension`, `why`, etc.) by matching
@@ -1322,11 +1348,19 @@ gets posted if the sandbox is killed.
    1. For each stub: find its pre-challenger match (the identity the
       accounting matched on, from stub `original_*`). Emit full
       finding-shaped object +
-      `removal_reason` from the stub.
+      `removal_reason` from the stub. Also match the corresponding
+      `adjudicated_findings` row (same identity); when that row (or the
+      stub) has `challenger_action: justified`, copy
+      `challenger_action: justified` onto the expanded audit entry so
+      the host can render it. Without this copy, the normal dual-write
+      path loses the tag and the host treats the item as a noise
+      removal.
    2. For each `adjudicated_findings` entry with
-      `challenger_action: removed` that has no stub match: expand from
-      pre-challenger match; `removal_reason` from `challenger_reason` or
-      `"removed by challenger"`.
+      `challenger_action: removed` or `justified` that has no stub
+      match: expand from pre-challenger match; `removal_reason` from
+      `challenger_reason` or `"removed by challenger"`. For `justified`
+      entries, preserve `challenger_action: justified` on the expanded
+      object so the host can distinguish them from noise removals.
    3. **Merge losers (challenger + synthesis):** for each `merged`
       survivor, take the `merged_from` inputs that are not the survivor,
       and also find findings in the **pre-6b** set (fall back to
@@ -1732,11 +1766,11 @@ Every non-failure result must include:
 - Signal members: each name in each selected `signal:*` row's `result_fields` that the row returned, or that the step 6g failure map defines. If the row omitted a name and the map does not define it, omit that member and record the gap in `inspected.could_not_verify`. Do not invent or re-derive levels in the orchestrator. The host may still floor signal levels after you write the file.
 - Section members: every name in each selected `section:*` row's `result_fields` (or the section named by `output` when `result_fields` is omitted), projected from `producers.json` `sections`. When that row was not run because its `context_file` was missing or the snapshot `status` was `none` / `error`, write the schema member as `{"status":"none"}` when the schema allows `status`.
 - `checks[]` from `check:*` returns in `producers.json` `checks` (top-level array, not nested under `producers`). Preserve `could-not-verify` rather than converting a check into a finding.
-- `todo`: array of non-empty strings, synthesized in this final pass from the assembled report (not from one earlier section). Plain prose bullets the host renders under `## TODO`. Recipe, in order, omit empties:
-  1. One bullet per blocking finding pointing at its remediation (or file + description when remediation is absent).
-  2. One bullet per check whose `status` is `fail`, using that check's `summary`.
-  3. Concrete human actions for check `could-not-verify`, for signal levels that `.fullsend/rating-policy.json` lists as refuse-approve, and for any assembled section object with `needs_human: true`.
-  4. One bullet per `low` or `info` finding with `actionable: true`, using its description.
+- `todo`: array of `{category,text}` objects (preferred) or plain strings, synthesized in this final pass from the assembled report (not from one earlier section). The host renders them under sticky `## TODO` grouped by plain-text category labels. Recipe, in order, omit empties:
+  1. `category: "findings"` — one bullet per blocking finding pointing at its remediation (or file + description when remediation is absent).
+  2. `category: "checks"` — one bullet per check whose `status` is `fail`, using that check's `summary`.
+  3. `category: "judgement"` — concrete human actions for check `could-not-verify`, for signal levels that `.fullsend/rating-policy.json` lists as refuse-approve, and for any assembled section object with `needs_human: true`.
+  4. `category: "nits"` — one bullet per `low` or `info` finding with `actionable: true`, using its description.
   Omit `todo` when the list is empty. The host renders `## TODO` only when this list is non-empty, so include item 4 whenever such findings exist.
 - Optional `inspected` with `summary` and `could_not_verify` only.
   **Do not write `inspected.producers`** — that field is removed from the

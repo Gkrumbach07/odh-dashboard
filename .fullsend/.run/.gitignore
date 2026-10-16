@@ -7,5 +7,6 @@
 # outside this directory.
 #
 # Generated JSON. Do not hand-edit or commit it.
+# This comment-only change is used to trigger the disposable Fullsend smoke PR.
 *
 !.gitignore

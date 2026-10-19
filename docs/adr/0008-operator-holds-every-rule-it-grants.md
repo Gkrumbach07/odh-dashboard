@@ -33,7 +33,7 @@ keeps the two operator role files in sync with each other, but nothing checks
 module roles against them.
 
 Previous changes that added operand permissions updated both operator role
-files at the same time (#9802, #10124, #10228).
+files at the same time (#9802, #10124).
 
 ## Decision
 

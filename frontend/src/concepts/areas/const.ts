@@ -7,7 +7,6 @@ import {
 
 export const techPreviewFlags = {
   genAiTracing: false,
-  automl: false,
   autorag: false,
   guardrails: false,
   modelAsService: true,
@@ -29,6 +28,10 @@ export const techPreviewFlags = {
   agentOps: false,
   dataRegistry: false,
   dataConnectHub: false,
+} satisfies Partial<DashboardCommonConfig>;
+
+export const generallyAvailableFeatureFlags = {
+  automl: true,
 } satisfies Partial<DashboardCommonConfig>;
 
 export const devTemporaryFeatureFlags = {
@@ -102,6 +105,7 @@ export const advancedAIMLFlags = {
 const allFeatureFlagsConfig = {
   ...devTemporaryFeatureFlags,
   ...techPreviewFlags,
+  ...generallyAvailableFeatureFlags,
   ...coreDashboardFlags,
   ...projectManagementFlags,
   ...modelServingFlags,

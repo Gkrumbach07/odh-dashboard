@@ -217,7 +217,7 @@ docker build --file ./packages/<name>/Dockerfile.workspace .
     "tls": false,
     "proxy": [{ "path": "/<kebab>/api", "pathRewrite": "/api" }],
     "local": { "host": "localhost", "port": <frontend-port> },
-    "service": { "name": "odh-dashboard-<slug>-ui", "port": <bff-port> }
+    "service": { "name": "odh-dashboard", "port": <bff-port> }
   }
 }
 ```

@@ -472,7 +472,7 @@ When reviewing React code, verify:
 - [ ] Functional `setState` used where it eliminates deps
 - [ ] Lazy state initialization for expensive computations
 - [ ] Primitive values preferred in dependency arrays
-- [ ] No barrel file imports — import from source modules directly
+- [ ] No barrel file imports — import from source modules directly (exception: `@odh-dashboard/hardware-profiles/shared`, see [ADR 0005](../../docs/adr/0005-hardware-profiles-shared-entry-point.md))
 
 ### Navigation
 - [ ] `<Link>` used instead of `navigate()` for user-initiated navigation

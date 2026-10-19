@@ -66,6 +66,7 @@
       "failure_severity": "info",
       "budget_priority": 3,
       "re_review": "skip-unless-requalified",
+      "remediation_candidates": true,
       "categories": [
         "scope-exceeded", "tier-mismatch", "unauthorized-change", "scope-creep",
         "missing-authorization", "misleading-label", "design-direction",
@@ -124,6 +125,21 @@
       ]
     },
     {
+      "id": "guidance-review",
+      "label": "Repo guidance",
+      "kind": "llm-skill",
+      "output": "findings",
+      "dispatch": "conditional",
+      "when": "the repo-guidance context lists at least one document",
+      "definition": "skills/pr-review/sub-agents/guidance-review/SKILL.md",
+      "meta_prompt": "meta-prompts/findings-output.md",
+      "context_file": "/sandbox/workspace/odh-review/guidance.json",
+      "failure_severity": "info",
+      "budget_priority": 3,
+      "re_review": "skip-unless-requalified",
+      "categories": ["guidance-violation", "guidance-conflict"]
+    },
+    {
       "id": "docs-currency",
       "label": "Docs currency",
       "kind": "llm-subagent",
@@ -164,15 +180,12 @@
       "runner": "scripts/fetch-jira-context.sh",
       "producer_file": ".run/jira.json",
       "host": {
-        "execution": "workflow",
-        "artifact_name": "fullsend-jira-context-{pr_number}",
-        "artifact_file": "jira.json",
-        "checkout_pr": false,
+        "execution": "pre_review",
         "setup_runner": "",
         "credentials": {
-          "url_secret": "JIRA_URL",
-          "username_secret": "JIRA_USERNAME",
-          "token_secret": "JIRA_API_TOKEN"
+          "url_env": "JIRA_URL",
+          "username_env": "JIRA_USERNAME",
+          "token_env": "JIRA_API_TOKEN"
         }
       },
       "failure_severity": "info",
@@ -187,20 +200,33 @@
       "runner": "scripts/fetch-coderabbit-context.sh",
       "producer_file": ".run/coderabbit.json",
       "host": {
-        "execution": "workflow",
-        "artifact_name": "fullsend-coderabbit-context-{pr_number}",
-        "artifact_file": "coderabbit.json",
-        "checkout_pr": false,
+        "execution": "pre_review",
         "setup_runner": "scripts/setup-coderabbit-cli.sh",
         "credentials": {
-          "url_secret": "FULLSEND_UNUSED",
-          "username_secret": "FULLSEND_UNUSED",
-          "token_secret": "CODERABBIT_API_KEY"
+          "url_env": "",
+          "username_env": "",
+          "token_env": "CODERABBIT_API_KEY"
         }
       },
       "failure_severity": "info",
       "categories": ["coderabbit"],
       "notes": "Host-side CodeRabbit CLI output, normalized without credentials before challenger synthesis. The transport is trusted; finding text is external review evidence that must be verified against repository source."
+    },
+    {
+      "id": "repo-guidance",
+      "label": "Repo guidance",
+      "kind": "cli-adapter",
+      "output": "context",
+      "dispatch": "always",
+      "runner": "scripts/fetch-guidance-context.sh",
+      "producer_file": ".run/guidance.json",
+      "host": {
+        "execution": "pre_review",
+        "setup_runner": "",
+        "credentials": { "url_env": "", "username_env": "", "token_env": "" }
+      },
+      "failure_severity": "info",
+      "notes": "Host selection of the .claude/rules and ADR documents whose paths: globs match the PR's changed files, read from the base-branch checkout. Context only; it never enters challenger synthesis."
     },
     {
       "id": "product-ask-review",
@@ -211,7 +237,7 @@
       "dispatch": "always",
       "definition": "skills/pr-review/sub-agents/product-ask-review/SKILL.md",
       "meta_prompt": "meta-prompts/section-output.md",
-      "context_file": "/sandbox/workspace/.fullsend/.run/jira.json",
+      "context_file": "/sandbox/workspace/odh-review/jira.json",
       "include_findings": false,
       "failure_severity": "info",
       "re_review": "full",

@@ -89,7 +89,7 @@ pnpm run validate:ports
 
 The source of truth for each package is:
 - **Frontend port**: `module-federation.local.port` in the package's `package.json`
-- **BFF port (local dev/E2E)**: `bffConfig.port` in the package's `package.json` (used by CI E2E workflow and Cypress scripts; not currently conflict-checked by the validator)
+- **BFF port (local dev/E2E)**: `E2E_BFF_PORT` passed by the package's `cypress:server:e2e` script to `make dev-bff-e2e-cluster` (not currently conflict-checked by the validator). Do not add `bffConfig` to `package.json`; nothing reads it ([ADR 0007](../../docs/adr/0007-module-e2e-bff-wiring.md)).
 - **Production service port**: `service.port` in `federation-configmap.yaml` (validated by the conflict-check script)
 
 ### 4. Directory structure

@@ -1437,6 +1437,15 @@ append_prior_findings_projection() {
   ' "${result_file}"
 }
 
+# Usage: pr_file_list_incomplete <fetched-count> <expected-count>
+# True when the fetched list cannot be shown to hold every changed file. The
+# pull-request files endpoint stops at 3000 entries even when paginated, so a
+# larger PR would otherwise pass the protected-path gate on a cut-off list.
+pr_file_list_incomplete() {
+  [[ "${1:-}" =~ ^[0-9]+$ && "${2:-}" =~ ^[0-9]+$ ]] || return 0
+  (( $1 < $2 ))
+}
+
 run_self_test() {
   local fail=0 tmp
   tmp=$(mktemp -d)
@@ -1706,6 +1715,28 @@ run_self_test() {
     fail=1
   else
     echo "PASS supported protected-path routes to human judgment, not request-changes"
+  fi
+
+  # Production hands the changed files over as a file, never in the
+  # environment. The same case must hold on that path.
+  printf '%s\n' '.github/workflows/ci.yaml' 'src/app.ts' > "${tmp}/pp-files.txt"
+  (
+    unset REVIEW_CHANGED_FILES
+    export REVIEW_PROTECTED_PATHS=".github/,scripts/"
+    export REVIEW_CHANGED_FILES_FILE="${tmp}/pp-files.txt"
+    transform_review_result "${tmp}/pp-real.json"
+  ) > "${tmp}/pp-file-out.json"
+  if ! jq -e '
+      .action == "comment"
+      and ((.findings // []) | length) == 1
+      and ((.todo // [])
+           | map(if type == "string" then . else .text end)
+           | any(contains(".github/workflows/ci.yaml")))
+    ' "${tmp}/pp-file-out.json" >/dev/null; then
+    echo "FAIL protected-path-file: changed files passed by file were not used" >&2
+    fail=1
+  else
+    echo "PASS protected-path gate reads the changed files passed by file"
   fi
 
   # Host-owned protected-path TODO keeps Judgement even when an agent already
@@ -2488,6 +2519,16 @@ if bad:
     echo "PASS a findings row dispatched but not returned withholds the projection"
   fi
 
+  # The approve gate refuses a file list it cannot show to be whole.
+  if pr_file_list_incomplete 3000 3000 || pr_file_list_incomplete 3001 3000 \
+    || ! pr_file_list_incomplete 3000 3412 || ! pr_file_list_incomplete 12 "" \
+    || ! pr_file_list_incomplete "" 12 || ! pr_file_list_incomplete 12 "null"; then
+    echo "FAIL file-list: a cut-off or uncounted file list was treated as complete" >&2
+    fail=1
+  else
+    echo "PASS approve gate treats a cut-off or uncounted file list as incomplete"
+  fi
+
   # Round trip: what this script writes is what pre-review.sh accepts, also
   # after the Jira integration has appended link definitions to the comment.
   printf '%s\n\n[RHOAIENG-1]: https://example.atlassian.net/browse/RHOAIENG-1\n' "$(jq -r '.body' "${tmp}/proj-out.json")" > "${tmp}/prior-review.txt"
@@ -2801,6 +2842,14 @@ if [ "${ACTION}" = "approve" ]; then
   fi
   if [ -z "${PR_FILES}" ]; then
     echo "::error::Failed to fetch PR files or PR has no changed files — refusing to approve (pulls/${PR_NUMBER}/files)" >&2
+    exit 1
+  fi
+  # The list must also be whole: compare it with the PR's own file count.
+  PR_FILES_EXPECTED=$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}" --jq '.changed_files' 2>/dev/null || true)
+  PR_FILES_FETCHED=$(printf '%s\n' "${PR_FILES}" | grep -c . || true)
+  if pr_file_list_incomplete "${PR_FILES_FETCHED}" "${PR_FILES_EXPECTED}"; then
+    [[ "${PR_FILES_EXPECTED}" =~ ^[0-9]+$ ]] || PR_FILES_EXPECTED="an unknown number"
+    echo "::error::PR file list is incomplete (${PR_FILES_FETCHED} of ${PR_FILES_EXPECTED} changed files) — refusing to approve" >&2
     exit 1
   fi
 

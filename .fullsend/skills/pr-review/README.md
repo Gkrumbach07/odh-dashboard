@@ -12,11 +12,11 @@ change set.
 
 ## Pipeline
 
-1. A GitHub event matches the opt-in gate: the PR has `fullsend`, plus a trigger
-   listed under [Invocation](#invocation).
-2. Host adapters (workflow jobs / `pre-review`) write trusted JSON under
-   `.fullsend/.run/` (and `collected.json`). The orchestrator never invokes those
-   CLIs itself.
+1. A GitHub event matches a **review** trigger listed under [Invocation](#invocation).
+2. `pre-review` validates the registry, runs the host adapters in parallel
+   (see [Host adapters](#host-adapters)), and aggregates their trusted JSON
+   from `.fullsend/.run/` into `collected.json`. The orchestrator never
+   invokes those CLIs itself.
 3. The orchestrator reads [`.fullsend/dimensions.json`](../../dimensions.json),
    selects rows by `dispatch` / `when` / `re_review`, and writes a lean
    `producers.json` ledger before results are known. A **`context`** LLM row
@@ -59,18 +59,20 @@ flowchart TD
 
 ### Sticky comment order
 
-Visible sections, in order:
+Visible layout, in order (heading levels matter):
 
 1. Header (action, head SHA, run metadata)
-2. Change summary
-3. Status
-4. Signals (risk / confidence table)
-5. Checks (readiness table; omit when empty)
-6. Findings (omit when empty; includes severity groups then `### Justified` when present)
-7. Product ask (omit when `status` is `none`)
-8. TODO (omit when empty; plain-text category labels Findings / Checks /
-   Judgement / Nits)
-9. Collapsed **Review details**: Producers, Challenger (counts + removed
+2. `## Change summary`
+3. `## Status` (headline), immediately followed by:
+   - `### Signals` (risk / confidence table — always present on non-failure)
+   - `### Checks` (readiness table; omit when empty)
+4. `## Findings` when survivors or justified items exist (severity groups,
+   then `### Justified` when present). On `approve` with neither, the host
+   renders “Looks good to me.” instead of a Findings section.
+5. `## Product ask` (omit when `status` is `none`)
+6. `## TODO` (omit when empty; plain-text category labels Findings / Checks /
+   Judgement / Nits — not markdown headers)
+7. Collapsed **Review details**: Producers, Challenger (counts + removed
    audit), Evidence inspected, Labels
 
 ### Producers table
@@ -116,18 +118,17 @@ removed audit. Each shows the original severity, description, and
 these do not block disposition. The section is wrapped in HTML markers
 (`<!-- fullsend:justified-findings -->`) for downstream tooling.
 
-### PR Justifications
+### Author rebuttals (Justifications vs Evidence)
 
-Authors may challenge review findings or testing expectations via a
-`## Justifications` section in the PR body. Justifications participate
-in two places only:
+Authors can rebut review pressure in two separate places in the PR body.
+They are **not** interchangeable:
 
-| Channel | How Justifications are used |
-| --- | --- |
-| **Challenger** (findings) | If a justification adequately rebuts a finding against the diff, the challenger marks it `challenger_action: justified` and it follows the removed path — visible under `### Justified` with the challenger's reason, but not disposition-blocking. Insufficient justifications leave the finding at its original severity. Host policy categories (`protected-path`, `approach-rejected`) cannot be justified; the host restores them into `findings[]` if mistagged. |
-| **test-impact** (check) | A sufficient constraint justification in the Evidence section (why tests could not be added, what alternative verification exists) adjusts Automation/Efficiency scoring to ⚠️ instead of ❌. When Automation is ⚠️ solely because there are no tests, Efficiency stays ➖. Evidence depth still requires verification proof in the description. |
+| Channel | Where authors write | How it is used |
+| --- | --- | --- |
+| **Challenger** (findings) | `## Justifications` | If a justification adequately rebuts a finding against the diff, the challenger marks it `challenger_action: justified` and it follows the removed path — visible under `### Justified` with the challenger's reason, but not disposition-blocking. Insufficient justifications leave the finding at its original severity. Host policy categories (`protected-path`, `approach-rejected`) cannot be justified; the host restores them into `findings[]` if mistagged. |
+| **test-impact** (check) | Typically `## Evidence` | A sufficient **constraint justification** (why automation could not or should not be added, and what alternative verification exists) adjusts Automation/Efficiency scoring to ⚠️ instead of ❌. When Automation is ⚠️ solely because there are no tests, Efficiency stays ➖. Evidence depth still requires verification proof in the description — a waiver does not satisfy it. |
 
-Justifications are **not** a shared ruleset applied to every producer.
+These rebuttals are **not** a shared ruleset applied to every producer.
 Rating, pr-description-review, and other producers are not affected.
 Product-ask already has its own `mismatch-justified` path.
 
@@ -145,9 +146,8 @@ Producer **Ran** icons (`result.producers`):
 
 | Label | Applied by | Role |
 | --- | --- | --- |
-| `fullsend` | Temporary review opt-in | Gate for the workflow while Fullsend is opt-in. Applying it alone on `labeled` does not start a review. |
-| `ready-for-review` | Review readiness | With `fullsend`, a `labeled` event starts a run. |
-| `fullsend-no-fix` | Fix control | Disables the fix agent. |
+| `ready-for-review` | Humans / process | On a non-draft PR, a `labeled` event with this label starts a **review** run. Still stripped from agent `label_actions`. |
+| `fullsend-no-fix` | Humans or `/fs-fix-stop` | Disables the fix agent. |
 | `fullsend-fix` | Fix control | Fix-agent marker. Not set via agent `label_actions`. |
 | `ready-for-merge` | Host (post-review) | Internal `approve`, not draft, not a protected-path downgrade. Merge remains a separate step. |
 | `requires-manual-review` | Host (post-review) | Internal `comment`, or approve downgraded for draft / protected paths. |
@@ -276,19 +276,69 @@ Do **not**:
 ## Invocation
 
 Workflow: [`.github/workflows/fullsend.yaml`](../../../.github/workflows/fullsend.yaml).
-The PR must already have `fullsend`. Additional triggers:
+Fullsend reviews all **non-draft** PRs (no opt-in label). ODH differs from
+stock Fullsend by skipping drafts on automatic PR events; use `/fs-review` to
+review a draft. Job `if` filters admit:
 
-- `opened`, `synchronize`, `ready_for_review`
-- `labeled` with `ready-for-review` (not with `fullsend` alone)
-- issue comment body exactly `/fs-review`
-- `changes_requested` review (fix path)
+**Review path** (`dispatch`, review stage; host adapters run in its pre-script):
+
+- `pull_request_target` when **not draft**: `opened`, `synchronize`,
+  `ready_for_review` (draft→ready), or `labeled` with `ready-for-review`
+- issue comment body exactly `/fs-review` (non-bot) — runs even on drafts
+
+**Fix path** (`dispatch`, fix stage; the fix harness has no host adapters):
+
+- `pull_request_review` with state `changes_requested`
+- issue comment starting with `/fs-fix` (but not `/fs-fix-stop`) from a non-bot
+
+`/fs-fix-stop` is handled by the separate `stop-fix` job (adds
+`fullsend-no-fix`). Closed/merged PRs are skipped by `pre-review` /
+`post-review` gates. If a draft is reviewed via `/fs-review`, host outcome
+labeling still downgrades `approve` → `requires-manual-review` instead of
+`ready-for-merge`.
 
 Local contract checks (no GitHub API):
 
 ```bash
 .fullsend/scripts/validate-dimensions.sh
+.fullsend/scripts/pre-review.sh --self-test
 .fullsend/scripts/post-review.sh --self-test
 ```
+
+### Host adapters
+
+The `cli-adapter` rows (Jira, CodeRabbit) run on the host inside the review
+job, in [`pre-review.sh`](../../scripts/pre-review.sh), after the PR-state and
+skip-author checks:
+
+- **Credentials.** The shim composes `FULLSEND_GITHUB_RUNNER_SECRETS` from the
+  `CODERABBIT_API_KEY`, `JIRA_URL`, `JIRA_USERNAME` and `JIRA_API_TOKEN`
+  secrets, and [`harness/review.yaml`](../../harness/review.yaml) references
+  them in `env.runner` (Fullsend ADR 0136). `pre-review.sh` unsets them before
+  starting any child. Each adapter runs with an allowlisted environment (no
+  review or GitHub token) and only the credentials its row names in
+  `host.credentials`, under the generic `FULLSEND_ADAPTER_*` names. None of
+  them reaches the sandbox. `env.runner` also reaches `post-review.sh` and the
+  validation loop, which do not read them.
+- **Order and cost.** `fullsend run` posts the review start-status comment
+  before it runs the pre-script, so it is up before any adapter work. A closed PR or a
+  skipped author exits before the adapters, so it buys no CodeRabbit run.
+  Jira and CodeRabbit run at once; the review waits for the slower one
+  (CodeRabbit, 20 minutes at most).
+- **Cancellation.** The adapters share the review job's
+  `cancel-in-progress` group, so a newer push cancels them with the review.
+- **Stale context.** Head-dependent context is read from the forge when the
+  pre-script runs, not from the event: `pre-review.sh` reads the head SHA,
+  base, title and body with `gh pr view`, and CodeRabbit reviews that head SHA
+  (Fullsend ADR 0106). A push after that point starts a new run, which cancels
+  this one. If a run is not cancelled, its adapter context still describes the
+  head the sandbox reviewed. Fullsend's steer and coalesce work (fullsend#7689
+  follow-ups) can change this; recheck it when that lands.
+- **Adding a credential.** Add the secret to the shim's `format(...)`
+  expression, reference it in `env.runner`, and name it in the row's
+  `host.credentials`. A name the reusable workflow sets itself (`JIRA_TOKEN`,
+  `JIRA_USER_EMAIL`, `JIRA_BASE_URL`, any `FULLSEND_*` or `GITHUB_*`) is
+  refused.
 
 **Pipeline mode:** `FULLSEND_OUTPUT_DIR` is set. Orchestrator writes
 `$FULLSEND_OUTPUT_DIR/agent-result.json` (omit `action` / `body` on success;
@@ -317,26 +367,32 @@ Canonical schema: [`.fullsend/schemas/review-result.schema.json`](../../schemas/
 
 ## Meta-prompts
 
-Compose after `common-review.md` for every LLM row:
+For dispatched LLM producers, compose the kind contract after
+`common-review.md`. Challenger guidance is spawn-only (not a producer
+`meta_prompt`).
 
 | File | Kind |
 | --- | --- |
-| [`common-review.md`](../../meta-prompts/common-review.md) | Shared preface |
+| [`common-review.md`](../../meta-prompts/common-review.md) | Shared preface for LLM producers |
 | [`findings-output.md`](../../meta-prompts/findings-output.md) | `findings` |
 | [`section-output.md`](../../meta-prompts/section-output.md) | `section:*` |
 | [`check-output.md`](../../meta-prompts/check-output.md) | `check:*` |
 | [`signal-output.md`](../../meta-prompts/signal-output.md) | `signal:*` (producer contract) |
 | [`context-output.md`](../../meta-prompts/context-output.md) | `context` with `stage: pre-dispatch` (investigator brief) |
-| [`challenger-justifications.md`](../../meta-prompts/challenger-justifications.md) | Challenger spawn-only: PR Justifications → `justified` action |
+| [`challenger-justifications.md`](../../meta-prompts/challenger-justifications.md) | Challenger spawn-only: PR `## Justifications` → `justified` action |
 
 ## Upstream sync
 
 Stock files track [fullsend-ai/agents](https://github.com/fullsend-ai/agents)
 at `ce2eedd` (2026-10-06). The harness base in
 [`harness/review.yaml`](../../harness/review.yaml) and the reusable workflow in
-[`fullsend.yaml`](../../../.github/workflows/fullsend.yaml) (Fullsend v0.45.0)
-move together: the base names built-in providers that earlier releases do not
-resolve.
+[`fullsend.yaml`](../../../.github/workflows/fullsend.yaml) move together: the
+base names built-in providers that releases before v0.45.0 do not resolve. The
+workflow and the sandbox image are on Fullsend v0.48.1, the first release line
+that passes declared secrets to host-side scripts (ADR 0136). From v0.48 the
+runner refuses `host_files` under `/sandbox/workspace/.fullsend`, so the
+registry and the adapter output reach the sandbox under
+`/sandbox/workspace/odh-review/`.
 
 | Path | State |
 | --- | --- |
@@ -345,7 +401,7 @@ resolve.
 | [`references/re-review.md`](references/re-review.md) | Upstream text; categories map to dimensions through the registry instead of a fixed table |
 | [`../issue-labels/SKILL.md`](../issue-labels/SKILL.md) | Same text as upstream `skills/issue-labels/github/SKILL.md`. Listed in the harness under its own name: the base's copy shares the basename `github` with `pr-review/github` and is dropped when the harness is composed |
 | [`SKILL.md`](SKILL.md) | Local orchestrator. Carries upstream's time budget, runtime-aware dispatch, PR-head materialisation, challenger accounting and re-review contract, expressed through the registry |
-| `scripts/pre-review.sh` | Rebased onto upstream's `ce2eedd` bundle. Local additions (adapter gate and registry, dispatch normalisation, skip signal, registry-driven prior-review validation, self-test) sit on top; its header lists them |
+| `scripts/pre-review.sh` | Rebased onto upstream's `ce2eedd` bundle. Local additions (host-adapter registry and runner, dispatch normalisation, skip signal, registry-driven prior-review validation, self-test) sit on top; its header lists them |
 | `scripts/post-review.sh` | Local script, derived from `bb167e2` (the last upstream revision before the multi-forge rewrite), plus four changes from `ce2eedd`: the prior-findings projection, `label_actions` hardening, the PR file-list retry, and a failed job when the result is a `failure` |
 
 Not carried from that revision:

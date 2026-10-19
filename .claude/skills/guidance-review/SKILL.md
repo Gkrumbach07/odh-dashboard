@@ -60,16 +60,40 @@ Work through the documents in the order given (ADRs come first).
    `react.md` or `conventions.md` matching every `.ts` file), keep a statement
    only when the changed lines contain the construct it is about (an import, a
    hook, a selector, a flag, a manifest key). Do not audit unchanged code.
-3. **Check each kept statement against the changed lines** of its
-   `matched_files`. A violation needs a changed line that does what the
-   statement forbids, or omits what it requires in a place the statement
-   names.
-4. **Check practice before calling something a violation.** Open two or three
-   sibling files the statement covers. If most of them do what the diff does,
-   or another selected document says the opposite, the guidance and practice
-   disagree: report a `guidance-conflict` instead of a violation, naming both
-   sources. When an ADR and a rule disagree, the ADR with the narrower `paths`
-   wins and the rule is the stale side.
+3. **Check every added line against every kept statement.** For each
+   document, go through all of its `matched_files`, and in each file read
+   every added or changed line (`git diff <base>...HEAD -U0 -- <file>`),
+   holding the whole list of kept statements. Do not stop at the first
+   construct you notice, and do not check only the statement that made you
+   open the file: one added block can break several statements. A violation
+   needs a changed line that does what the statement forbids, or omits what it
+   requires in a place the statement names. The most common miss is a
+   second or third construct in a block you already looked at: a config key,
+   a test login, a navigation call or an import path that a kept statement
+   names explicitly.
+4. **Decide the statement's authority before looking at practice.** A
+   statement is **binding** when it comes from an ADR (any status, including
+   `Proposed`), or when the rule text marks it mandatory ("must", "must not",
+   "never", "always", "MANDATORY", "do not", or a `## Review rules` bullet).
+   Everything else (an undated, unmarked convention such as "prefer", "we
+   usually", "should") is **advisory**.
+5. **Check practice only where it can change the verdict.**
+   - **Binding statement broken by a changed line:** report a
+     `guidance-violation`, even when sibling files already break it. Existing
+     code that breaks a binding statement is debt, not precedent; an ADR often
+     says so ("tracked debt, not precedent"). You may open two or three
+     sibling files to describe that debt, and say in the description how many
+     siblings do the same, but do **not** downgrade the finding to
+     `guidance-conflict` because of them.
+   - **Advisory statement broken by a changed line:** open two or three
+     sibling files the statement covers. If most of them do what the diff
+     does, report a `guidance-conflict` naming both sources; otherwise report
+     a `guidance-violation`.
+   - **Two selected documents say opposite things** about the changed lines:
+     report a `guidance-conflict` naming both, whatever their authority. When
+     an ADR and a rule disagree, the ADR with the narrower `paths` wins and the
+     rule is the stale side; check the code against the ADR and report the
+     rule as the conflict.
 
 ## Findings
 
@@ -83,5 +107,12 @@ Work through the documents in the order given (ADRs come first).
 
 Every finding's `description` must quote the statement and cite it as
 `<document path>:<line>`, and `file`/`line` must point at the changed line.
-Report each statement at most once per file. Return `[]` when nothing breaks a
+For a binding statement that siblings also break, add one sentence naming the
+existing debt (for example "3 of the 4 sibling page objects also import from
+`../src/pages`; that is debt the ADR does not accept as precedent"). Report
+each statement at most once per file. Return `[]` when nothing breaks a
 statement; do not pad.
+
+Some decisions are also checked by host scripts (operator RBAC mirroring for
+ADR 0008, flag defaults for ADR 0009, `bffConfig` for ADR 0007). Check those
+documents as usual; the orchestrator merges duplicate findings.

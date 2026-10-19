@@ -46,7 +46,7 @@ All under `/gen-ai/api/v1/mlflow/prompts`, namespace-scoped:
 
 | Method | Path | Operation |
 |--------|------|-----------|
-| GET | `/prompts` | List prompts (paginated, filterable) |
+| GET | `/prompts` | List prompts (filterable; returns the complete name-sorted list and ignores `page_token`/`max_results` — clients page client-side until server paging is designed) |
 | POST | `/prompts` | Register prompt or add version |
 | GET | `/prompts/{name}` | Load prompt version (defaults to latest) |
 | GET | `/prompts/{name}/versions` | List all versions |

@@ -19,6 +19,7 @@ import {
   formatResource,
   getLocalQueueLabel,
   isDRAHardwareProfile,
+  getDRAHardwareProfileDetails,
 } from '#~/concepts/hardwareProfiles/utils';
 import { UseHardwareProfileConfigResult } from '#~/concepts/hardwareProfiles/useHardwareProfileConfig';
 import { NOTEBOOK_HARDWARE_PROFILE_PATHS } from '#~/concepts/notebooks/const.ts';
@@ -386,6 +387,19 @@ describe('getExistingHardwareProfileData', () => {
     });
   });
 
+  it('should fall back to the workload namespace when the namespace annotation is empty', () => {
+    const notebook = mockNotebookK8sResource({});
+    notebook.metadata.annotations = {
+      'opendatahub.io/hardware-profile-name': 'test-profile',
+      'opendatahub.io/hardware-profile-namespace': '',
+    };
+
+    expect(getExistingHardwareProfileData(notebook)).toEqual({
+      name: 'test-profile',
+      namespace: notebook.metadata.namespace,
+    });
+  });
+
   it('should return undefined values for resource without hardware profile annotations', () => {
     const notebook = mockNotebookK8sResource({});
 
@@ -405,7 +419,7 @@ describe('getExistingHardwareProfileData', () => {
     });
   });
 
-  it('should extract only name when namespace annotation is missing', () => {
+  it('should fall back to the workload namespace when the namespace annotation is missing', () => {
     const notebook = mockNotebookK8sResource({
       opts: {
         metadata: {
@@ -419,8 +433,7 @@ describe('getExistingHardwareProfileData', () => {
     const result = getExistingHardwareProfileData(notebook);
 
     expect(result.name).toBe('test-profile');
-    // mockNotebookK8sResource may return null or empty string instead of undefined
-    expect(result.namespace).toBeFalsy();
+    expect(result.namespace).toBe(notebook.metadata.namespace);
   });
 });
 
@@ -830,5 +843,59 @@ describe('isDRAHardwareProfile', () => {
 
   it('should return false when the profile has no dra field', () => {
     expect(isDRAHardwareProfile(mockHardwareProfile({}))).toBe(false);
+  });
+});
+
+describe('getDRAHardwareProfileDetails', () => {
+  const dra = { resourceClaimTemplateName: 'single-mig-partition' };
+
+  it('should return undefined for a non-DRA hardware profile', () => {
+    expect(getDRAHardwareProfileDetails(mockHardwareProfile({}))).toBeUndefined();
+  });
+
+  it('should return the template name and description', () => {
+    const profile = mockHardwareProfile({
+      dra,
+      annotations: {
+        'opendatahub.io/resource-claim-description':
+          'Requests one partitioned GPU device for the workload.',
+      },
+    });
+
+    expect(getDRAHardwareProfileDetails(profile)).toStrictEqual({
+      resourceClaimTemplateName: 'single-mig-partition',
+      description: 'Requests one partitioned GPU device for the workload.',
+    });
+  });
+
+  it('should omit the description when the annotation is missing', () => {
+    expect(getDRAHardwareProfileDetails(mockHardwareProfile({ dra }))).toStrictEqual({
+      resourceClaimTemplateName: 'single-mig-partition',
+    });
+  });
+
+  it.each(['', '   ', ' \n\t '])(
+    'should omit the description when the annotation is %j',
+    (value) => {
+      const profile = mockHardwareProfile({
+        dra,
+        annotations: { 'opendatahub.io/resource-claim-description': value },
+      });
+
+      expect(getDRAHardwareProfileDetails(profile)).toStrictEqual({
+        resourceClaimTemplateName: 'single-mig-partition',
+      });
+    },
+  );
+
+  it('should collapse line breaks and repeated whitespace into single spaces', () => {
+    const profile = mockHardwareProfile({
+      dra,
+      annotations: {
+        'opendatahub.io/resource-claim-description': '\n  Line one\n\nLine\ttwo  \n',
+      },
+    });
+
+    expect(getDRAHardwareProfileDetails(profile)?.description).toBe('Line one Line two');
   });
 });

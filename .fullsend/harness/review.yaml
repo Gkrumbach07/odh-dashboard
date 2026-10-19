@@ -39,6 +39,10 @@ host_files:
   - src: .run/collected.json
     dest: /sandbox/workspace/odh-review/collected.json
     optional: true
+  # guidance-review reads the host's rule/ADR selection by path (registry context_file).
+  - src: .run/guidance.json
+    dest: /sandbox/workspace/odh-review/guidance.json
+    optional: true
 
 model: sonnet
 

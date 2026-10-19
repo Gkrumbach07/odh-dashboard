@@ -255,6 +255,8 @@ run_adapter() {
     FULLSEND_ADAPTER_BASE_REF="${PR_BASE_REF:-}" \
     FULLSEND_ADAPTER_BASE_SHA="${PR_BASE_SHA:-}" \
     FULLSEND_ADAPTER_HEAD_SHA="${PR_HEAD_SHA:-}" \
+    FULLSEND_ADAPTER_REPO_DIR="${ADAPTER_REPO_DIR:-}" \
+    FULLSEND_ADAPTER_PR_FILES="${ADAPTER_PR_FILES:-}" \
     REVIEW_PR_TITLE="${REVIEW_PR_TITLE:-}" \
     REVIEW_PR_BODY="${REVIEW_PR_BODY:-}" \
     bash "${_SCRIPT_DIR}/../${runner}"
@@ -1275,6 +1277,13 @@ if [[ ! "${PR_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
 fi
 export REVIEW_PR_TITLE="${PR_TITLE}"
 export REVIEW_PR_BODY="${PR_BODY}"
+
+# The base-branch checkout and the PR's changed paths, for adapters that
+# select repository guidance (repo-guidance). Neither needs a credential in the
+# adapter: the file list is read here with the review token.
+ADAPTER_REPO_DIR="${REPO_DIR:-${GITHUB_WORKSPACE:-.}/target-repo}"
+ADAPTER_PR_FILES="$(mktemp)"
+forge_get_pr_files > "${ADAPTER_PR_FILES}" || : > "${ADAPTER_PR_FILES}"
 
 # Run the registered host adapters and collect every envelope generically.
 # This runs only after the state and author checks above, so a skipped review

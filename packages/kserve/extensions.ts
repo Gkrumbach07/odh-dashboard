@@ -370,16 +370,18 @@ const extensions: (
   {
     type: 'model-serving.runtime-image/install-target',
     flags: {
-      required: [SupportedArea.CUSTOM_RUNTIMES, ADMIN_USER],
+      required: [SupportedArea.CUSTOM_RUNTIMES, SupportedArea.K_SERVE, ADMIN_USER],
     },
     properties: {
       id: 'servingRuntimeTemplate',
       label: 'Serving runtime template',
-      description: 'Install as a ServingRuntime for legacy deployments and predictive models.',
+      description:
+        'Install as a ServingRuntime template for inference service deployments. Not compatible with Models as a Service.',
       selectedState: {
         listName: 'Serving runtime templates',
-        description: 'and the legacy deployment wizard.',
+        description: 'and the inference service deployment wizard.',
       },
+      installTargetName: 'serving runtime template',
       configureStepLabel: 'Configure template',
       component: () => import('./src/runtimeImageInstall/ServingRuntimeInstallTarget'),
     },

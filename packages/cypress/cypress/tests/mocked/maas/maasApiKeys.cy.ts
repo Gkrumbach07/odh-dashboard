@@ -67,6 +67,10 @@ describe('API Keys Page', () => {
         ephemeral_max_expiration: '1h',
       },
     }).as('getApiKeyConfig');
+    cy.interceptOdh('GET /maas/api/v1/gateway-url', {
+      data: { url: 'https://api.example.com/maas-api' },
+    }).as('getGatewayUrl');
+
     apiKeysPage.visit();
     cy.wait('@initialSearch');
   });
@@ -738,6 +742,11 @@ describe('API Keys Page', () => {
     copyApiKeyModal
       .findApiKeyTokenInput()
       .should('have.value', formatApiKeyHiddenPreview(createdApiKey));
+    copyApiKeyModal.findCloseButton().should('be.disabled');
+    copyApiKeyModal.findCopiedAcknowledgement().should('exist');
+    copyApiKeyModal.acknowledgeKeyCopiedCheckbox();
+    copyApiKeyModal.findCloseButton().should('be.enabled').click();
+    copyApiKeyModal.shouldBeOpen(false);
   });
 
   it('should create an API key with an on-date expiration', () => {
@@ -826,6 +835,94 @@ describe('API Keys Page', () => {
     copyApiKeyModal.shouldBeOpen();
     copyApiKeyModal.findApiKeyName().should('contain.text', 'max-expiration-key');
     copyApiKeyModal.findApiKeyExpirationDate().should('contain.text', '365 days (maximum)');
+  });
+
+  it('should display the correct information in the copy API key modal', () => {
+    cy.interceptOdh('POST /maas/api/v1/api-keys', {
+      data: mockCreateAPIKeyResponse(),
+    }).as('createApiKey');
+    cy.interceptOdh('GET /maas/api/v1/models', {
+      data: {
+        object: 'list',
+        data: [
+          {
+            id: 'publishers/maas-models/models/granite-3-8b-instruct',
+            object: 'model',
+            created: 1714521600,
+            // eslint-disable-next-line camelcase
+            owned_by: 'ibm',
+            ready: true,
+            url: 'https://example.com/models/granite-3-8b-instruct',
+          },
+          {
+            id: 'publishers/maas-models/models/flan-t5-small',
+            object: 'model',
+            created: 1672531200,
+            // eslint-disable-next-line camelcase
+            owned_by: 'google',
+            ready: true,
+            url: 'https://example.com/models/flan-t5-small',
+          },
+        ],
+      },
+    }).as('getMaaSModels');
+
+    apiKeysPage.findCreateApiKeyButton().click();
+    createApiKeyModal.shouldBeOpen();
+    cy.wait('@getSubscriptions');
+    createApiKeyModal.findExpirationModeToggle().should('contain.text', 'On date');
+    createApiKeyModal.findExpirationDateInput().should('exist');
+    createApiKeyModal.findSubmitButton().should('be.disabled');
+    createApiKeyModal.findSubscriptionToggle().click();
+    createApiKeyModal.findSubscriptionOption('premium-team-sub').click();
+    createApiKeyModal.findNameInput().type('production-backend');
+    createApiKeyModal.findDescriptionInput().type('Production API key for backend service');
+    createApiKeyModal.findSubmitButton().should('be.enabled');
+    createApiKeyModal.findSubmitButton().click();
+    cy.wait('@createApiKey').then((interception) => {
+      expect(interception.request.body?.data).to.include({ expiresIn: '1d' });
+      expect(interception.response?.body?.data).to.include({
+        name: 'production-backend',
+        expiresAt: '2026-01-20T11:54:34.521671447-05:00',
+      });
+    });
+
+    copyApiKeyModal.shouldBeOpen();
+    cy.wait('@getMaaSModels');
+    copyApiKeyModal.findApiKeyName().should('contain.text', 'production-backend');
+    copyApiKeyModal.findApiKeyExpirationDate().should('contain.text', '1 days');
+
+    copyApiKeyModal.findAccessDetails().should('exist');
+    copyApiKeyModal.expandAccessDetails();
+    copyApiKeyModal.findSubscriptionID().should('have.value', 'premium-team-sub');
+    copyApiKeyModal.findModelID().should('have.value', 'granite-3-8b-instruct');
+    copyApiKeyModal.findAvailableModelsToggle().should('exist');
+    copyApiKeyModal
+      .findBaseURL()
+      .should('have.value', 'https://example.com/models/granite-3-8b-instruct');
+    copyApiKeyModal
+      .findUsageExample()
+      .should(
+        'contain.text',
+        'https://example.com/models/granite-3-8b-instruct/v1/chat/completions',
+      )
+      .and('contain.text', '"model":"publishers/maas-models/models/granite-3-8b-instruct"');
+    copyApiKeyModal
+      .findEndpointCompatibilityAlert()
+      .scrollIntoView()
+      .should('exist')
+      .and('contain.text', 'Endpoint compatibility');
+
+    copyApiKeyModal.findAvailableModelsToggle().should('contain.text', 'Granite 3 8B Instruct');
+    copyApiKeyModal.selectAvailableModel('flan-t5-small');
+    copyApiKeyModal.findAvailableModelsToggle().should('contain.text', 'Flan T5 Small');
+    copyApiKeyModal.findModelID().should('have.value', 'flan-t5-small');
+    copyApiKeyModal.findBaseURL().should('have.value', 'https://example.com/models/flan-t5-small');
+    copyApiKeyModal
+      .findUsageExample()
+      .should('contain.text', '"model":"publishers/maas-models/models/flan-t5-small"')
+      .and('contain.text', 'https://example.com/models/flan-t5-small/v1/chat/completions')
+      .and('contain.text', 'X-MAAS-SUBSCRIPTION: premium-team-sub');
   });
 
   it('should show a validation error for an out-of-range after-days value', () => {

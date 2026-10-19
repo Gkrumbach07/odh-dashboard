@@ -25,7 +25,9 @@ not change the checks below, their severities, or their evidence requirements.
 1. The guidance context file named by the caller (in Fullsend:
    `/sandbox/workspace/odh-review/guidance.json`). It holds `status` and, when
    `status` is `ok`, `documents`: each has `path`, `kind` (`adr` or `rule`),
-   `title`, `matched_files` and, for ADRs, `adr_status`.
+   `title`, `matched_files` (every changed file the document governs,
+   hand-written files first; `matched_files_complete` is false only when the
+   list was capped) and, for ADRs, `adr_status`.
 2. The PR diff for the matched files: `git diff <base>...HEAD -- <file>`.
 3. The documents themselves, read from the repository checkout.
 

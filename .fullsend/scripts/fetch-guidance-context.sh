@@ -28,7 +28,9 @@ from pathlib import Path
 
 dest = Path(sys.argv[1])
 MAX_DOCS = 15
-MAX_MATCHED = 8
+MAX_MATCHED = 200
+# Generated output sorts last so a reviewer reaches hand-written files first.
+GENERATED = re.compile(r"(^|/)(@mf-types|__generated__|generated)/|\.d\.ts$|(^|/)pnpm-lock\.yaml$|package-lock\.json$")
 
 
 def envelope(**kwargs):
@@ -140,6 +142,7 @@ for kind, path in candidates:
         continue
     patterns = [glob_to_regex(g) for g in globs]
     matched = [f for f in changed if any(p.match(f) for p in patterns)]
+    matched.sort(key=lambda f: bool(GENERATED.search(f)))
     if not matched:
         continue
     entry = {
@@ -149,6 +152,7 @@ for kind, path in candidates:
         "paths": globs,
         "match_count": len(matched),
         "matched_files": matched[:MAX_MATCHED],
+        "matched_files_complete": len(matched) <= MAX_MATCHED,
     }
     if status:
         entry["adr_status"] = status

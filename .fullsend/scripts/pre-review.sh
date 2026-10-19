@@ -35,6 +35,9 @@
 #      and no apply_human_dismissals step, because post-review.sh writes no
 #      ids or dispositions and posts no inline threads to dismiss. Their forge
 #      helpers stay in the bundled library unused.
+#  10. fetch_pr_revisions puts the PR's base and head commits into the
+#      target checkout's object store (no checkout) before the adapters run,
+#      for the decision-check adapters that read them with `git show`.
 # The local main-flow steps call `gh` directly, so this copy only completes a
 # review on GitHub; the GitLab library is carried as bundled.
 #
@@ -304,6 +307,49 @@ run_pre_review_adapters() {
   rm -rf "${log_dir}"
 }
 
+# The decision-check adapters (check-*.sh) read the PR's own base and head
+# commits with `git show` and `git diff`. The target checkout holds the
+# default branch, and for a fork PR not the head commit at all, so fetch both
+# commits into its object store first. No branch, index or working-tree file
+# changes (only FETCH_HEAD), and nothing from the PR is checked out or run. A
+# failed fetch is not fatal: the checks then report pr-revisions-unavailable.
+pr_revisions_present() {
+  local sha
+  for sha in "${PR_BASE_SHA:-}" "${PR_HEAD_SHA:-}"; do
+    git -C "$1" cat-file -e "${sha}^{commit}" 2>/dev/null || return 1
+  done
+}
+
+fetch_pr_revisions() {
+  local dir="$1" url="$2" token="${3:-}" attempt
+  local depth_args=() auth_args=()
+  git -C "${dir}" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  [[ "${PR_BASE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ && "${PR_HEAD_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] || return 0
+  pr_revisions_present "${dir}" && return 0
+  if [[ "$(git -C "${dir}" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]]; then
+    depth_args=(--depth=200)
+  fi
+  # Anonymous first (a public repository, or credentials the checkout kept),
+  # then with the review token.
+  for attempt in anonymous token; do
+    if [[ "${attempt}" == token ]]; then
+      [[ -n "${token}" ]] || break
+      auth_args=(-c "http.extraheader=Authorization: basic $(printf 'x-access-token:%s' "${token}" | base64 | tr -d '\n')")
+    fi
+    git -C "${dir}" ${auth_args[@]+"${auth_args[@]}"} fetch --no-tags --quiet \
+      ${depth_args[@]+"${depth_args[@]}"} "${url}" "${PR_BASE_SHA}" "${PR_HEAD_SHA}" 2>/dev/null \
+      || git -C "${dir}" ${auth_args[@]+"${auth_args[@]}"} fetch --no-tags --quiet \
+        ${depth_args[@]+"${depth_args[@]}"} "${url}" "${PR_BASE_SHA}" "+refs/pull/${PR_NUMBER:-0}/head" 2>/dev/null \
+      || true
+    pr_revisions_present "${dir}" && break
+  done
+  if pr_revisions_present "${dir}"; then
+    echo "Fetched the PR base and head commits for the decision checks"
+  else
+    echo "::warning::Could not fetch the PR base and head commits; the decision checks will report them unavailable"
+  fi
+}
+
 prepare_cli_adapters() {
   if ! validate_adapter_registry; then
     echo "::error::Invalid cli-adapter host metadata in .fullsend/dimensions.json"
@@ -461,6 +507,32 @@ run_self_test() {
     echo "FAIL cli-adapter registry validation" >&2
     fail=1
   fi
+
+  # A shallow default-branch checkout gains the PR's base and head commits
+  # without moving HEAD or touching the working tree.
+  local remote checkout base_sha head_sha before
+  remote="$(mktemp -d)"
+  checkout="$(mktemp -d)"
+  git -C "${remote}" init -q
+  git -C "${remote}" -c user.email=t@example.test -c user.name=t commit -q --allow-empty -m base
+  base_sha="$(git -C "${remote}" rev-parse HEAD)"
+  git -C "${remote}" checkout -q -b pr
+  git -C "${remote}" -c user.email=t@example.test -c user.name=t commit -q --allow-empty -m head
+  head_sha="$(git -C "${remote}" rev-parse HEAD)"
+  git -C "${remote}" checkout -q -
+  git clone -q --depth 1 "file://${remote}" "${checkout}/repo" 2>/dev/null
+  git -C "${remote}" -c user.email=t@example.test -c user.name=t commit -q --allow-empty -m newer
+  before="$(git -C "${checkout}/repo" rev-parse HEAD)"
+  if PR_BASE_SHA="${base_sha}" PR_HEAD_SHA="${head_sha}" \
+    fetch_pr_revisions "${checkout}/repo" "file://${remote}" >/dev/null \
+    && PR_BASE_SHA="${base_sha}" PR_HEAD_SHA="${head_sha}" pr_revisions_present "${checkout}/repo" \
+    && [[ "$(git -C "${checkout}/repo" rev-parse HEAD)" == "${before}" ]]; then
+    echo "PASS PR revision fetch for decision checks"
+  else
+    echo "FAIL PR revision fetch for decision checks" >&2
+    fail=1
+  fi
+  rm -rf "${remote}" "${checkout}"
   temp_dir="$(mktemp -d)"
   : > "${temp_dir}/prescript.out"
   if (FULLSEND_PRESCRIPT_OUTPUT="${temp_dir}/prescript.out" request_skip $'missing: Problem\r\nskipped=false') \
@@ -1495,6 +1567,7 @@ export REVIEW_PR_BODY="${PR_BODY}"
 ADAPTER_REPO_DIR="${REPO_DIR:-${GITHUB_WORKSPACE:-.}/target-repo}"
 ADAPTER_PR_FILES="$(mktemp)"
 forge_get_pr_files > "${ADAPTER_PR_FILES}" || : > "${ADAPTER_PR_FILES}"
+fetch_pr_revisions "${ADAPTER_REPO_DIR}" "https://github.com/${REPO}.git" "${REVIEW_TOKEN:-${GH_TOKEN:-}}"
 
 # Run the registered host adapters and collect every envelope generically.
 # This runs only after the state and author checks above, so a skipped review

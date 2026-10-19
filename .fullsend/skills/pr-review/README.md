@@ -303,11 +303,15 @@ Local contract checks (no GitHub API):
 .fullsend/scripts/validate-dimensions.sh
 .fullsend/scripts/pre-review.sh --self-test
 .fullsend/scripts/post-review.sh --self-test
+for check in operator-rbac flag-defaults bff-config; do
+  ".fullsend/scripts/check-${check}.sh" --self-test
+done
 ```
 
 ### Host adapters
 
-The `cli-adapter` rows (Jira, CodeRabbit) run on the host inside the review
+The `cli-adapter` rows (Jira, CodeRabbit, repo guidance and the decision
+checks) run on the host inside the review
 job, in [`pre-review.sh`](../../scripts/pre-review.sh), after the PR-state and
 skip-author checks:
 
@@ -334,6 +338,15 @@ skip-author checks:
   this one. If a run is not cancelled, its adapter context still describes the
   head the sandbox reviewed. Fullsend's steer and coalesce work (fullsend#7689
   follow-ups) can change this; recheck it when that lands.
+- **Decision checks.** `operator-rbac` (ADR 0008), `flag-defaults` (ADR 0009)
+  and `bff-config` (ADR 0007) are deterministic findings adapters
+  (`scripts/check-*.sh`, logic in `scripts/lib/decision_checks.py`). They need
+  no credential. `pre-review.sh` fetches the PR's base and head commits into
+  the target checkout's object store first (`fetch_pr_revisions`, no
+  checkout), and the checks read them with `git show`, so they see the PR's
+  code rather than the default-branch tip. Each reports only what the PR
+  changes, at `low`, and enters challenger synthesis like any producer. Run
+  `scripts/check-<name>.sh --self-test` after changing one.
 - **Adding a credential.** Add the secret to the shim's `format(...)`
   expression, reference it in `env.runner`, and name it in the row's
   `host.credentials`. A name the reusable workflow sets itself (`JIRA_TOKEN`,

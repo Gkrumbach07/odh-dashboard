@@ -83,22 +83,13 @@ After the installer completes, verify the following files exist and are correct.
 - `module-federation.name` is the correct `<camelCase>`
 - `module-federation.local.port` matches the allocated frontend port from Phase 1
 - `module-federation.proxy[0].path` is `/<name>/api`
-- `module-federation.service.name` is `odh-dashboard-<slug>-ui` (the standalone service name for this module)
+- `module-federation.service.name` is `odh-dashboard`, so the E2E proxy routes `/<name>/api` to the locally running BFF (the deployed Service name comes from the operator's module registration). See [ADR 0007](../../../docs/adr/0007-module-e2e-bff-wiring.md).
 - `module-federation.service.port` matches the module's production service port. Allocate by scanning `dashboard-operator/internal/controller/modules.go` for existing ports (current range: 8043–8943, increments of ~100). Find the next available port:
   ```bash
   grep 'Port:' dashboard-operator/internal/controller/modules.go | grep -oP '\d{4}' | sort -n
   ```
-- Note: The `service` config is used by the operator when generating the federation-config ConfigMap
-- If BFF included, add `bffConfig` section:
-
-  ```json
-  "bffConfig": {
-    "enabled": true,
-    "port": 8080,
-    "healthEndpoint": "/healthcheck",
-    "startCommand": "make dev-bff-e2e-mock"
-  }
-  ```
+- Note: the operator does not read this `service` block; it derives the federation-config Service name from the module registration (`standaloneServiceName` in `dashboard-operator/internal/controller/dashboard_federation.go`)
+- If BFF included, add a `cypress:server:e2e` script that runs `make dev-bff-e2e-cluster E2E_BFF_PORT=<bff-port>`. Do not add a `bffConfig` block; nothing reads it ([ADR 0007](../../../docs/adr/0007-module-e2e-bff-wiring.md)).
 
 - Dependencies include `@odh-dashboard/plugin-core` and `@odh-dashboard/internal`
 - `exports` includes `"./extensions": "./frontend/src/odh/extensions.ts"`

@@ -234,7 +234,7 @@ it('test name', { tags: ['@Sanity', '@SanitySet1', '@ODS-1931', '@Dashboard', '@
 
 ```javascript
 cy.step('Log into the application');
-cy.visitWithLogin('/', HTPASSWD_CLUSTER_ADMIN_USER);
+cy.visitWithLogin('/', LDAP_ADMIN_USER);
 ```
 
 Common actions are performed within the test referencing page objects:

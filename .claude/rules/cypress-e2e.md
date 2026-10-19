@@ -75,7 +75,8 @@ packages/cypress/cypress/
 - User configuration is ALWAYS stored in `test-variables.yml`
 - Reference users, buckets, clusters from this file like other tests
 - Use `test-variables.yml.example` as template for what gets checked in
-- Load test variables by importing from `utils/e2eUsers` (e.g., `import { HTPASSWD_CLUSTER_ADMIN_USER } from '../../../utils/e2eUsers';`)
+- Load test variables by importing from `utils/e2eUsers` (e.g., `import { LDAP_ADMIN_USER } from '../../../utils/e2eUsers';`)
+- Log in as `LDAP_ADMIN_USER` for admin flows and `LDAP_CONTRIBUTOR_USER` for non-admin flows. Do not use `HTPASSWD_CLUSTER_ADMIN_USER` in new specs; its unrestricted permissions hide RBAC gaps.
 
 **Fixture files for test configuration**:
 - Store test-specific data in YAML fixture files
@@ -87,6 +88,8 @@ packages/cypress/cypress/
 **Tagging convention**:
 - Tags should be specified in the test file, in the `it()` block options, e.g. `it('...', { tags: ['@Tag'] }, ...)`
 - Never include tags in fixture files.
+- Every `it()` needs a priority tag (`@Smoke`/`@Sanity`/`@Tier1`), a matching set tag (`@SmokeSet1`–`@SmokeSet5` or `@SanitySet1`–`@SanitySet4`) so it appears in its set report, plus team and area tags.
+- Add `@ci-dashboard-regression-tags` only for fast, self-contained tests that belong in the PR CI run.
 
 **No interfaces for test data**:
 - Don't create TypeScript interfaces for test data
@@ -169,6 +172,9 @@ cy.exec('oc wait --for=condition=Ready pod/my-pod --timeout=300s');
 - Avoid text-based assertions unless absolutely necessary
 - Text can change, test IDs provide stable selectors
 
+**Verify the cluster, not only the UI**:
+- After creating or editing a resource through the UI, check that it exists on the cluster, and its status or conditions where they exist, using the `utils/oc_commands` helpers. Do not rely on the UI listing alone.
+
 **Validation examples**:
 
 ```typescript
@@ -216,6 +222,9 @@ pageObject.findStatusText().should('contain', 'Running');
 - Look for similar test patterns in the e2e directory
 - Reuse existing utility functions and patterns
 - Example: Search for "workbench" or "cluster storage" tests
+
+**Keep real model deployments to a minimum**:
+- Each real model deployment costs about 5–10 minutes in live E2E. Cover a new deployment field by extending an existing deploy spec (for example `testDeployLLMDServing.cy.ts`) and run edit and check steps against the model it already deployed. Do not add a new spec that deploys more models.
 
 **Page object reuse**:
 - Use existing page objects like `projectDetails`, `clusterStorage`
@@ -504,6 +513,10 @@ During implementation:
 - [ ] Prefer test ID validation over text validation
 - [ ] Place OC commands and API calls in utility functions
 - [ ] Never include tags in fixture files
+- [ ] Every `it()` has priority, set, team and area tags
+- [ ] Log in as `LDAP_ADMIN_USER` / `LDAP_CONTRIBUTOR_USER`, not `HTPASSWD_CLUSTER_ADMIN_USER`
+- [ ] UI creates and edits are checked on the cluster with `oc` helpers
+- [ ] No new real model deployments where an existing deploy spec can be extended
 
 After implementation:
 

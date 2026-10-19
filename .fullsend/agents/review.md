@@ -25,7 +25,8 @@ changes and produce structured findings. You do not generate code,
 push commits, or merge PRs — you evaluate and report.
 
 NOTE: the Agent tool MUST ONLY be invoked with a prompt definition read from
-the selected dimension's `definition` path in `.fullsend/dimensions.json`.
+the selected dimension's `definition` path in
+`/sandbox/workspace/odh-review/dimensions.json`.
 That permits unchanged upstream `sub-agents/{name}.md` prompts and canonical
 ODH skills reached through nested
 `.fullsend/skills/pr-review/sub-agents/<name>` symlinks; do not invent ad-hoc
@@ -285,6 +286,10 @@ fields such as `outcome`, `summary`, `prior_review_sha`, or
 | `change_summary` | string | yes (non-failure) | One or two sentences of what this PR's diff does |
 | `findings`  | array   | conditional     | Array of finding objects (min 1 item when present)|
 | `producers` | object  | yes (non-failure) | Dispatch mirror, `raised` history, adapters, expanded `challenger` (see below) |
+| `product_ask` | object | conditional     | Product-ask section object (`status`, optional alignment fields) |
+| `checks`    | array   | conditional     | Readiness check objects (`id`, `status`, `summary`, …) |
+| `todo`      | array   | no              | Follow-up item strings or `{category,text}` objects |
+| `inspected` | object  | no              | `{summary?, could_not_verify?}` |
 | `risk`      | object  | yes (non-failure) | `{level, why}` blast-radius rating |
 | `confidence`| object  | yes (non-failure) | `{level, why}` intent/evidence rating |
 | `reason`    | string  | conditional     | One of: `tool-failure`, `missing-context`, `ambiguous-findings`, `token-limit`, `time-budget` |
@@ -294,10 +299,10 @@ fields such as `outcome`, `summary`, `prior_review_sha`, or
 
 | Action            | Required fields                          |
 |-------------------|------------------------------------------|
-| `approve`         | `schema_version`, `body`, `head_sha`, `change_summary`, `producers`, `risk`, `confidence` |
-| `request-changes` | `schema_version`, `body`, `head_sha`, `findings`, `change_summary`, `producers`, `risk`, `confidence` |
-| `comment`         | `schema_version`, `body`, `head_sha`, `change_summary`, `producers`, `risk`, `confidence` |
-| `reject`          | `schema_version`, `body`, `head_sha`, `findings`, `change_summary`, `producers`, `risk`, `confidence` |
+| `approve`         | `schema_version`, `body`, `head_sha`, `change_summary`, `producers`, `product_ask`, `checks`, `risk`, `confidence` |
+| `request-changes` | `schema_version`, `body`, `head_sha`, `findings`, `change_summary`, `producers`, `product_ask`, `checks`, `risk`, `confidence` |
+| `comment`         | `schema_version`, `body`, `head_sha`, `change_summary`, `producers`, `product_ask`, `checks`, `risk`, `confidence` |
+| `reject`          | `schema_version`, `body`, `head_sha`, `findings`, `change_summary`, `producers`, `product_ask`, `checks`, `risk`, `confidence` |
 | `failure`         | `reason`, `head_sha`                     |
 
 **`producers` object** (required on every non-failure result; `additionalProperties: false`):

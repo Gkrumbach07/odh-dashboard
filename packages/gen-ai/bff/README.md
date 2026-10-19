@@ -223,11 +223,7 @@ curl -i -H "Authorization: Bearer $TOKEN" "http://localhost:8080/gen-ai/api/v1/m
 curl -i -H "Authorization: Bearer $TOKEN" "http://localhost:8080/gen-ai/api/v1/mlflow/prompts?namespace=default&filter_name=pet"
 ```
 
-**List MLflow Prompts with Pagination:**
-
-```bash
-curl -i -H "Authorization: Bearer $TOKEN" "http://localhost:8080/gen-ai/api/v1/mlflow/prompts?namespace=default&max_results=2"
-```
+The prompt list is not paginated server-side: the MLflow BFF returns every project and global prompt and ignores `page_token` and `max_results`. The UI pages client-side.
 
 **Create a Chat Prompt:**
 

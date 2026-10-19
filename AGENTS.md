@@ -134,6 +134,7 @@ Skills provide multi-step workflows. They live in `.claude/skills/`. Read the re
 | **Upstream Sync Local**            | `skills/upstream-sync-local/`          | Syncing upstream changes from a local repository clone (pass package name, local repo path, and branch) |
 | **Style Review**                   | `skills/style-review/`                 | Reviewing code for PF priority-order compliance, wrapper component usage, and class naming conventions per `css-patternfly.md` |
 | **RBAC Review**                    | `skills/rbac-review/`                  | Reviewing code for proper RBAC enforcement — catches missing SSAR gates, assumed access from `isAdmin`, and pages that break for limited-access users |
+| **Guidance Review**                | `skills/guidance-review/`              | Checking changed lines against the `.claude/rules` and ADRs whose `paths:` match them — also runs as a Fullsend review lane |
 | **Jira Triage**                   | `skills/jira-triage/`                  | Fetching Jira issues by filter criteria, running full triage on New issues (orchestrates all analysis skills), defining triage operations, and bulk-applying them |
 | **Jira Validate Priority/Severity** | `skills/jira-validate-priority-severity/` | Analyzing bugs for missing or incorrect severity and priority fields         |
 | **Jira Validate Description**     | `skills/jira-validate-description/`    | Validating issue descriptions for completeness per type, requesting missing information from reporters |

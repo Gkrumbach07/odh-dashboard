@@ -205,8 +205,9 @@ deleteOpenShiftProject('test-project');
 User credentials are defined in `test-variables.yml` (not stored upstream - injected during CI):
 
 ```yaml
-HTPASSWD_CLUSTER_ADMIN_USER:
-  AUTH_TYPE: htpasswd-auth
+# Exported as LDAP_ADMIN_USER from utils/e2eUsers
+TEST_USER:
+  AUTH_TYPE: ldap-auth
   USERNAME: admin-user
   PASSWORD: admin-password
 ```
@@ -214,9 +215,9 @@ HTPASSWD_CLUSTER_ADMIN_USER:
 Then imported and used in tests:
 
 ```typescript
-import { HTPASSWD_CLUSTER_ADMIN_USER } from '../../../utils/e2eUsers';
+import { LDAP_ADMIN_USER } from '../../../utils/e2eUsers';
 
-cy.visitWithLogin('/projects', HTPASSWD_CLUSTER_ADMIN_USER);
+cy.visitWithLogin('/projects', LDAP_ADMIN_USER);
 ```
 
 **Available utilities:**
@@ -265,7 +266,7 @@ it(
     tags: [
       '@Smoke', // Critical test
       '@ODS-1875', // Jira ticket
-      '@ci-dashboard-set-1', // CI group
+      '@SmokeSet1', // set report
     ],
   },
   () => {
@@ -333,7 +334,7 @@ cy.step('Verify project was created');
 ### Tags and Test Options
 
 ```typescript
-it('should create project', { tags: ['@Smoke', '@Dashboard'], timeout: 30000 }, () => {
+it('should create project', { tags: ['@Smoke', '@SmokeSet1', '@Dashboard'], timeout: 30000 }, () => {
   // test code
 });
 ```
@@ -399,11 +400,11 @@ after(() => {
 it(
   'Create and delete a project',
   {
-    tags: ['@Smoke', '@ODS-1234', '@Dashboard', '@Workbenches'],
+    tags: ['@Smoke', '@SmokeSet1', '@ODS-1234', '@Dashboard', '@Workbenches'],
   },
   () => {
     cy.step('Log into the application');
-    cy.visitWithLogin('/', HTPASSWD_CLUSTER_ADMIN_USER);
+    cy.visitWithLogin('/', LDAP_ADMIN_USER);
     projectListPage.navigate();
 
     cy.step('Create a new project');

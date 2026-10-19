@@ -229,6 +229,57 @@
       "notes": "Host selection of the .claude/rules and ADR documents whose paths: globs match the PR's changed files, read from the base-branch checkout. Context only; it never enters challenger synthesis."
     },
     {
+      "id": "operator-rbac",
+      "label": "Operator RBAC (ADR 0008)",
+      "kind": "cli-adapter",
+      "output": "findings",
+      "dispatch": "always",
+      "runner": "scripts/check-operator-rbac.sh",
+      "producer_file": ".run/operator-rbac.json",
+      "host": {
+        "execution": "pre_review",
+        "setup_runner": "",
+        "credentials": { "url_env": "", "username_env": "", "token_env": "" }
+      },
+      "failure_severity": "info",
+      "categories": ["operator-rbac-not-mirrored"],
+      "notes": "Deterministic check of ADR 0008: every permission a Role or ClusterRole under manifests/modules/ or manifests/base/ grants is held by both operator role files, resourceNames scope included. Reads the PR's own commits; reports only gaps the PR opens. Low severity, verified against source by the challenger like any producer."
+    },
+    {
+      "id": "flag-defaults",
+      "label": "Flag defaults (ADR 0009)",
+      "kind": "cli-adapter",
+      "output": "findings",
+      "dispatch": "always",
+      "runner": "scripts/check-flag-defaults.sh",
+      "producer_file": ".run/flag-defaults.json",
+      "host": {
+        "execution": "pre_review",
+        "setup_runner": "",
+        "credentials": { "url_env": "", "username_env": "", "token_env": "" }
+      },
+      "failure_severity": "info",
+      "categories": ["flag-default-mismatch"],
+      "notes": "Deterministic check of ADR 0009: a flag added or changed in frontend const.ts has the same default in the backend blankDashboardCR and the core-bff BlankDashboardCR; also a Tech Preview flag defaulting to true and a promotion into a new group. Low severity."
+    },
+    {
+      "id": "bff-config",
+      "label": "bffConfig (ADR 0007)",
+      "kind": "cli-adapter",
+      "output": "findings",
+      "dispatch": "always",
+      "runner": "scripts/check-bff-config.sh",
+      "producer_file": ".run/bff-config.json",
+      "host": {
+        "execution": "pre_review",
+        "setup_runner": "",
+        "credentials": { "url_env": "", "username_env": "", "token_env": "" }
+      },
+      "failure_severity": "info",
+      "categories": ["dead-bff-config"],
+      "notes": "Deterministic check of ADR 0007: a bffConfig block added to any package.json. Low severity."
+    },
+    {
       "id": "product-ask-review",
       "label": "Product ask",
       "kind": "llm-skill",

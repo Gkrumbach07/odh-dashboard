@@ -154,9 +154,24 @@ for kind, path in candidates:
         entry["adr_status"] = status
     docs.append(entry)
 
-# ADRs first (narrow, decision-specific), then rules; within each, the
-# documents whose globs are most specific to this change come first.
-docs.sort(key=lambda d: (d["kind"] != "adr", -d["match_count"] / max(1, len(changed)), d["path"]))
+def specificity(globs):
+    # Literal path segments before the first wildcard, best glob wins:
+    # "packages/cypress/cypress/tests/e2e/**" (5) outranks "**/*.tsx" (0).
+    best = 0
+    for g in globs:
+        depth = 0
+        for seg in g.split("/"):
+            if any(c in seg for c in "*?"):
+                break
+            depth += 1
+        best = max(best, depth)
+    return best
+
+
+# ADRs first (decision-specific), then rules; within each, the documents with
+# the narrowest globs come first, so a cap drops repo-wide rules before
+# path-specific ones.
+docs.sort(key=lambda d: (d["kind"] != "adr", -specificity(d["paths"]), -d["match_count"], d["path"]))
 truncated = len(docs) > MAX_DOCS
 docs = docs[:MAX_DOCS]
 

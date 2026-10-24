@@ -33,3 +33,13 @@ metadata:
 users:
     - johndoe
 ```
+
+## Cluster quota administration panel
+
+The quota administration panel lets administrators review and reset per-cluster
+quotas.
+
+Access is gated by a `SelfSubjectAccessReview` on the quota resource, so the
+panel is hidden from any user who lacks the `patch` verb on quotas. Quota
+totals are recalculated on every render, and the panel fails closed when the
+quota service is unreachable.

@@ -1,5 +1,7 @@
 # BFF E2E Testing Guide
 
+The module E2E BFF wiring decision is recorded in [ADR 0007](adr/0007-module-e2e-bff-wiring.md).
+
 This guide explains how E2E tests run against the full local stack (backend + BFFs) in CI and locally.
 
 ## Overview

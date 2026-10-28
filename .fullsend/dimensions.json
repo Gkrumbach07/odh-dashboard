@@ -27,10 +27,22 @@
       "budget_priority": 1,
       "re_review": "full",
       "categories": [
-        "logic-error", "nil-deref", "off-by-one", "edge-case", "api-contract",
-        "missing-test", "test-inadequate", "pattern-violation", "test-weakened",
-        "test-removed", "mock-loosened", "assertion-weakened", "coverage-reduced",
-        "test-poisoning", "split-payload", "stale-reference"
+        "logic-error",
+        "nil-deref",
+        "off-by-one",
+        "edge-case",
+        "api-contract",
+        "missing-test",
+        "test-inadequate",
+        "pattern-violation",
+        "test-weakened",
+        "test-removed",
+        "mock-loosened",
+        "assertion-weakened",
+        "coverage-reduced",
+        "test-poisoning",
+        "split-payload",
+        "stale-reference"
       ]
     },
     {
@@ -47,11 +59,26 @@
       "budget_priority": 2,
       "re_review": "skip-unless-requalified",
       "categories": [
-        "auth-bypass", "rbac-violation", "data-exposure", "privilege-escalation",
-        "injection-vuln", "sandbox-escape", "xss", "ssrf", "insecure-deserialization",
-        "prompt-injection", "unicode-steganography", "bidi-override", "homoglyph-attack",
-        "instruction-smuggling", "fail-open", "permission-expansion",
-        "permission-reduction", "role-escalation", "workflow-permission", "secret-exposure"
+        "auth-bypass",
+        "rbac-violation",
+        "data-exposure",
+        "privilege-escalation",
+        "injection-vuln",
+        "sandbox-escape",
+        "xss",
+        "ssrf",
+        "insecure-deserialization",
+        "prompt-injection",
+        "unicode-steganography",
+        "bidi-override",
+        "homoglyph-attack",
+        "instruction-smuggling",
+        "fail-open",
+        "permission-expansion",
+        "permission-reduction",
+        "role-escalation",
+        "workflow-permission",
+        "secret-exposure"
       ]
     },
     {
@@ -68,10 +95,19 @@
       "re_review": "skip-unless-requalified",
       "remediation_candidates": true,
       "categories": [
-        "scope-exceeded", "tier-mismatch", "unauthorized-change", "scope-creep",
-        "missing-authorization", "misleading-label", "design-direction",
-        "complexity-ratio", "misplaced-abstraction", "architectural-conflict",
-        "design-smell", "over-engineering", "under-engineering"
+        "scope-exceeded",
+        "tier-mismatch",
+        "unauthorized-change",
+        "scope-creep",
+        "missing-authorization",
+        "misleading-label",
+        "design-direction",
+        "complexity-ratio",
+        "misplaced-abstraction",
+        "architectural-conflict",
+        "design-smell",
+        "over-engineering",
+        "under-engineering"
       ]
     },
     {
@@ -86,8 +122,12 @@
       "budget_priority": 4,
       "re_review": "trivial",
       "categories": [
-        "naming-convention", "error-handling-idiom", "api-shape",
-        "code-organization", "doc-style", "pattern-inconsistency"
+        "naming-convention",
+        "error-handling-idiom",
+        "api-shape",
+        "code-organization",
+        "doc-style",
+        "pattern-inconsistency"
       ]
     },
     {
@@ -103,7 +143,10 @@
       "budget_priority": 3,
       "re_review": "skip-unless-requalified",
       "categories": [
-        "pf-priority-order", "pf-wrapper", "pf-token", "custom-class-naming",
+        "pf-priority-order",
+        "pf-wrapper",
+        "pf-token",
+        "custom-class-naming",
         "patternfly-gap"
       ]
     },
@@ -120,24 +163,13 @@
       "budget_priority": 2,
       "re_review": "skip-unless-requalified",
       "categories": [
-        "missing-ssar", "rbac-fail-open", "assumed-admin-access",
-        "namespace-scope", "limited-user-degradation", "rbac-data-exposure"
+        "missing-ssar",
+        "rbac-fail-open",
+        "assumed-admin-access",
+        "namespace-scope",
+        "limited-user-degradation",
+        "rbac-data-exposure"
       ]
-    },
-    {
-      "id": "guidance-review",
-      "label": "Repo guidance",
-      "kind": "llm-skill",
-      "output": "findings",
-      "dispatch": "conditional",
-      "when": "the repo-guidance context lists at least one document",
-      "definition": "skills/pr-review/sub-agents/guidance-review/SKILL.md",
-      "meta_prompt": "meta-prompts/findings-output.md",
-      "context_file": "/sandbox/workspace/odh-review/guidance.json",
-      "failure_severity": "info",
-      "budget_priority": 3,
-      "re_review": "skip-unless-requalified",
-      "categories": ["guidance-violation", "guidance-conflict"]
     },
     {
       "id": "docs-currency",
@@ -152,7 +184,12 @@
       "failure_severity": "info",
       "budget_priority": 4,
       "re_review": "skip-unless-requalified",
-      "categories": ["stale-doc", "missing-doc", "incorrect-doc", "incomplete-doc"]
+      "categories": [
+        "stale-doc",
+        "missing-doc",
+        "incorrect-doc",
+        "incomplete-doc"
+      ]
     },
     {
       "id": "cross-repo-contracts",
@@ -167,8 +204,13 @@
       "budget_priority": 4,
       "re_review": "skip-unless-requalified",
       "categories": [
-        "breaking-api", "breaking-schema", "breaking-config", "breaking-cli",
-        "missing-deprecation", "missing-version-bump", "backward-incompatible"
+        "breaking-api",
+        "breaking-schema",
+        "breaking-config",
+        "breaking-cli",
+        "missing-deprecation",
+        "missing-version-bump",
+        "backward-incompatible"
       ]
     },
     {
@@ -209,31 +251,19 @@
         }
       },
       "failure_severity": "info",
-      "categories": ["coderabbit"],
+      "categories": [
+        "coderabbit"
+      ],
       "notes": "Host-side CodeRabbit CLI output, normalized without credentials before challenger synthesis. The transport is trusted; finding text is external review evidence that must be verified against repository source."
-    },
-    {
-      "id": "repo-guidance",
-      "label": "Repo guidance",
-      "kind": "cli-adapter",
-      "output": "context",
-      "dispatch": "always",
-      "runner": "scripts/fetch-guidance-context.sh",
-      "producer_file": ".run/guidance.json",
-      "host": {
-        "execution": "pre_review",
-        "setup_runner": "",
-        "credentials": { "url_env": "", "username_env": "", "token_env": "" }
-      },
-      "failure_severity": "info",
-      "notes": "Host selection of the .claude/rules and ADR documents whose paths: globs match the PR's changed files, read from the base-branch checkout. Context only; it never enters challenger synthesis."
     },
     {
       "id": "product-ask-review",
       "label": "Product ask",
       "kind": "llm-skill",
       "output": "section:product_ask",
-      "result_fields": ["product_ask"],
+      "result_fields": [
+        "product_ask"
+      ],
       "dispatch": "always",
       "definition": "skills/pr-review/sub-agents/product-ask-review/SKILL.md",
       "meta_prompt": "meta-prompts/section-output.md",
@@ -274,7 +304,10 @@
       "label": "Rating",
       "kind": "llm-subagent",
       "output": "signal:rating",
-      "result_fields": ["risk", "confidence"],
+      "result_fields": [
+        "risk",
+        "confidence"
+      ],
       "dispatch": "always",
       "definition": "skills/pr-review/sub-agents/rating.md",
       "meta_prompt": "meta-prompts/signal-output.md",

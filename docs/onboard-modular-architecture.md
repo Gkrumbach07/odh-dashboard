@@ -87,7 +87,7 @@ To enable your module in the main dashboard, you need to add a feature flag.
    } satisfies Partial<DashboardCommonConfig>;
    ```
 
-4. Set the same default in the backend `blankDashboardCR` (`backend/src/utils/constants.ts`) and the core-bff `BlankDashboardCR` (`distributions/core-bff/bff/internal/models/dashboard_config.go`).
+4. Set the same default in the backend `blankDashboardCR` (`backend/src/utils/constants.ts`) and the core-bff `BlankDashboardCR` (`distributions/core-bff/bff/internal/models/dashboard_config.go`). See [ADR 0009](adr/0009-feature-flag-lifecycle.md) for GA promotion and dev-only flags.
 
 ### 5. Run the Application
 

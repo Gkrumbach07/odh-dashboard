@@ -1,8 +1,24 @@
 name: Fullsend Jira code poll
 
 # Pilot: polls RHOAIENG issues marked ready-to-code and starts the Fullsend
-# code agent, which opens a PR in this repository. Off until the repository
-# variable FULLSEND_JIRA_CODE_ENABLED is "true". See .fullsend/jira.md.
+# code agent, which opens a PR in this repository. A person on the write list
+# under authorization: in .fullsend/config.yaml starts a run by adding
+# ready-to-code, or retries with a /fs-code comment. Fullsend guide:
+# https://github.com/fullsend-ai/fullsend/blob/640660d4f4c29ac024b4c5f6a512b03d62d491c3/docs/guides/user/jira-integration.md
+#
+# To turn it on:
+#   1. Create a dedicated Jira account (not a person's: the token owner's own
+#      labels and comments are treated as a bot's and never start a run) with
+#      Browse Projects, Edit Issues, Add Comments and Edit Own Comments on
+#      RHOAIENG.
+#   2. Store its email and API token as the FULLSEND_JIRA_BOT_EMAIL and
+#      FULLSEND_JIRA_BOT_TOKEN Actions secrets.
+#   3. Set the repository variable FULLSEND_JIRA_CODE_ENABLED to "true". Every
+#      job skips until then. Set it to anything else to stop.
+# An issue created with ready-to-code already on it does not start a run, and
+# the poller only looks back 24 hours: comment /fs-code, or remove and re-add
+# the label. Polling is not exactly-once; after a failed run, check for an
+# existing PR before commenting /fs-code again.
 #
 # Instead of passing every dispatch record to reusable-dispatch.yml as one
 # matrix, this launches one execution run per record (fullsend-code-jira.yaml).
@@ -39,8 +55,8 @@ jobs:
       - name: Install pinned Fullsend
         # Main-branch commit of fullsend#8892 (Jira authorization without
         # Administer Projects), merged after v0.53.0. Move to the first release
-        # that contains it (expected v0.54.0). The review shim stays on its own
-        # pin; see "Pins" in .fullsend/jira.md.
+        # that contains it (expected v0.54.0), together with the pin in
+        # fullsend-code-jira.yaml. The review shim keeps its own pin.
         uses: fullsend-ai/fullsend/.github/actions/install-fullsend-cli@640660d4f4c29ac024b4c5f6a512b03d62d491c3
         with:
           mode: upstream

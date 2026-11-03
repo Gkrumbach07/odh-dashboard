@@ -14,7 +14,7 @@ roles:
     # role also covers the code agent below.
     - coder
 agents:
-    # Code agent for the RHOAIENG Jira pilot (.fullsend/jira.md). Only
+    # Code agent for the RHOAIENG Jira pilot (fullsend-poll-jira.yaml). Only
     # the Jira poller dispatches it: the shim routes no GitHub issue events,
     # so GitHub /fs-code and ready-to-code stay inert.
     - name: code
@@ -48,7 +48,7 @@ agents:
 allowed_remote_resources:
     - https://raw.githubusercontent.com/fullsend-ai/fullsend/
     - https://raw.githubusercontent.com/fullsend-ai/agents/
-# Who may start the code agent from Jira (.fullsend/jira.md). Needs
+# Who may start the code agent from Jira (fullsend-poll-jira.yaml). Needs
 # fullsend#8892 (expected v0.54.0); the review shim's older CLI ignores this
 # entry when routing and running, but its `fullsend agent add/set/update/remove`
 # reject it, so edit agents with the poller's CLI or newer.

@@ -1,4 +1,4 @@
-# Code agent for the RHOAIENG Jira pilot (.fullsend/jira.md).
+# Code agent for the RHOAIENG Jira pilot (.github/workflows/fullsend-poll-jira.yaml).
 # Jira-capable code pipeline from agents v0.53.0: Jira pre-script, read-only
 # jira-ro provider, and a post-script that pushes a branch, opens the PR and
 # links it on the Jira issue.

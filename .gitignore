@@ -106,6 +106,3 @@ vendor/
 # AgentReady reports
 .agentready/
 assessment-output.txt
-
-# Fullsend CLI resource cache (fullsend lint, dispatch, run)
-.fullsend-cache/

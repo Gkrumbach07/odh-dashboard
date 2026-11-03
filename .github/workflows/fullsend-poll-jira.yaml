@@ -1,0 +1,91 @@
+name: Fullsend Jira code poll
+
+# Pilot: polls RHOAIENG issues marked ready-to-code and starts the Fullsend
+# code agent, which opens a PR in this repository. Off until the repository
+# variable FULLSEND_JIRA_CODE_ENABLED is "true". See .fullsend/jira.md.
+#
+# Instead of passing every dispatch record to reusable-dispatch.yml as one
+# matrix, this launches one execution run per record (fullsend-code-jira.yaml).
+# Workaround for https://github.com/fullsend-ai/fullsend/issues/8961: records
+# for the same agent in one matrix collide on the fullsend-<agent> artifact.
+# Remove the fan-out once that is fixed.
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch: {}
+
+permissions: {}
+
+# Serialize discovery and dispatch, including manual runs.
+concurrency:
+  group: fullsend-jira-code-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    if: vars.FULLSEND_JIRA_CODE_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install pinned Fullsend
+        # Main-branch commit of fullsend#8892 (Jira authorization without
+        # Administer Projects), merged after v0.53.0. Move to the first release
+        # that contains it (expected v0.54.0). The review shim stays on its own
+        # pin; see "Pins" in .fullsend/jira.md.
+        uses: fullsend-ai/fullsend/.github/actions/install-fullsend-cli@640660d4f4c29ac024b4c5f6a512b03d62d491c3
+        with:
+          mode: upstream
+          workflow_repository: fullsend-ai/fullsend
+          workflow_sha: 640660d4f4c29ac024b4c5f6a512b03d62d491c3
+
+      - name: Poll ready RHOAIENG issues
+        env:
+          JIRA_TOKEN: ${{ secrets.FULLSEND_JIRA_BOT_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.FULLSEND_JIRA_BOT_EMAIL }}
+          JIRA_BASE_URL: https://redhat.atlassian.net
+          TARGET_REPO: ${{ github.repository }}
+          # Dashboard Stories, Tasks and Bugs marked ready-to-code, not already
+          # in the jira-autofix flow. Epics are out of scope: one issue, one PR.
+          JQL: >-
+            project = RHOAIENG
+            AND component = "AI Core Dashboard"
+            AND issuetype in (Story, Task, Bug)
+            AND labels = "ready-to-code"
+            AND labels not in ("opt-in-autofix", "jira-autofix", "jira-autofix-pending", "jira-autofix-review")
+            AND statusCategory != Done
+            ORDER BY updated DESC
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${JIRA_TOKEN}" && -n "${JIRA_USER_EMAIL}" ]] || { echo 'Configure FULLSEND_JIRA_BOT_TOKEN and FULLSEND_JIRA_BOT_EMAIL Actions secrets.' >&2; exit 1; }
+          fullsend poll \
+            --input-driver jira-poll \
+            --jira-url "${JIRA_BASE_URL}" \
+            --jira-project RHOAIENG \
+            --jql "${JQL}" \
+            --target-repo "${TARGET_REPO}" \
+            --output dispatches.json \
+            --fullsend-dir .fullsend
+
+      # Retain every checkpointed record, including when a dispatch API call fails.
+      - name: Save poll records
+        uses: actions/upload-artifact@v4
+        with:
+          name: jira-dispatches-${{ github.run_attempt }}
+          path: dispatches.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Launch one workflow run per record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .fullsend/scripts/jira_dispatch.py launch

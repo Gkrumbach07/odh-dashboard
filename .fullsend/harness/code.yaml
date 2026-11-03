@@ -1,0 +1,20 @@
+# Code agent for the RHOAIENG Jira pilot (.fullsend/jira.md).
+# Jira-capable code pipeline from agents v0.53.0: Jira pre-script, read-only
+# jira-ro provider, and a post-script that pushes a branch, opens the PR and
+# links it on the Jira issue.
+base: https://raw.githubusercontent.com/fullsend-ai/agents/4a6645268c6c8063c15ce5cb1b88a4f3930c74da/harness/code.yaml#sha256=0cf4e64085a181606a0f33af5250cf56d8f12d4c6b91ae7bdf9f72a28e2137eb
+
+# No trigger here: the base trigger dispatches on a ready-to-code label being
+# added or a /fs-code comment. Only the Jira poller reaches it, because the
+# shim (fullsend.yaml) routes no GitHub issue events. The poll's JQL limits
+# candidates to RHOAIENG dashboard issues, and the poller authorizes the actor
+# (authorization: in config.yaml).
+
+env:
+  runner:
+    CODE_ALLOWED_TARGET_BRANCHES: "main"
+
+overlays:
+  - when: 'has(event.source) && event.source.system == "jira"'
+    skills:
+      - skills/rhoaieng-jira-code

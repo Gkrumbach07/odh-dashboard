@@ -15,6 +15,9 @@
 #   repo variable  FULLSEND_TRACE_OTLP_ENDPOINT  e.g. https://<mlflow>/v1/traces
 #   repo secret    FULLSEND_TRACE_OTLP_HEADERS   e.g.
 #                  Authorization=Basic%20<b64>,x-mlflow-experiment-id=<id>
+# RHOAI MLflow (3.17+) serves everything under /mlflow: use
+# https://<route>/mlflow/v1/traces, a Bearer token for a service account that can
+# `update` experiments.mlflow.kubeflow.org, and add X-MLFLOW-WORKSPACE=<namespace>.
 # Leave Fullsend's own OTEL_EXPORTER_OTLP_TRACES_ENDPOINT unset: this workflow
 # re-sends the run / agent spans itself. If that variable is set later, add
 # --no-base-spans below.

@@ -428,7 +428,8 @@ def build(args):
     dim = collections.Counter(f.get("dimension", "?") for f in findings)
     prod = result.get("producers") or {}
     risk, conf = result.get("risk") or {}, result.get("confidence") or {}
-    rr = {"fullsend.verdict": result.get("action"), "fullsend.findings.count": len(findings),
+    verdict = result.get("action") or args.verdict
+    rr = {"fullsend.verdict": verdict, "fullsend.findings.count": len(findings),
           "fullsend.findings.by_severity": dict(sev), "fullsend.findings.by_dimension": dict(dim),
           "fullsend.risk": risk.get("level") if isinstance(risk, dict) else risk,
           "fullsend.confidence": conf.get("level") if isinstance(conf, dict) else conf,
@@ -461,7 +462,7 @@ def build(args):
                "missed": cov["fullsend.guidance.missed"]}
     # MLflow trace tags: filterable and sortable in the trace table. MLflow's own cost
     # column prices tokens without cache discounts, so the real cost goes here too.
-    tags = {"fullsend.pr": f"{repo}#{pr}" if pr else None, "fullsend.verdict": result.get("action"),
+    tags = {"fullsend.pr": f"{repo}#{pr}" if pr else None, "fullsend.verdict": verdict,
             "fullsend.cost_usd": metrics.get("total_cost_usd"),
             "fullsend.guidance.coverage": cov["fullsend.guidance.coverage"],
             "fullsend.guidance.missed_count": len(cov["fullsend.guidance.missed"]) if applicable else None,
@@ -580,7 +581,7 @@ def self_test():
               open(guidance, "w"))
 
     args = argparse.Namespace(artifact=tmp, guidance=guidance, pr_author="alice", run_url=None,
-                              pr_files_count=3, no_base_spans=False)
+                              pr_files_count=3, no_base_spans=False, verdict=None)
     payload, summary = build(args)
     spans = payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
     by = {}
@@ -632,6 +633,8 @@ def main():
     p.add_argument("--pr-files", help="file with the PR's changed paths, one per line (for counts)")
     p.add_argument("--pr-author", help="PR author login, used as MLflow user")
     p.add_argument("--run-url", help="link to the Fullsend workflow run")
+    p.add_argument("--verdict", help="review verdict to use when agent-result.json has no action "
+                                     "(the host post-script decides it after the artifact is captured)")
     p.add_argument("--out", help="also write the OTLP JSON payload here")
     p.add_argument("--no-base-spans", action="store_true",
                    help="do not re-send run/agent spans (use once Fullsend exports them itself)")

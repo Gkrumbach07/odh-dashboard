@@ -59,12 +59,17 @@ jobs:
           JIRA_BASE_URL: https://redhat.atlassian.net
           TARGET_REPO: ${{ github.repository }}
           # Open dashboard Stories, Tasks and Bugs outside the jira-autofix
-          # flow. The poller checks the 50 most recently updated for new
-          # comments and label changes.
+          # flow, updated in the last day, that have ready-to-code or mention
+          # fs-code in a comment. The poller only processes 5 random
+          # candidates per run, so the list has to stay short; the label or
+          # the /fs-code comment, from someone on the write list, is what
+          # actually starts a run.
           JQL: >-
             project = RHOAIENG
             AND component = "AI Core Dashboard"
             AND issuetype in (Story, Task, Bug)
+            AND (labels = "ready-to-code" OR comment ~ "\"fs-code\"")
+            AND updated >= -1d
             AND labels not in ("opt-in-autofix", "jira-autofix", "jira-autofix-pending", "jira-autofix-review")
             AND statusCategory != Done
             ORDER BY updated DESC

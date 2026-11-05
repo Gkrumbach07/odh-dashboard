@@ -48,14 +48,10 @@ agents:
 allowed_remote_resources:
     - https://raw.githubusercontent.com/fullsend-ai/fullsend/
     - https://raw.githubusercontent.com/fullsend-ai/agents/
-# Who may start the code agent from Jira (fullsend-poll-jira.yaml). Needs
-# fullsend#8892 (expected v0.54.0); the review shim's older CLI ignores this
-# entry when routing and running, but its `fullsend agent add/set/update/remove`
-# reject it, so edit agents with the poller's CLI or newer.
-# labels: allowlist also checks who adds ready-to-code, not only who comments
-# /fs-code. Entries are Jira account IDs (last part of the profile URL).
-# Pilot: Monarch co-owners only. Listing a group instead also needs the
-# Browse users and groups permission on the poller account.
+# Who may start the code agent from Jira, by /fs-code or by adding
+# ready-to-code (labels: allowlist). Jira account IDs, from the profile URL.
+# Needs Fullsend v0.54.0; the review shim's older CLI runs fine with it, but its
+# `fullsend agent add/set/update/remove` reject it.
 authorization:
     - provider: jira
       write:

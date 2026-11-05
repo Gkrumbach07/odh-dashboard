@@ -1,11 +1,8 @@
-"""Fan out trusted Jira poll records and validate their provenance.
+"""Fan out Jira poll records, one run each, and check where they came from.
 
-Modes: launch (one execution run per poll record), validate (check the poll
-run that produced the records), select (pick one record as a one-entry matrix).
-
-The fan-out works around https://github.com/fullsend-ai/fullsend/issues/8961
-(same-agent records in one matrix collide on the fullsend-<agent> artifact).
-Remove this script and fullsend-code-jira.yaml once that is fixed.
+Modes: launch (one run per record), validate (the records come from the
+main-branch poller), select (one record as a one-entry matrix). Works around
+fullsend#8961; delete with fullsend-code-jira.yaml once fullsend#9003 ships.
 """
 
 import json

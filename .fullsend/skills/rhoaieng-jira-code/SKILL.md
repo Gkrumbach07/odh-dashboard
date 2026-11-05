@@ -15,7 +15,7 @@ longer holds:
 
 - It is in RHOAIENG and its type is Story, Task or Bug.
 - Its components include `AI Core Dashboard`.
-- It still has `ready-to-code` and is not in the Done status category.
+- It is not in the Done status category.
 - It has none of `opt-in-autofix`, `jira-autofix`, `jira-autofix-pending` or
   `jira-autofix-review`. Those issues belong to the jira-autofix bot.
 

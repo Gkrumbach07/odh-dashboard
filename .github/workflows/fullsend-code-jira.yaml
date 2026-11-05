@@ -19,9 +19,7 @@ on:
 
 permissions: {}
 
-# Runs one dispatch record from fullsend-poll-jira.yaml. Part of the per-record
-# fan-out that works around https://github.com/fullsend-ai/fullsend/issues/8961;
-# remove this workflow once that is fixed.
+# Runs one record from fullsend-poll-jira.yaml (the fullsend#8961 fan-out).
 
 jobs:
   validate:
@@ -70,9 +68,8 @@ jobs:
       issues: write
       packages: read
       pull-requests: write
-    # Same commit as the poller's CLI (fullsend#8892). Move both to the first
-    # release that contains it (expected v0.54.0).
-    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@640660d4f4c29ac024b4c5f6a512b03d62d491c3
+    # v0.54.0. Keep in step with fullsend-poll-jira.yaml.
+    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@90b7310ff8751a3c70e5d68214770dc168a1cbe7
     with:
       matrix: ${{ needs.validate.outputs.matrix }}
       install_mode: per-repo
@@ -82,8 +79,7 @@ jobs:
       jira_base_url: https://redhat.atlassian.net
       runner_image: ubuntu-24.04
     secrets:
-      # The code post-script writes the PR link back to the Jira issue as the
-      # poller's bot account.
+      # The post-script links the PR on the Jira issue as the bot account.
       JIRA_TOKEN: ${{ secrets.FULLSEND_JIRA_BOT_TOKEN }}
       JIRA_USER_EMAIL: ${{ secrets.FULLSEND_JIRA_BOT_EMAIL }}
       FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}

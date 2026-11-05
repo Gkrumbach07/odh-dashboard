@@ -232,6 +232,10 @@ describe('McpServerIconsField', () => {
     it('should preview the light and dark themed icons independently', () => {
       renderField({ initialIcons: [lightIcon(), darkIcon()] });
 
+      expect(screen.getByTestId('mcp-register-icon-preview-light')).toHaveTextContent(
+        'Light theme',
+      );
+      expect(screen.getByTestId('mcp-register-icon-preview-dark')).toHaveTextContent('Dark theme');
       expect(previewImg('light')).toHaveAttribute('src', lightIcon().src);
       expect(previewImg('dark')).toHaveAttribute('src', darkIcon().src);
     });

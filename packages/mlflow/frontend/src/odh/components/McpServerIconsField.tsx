@@ -227,7 +227,7 @@ const IconPreviewItem: React.FC<IconPreviewItemProps> = ({
       <FlexItem>
         <Stack>
           <StackItem>
-            <Content component="small">{isDark ? 'dark' : 'light'} theme</Content>
+            <Content component="small">{isDark ? 'Dark' : 'Light'} theme</Content>
           </StackItem>
           <StackItem>
             <Content

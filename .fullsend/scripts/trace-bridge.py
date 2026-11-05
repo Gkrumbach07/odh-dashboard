@@ -44,10 +44,22 @@ GUIDANCE_RE = re.compile(
     r"(\.claude/rules/[\w.-]+\.md|\.claude/skills/[\w.-]+/[\w./-]+\.md"
     r"|(?:packages/[\w-]+/)?docs/adr/[\w.-]+\.md|(?:[\w./-]*/)?(?:AGENTS|BOOKMARKS)\.md)"
 )
+# Values that look like credentials anywhere in an exported string.
 SECRET_RE = re.compile(
     r"(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}"
-    r"|(?i:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}|(?i:token|password|secret|api[_-]?key)=\S+)"
+    r"|AKIA[0-9A-Z]{16}|eyJ[\w-]{8,}\.eyJ[\w-]{8,}\.[\w-]{8,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"
+    r"|(?i:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,})"
 )
+SENSITIVE = r"(?:token|passw(?:or)?d|passwd|secret|api[_-]?key|authorization|auth|credentials?" \
+            r"|client[_-]?secret|access[_-]?key|private[_-]?key|cookie|session[_-]?id)"
+# key=value, key: value, "key": "value" (JSON) and --key value / --key=value (CLI flags).
+SECRET_KV_RE = re.compile(
+    r"(?i)((?<![\w-])[\"']?[\w-]*" + SENSITIVE + r"[\w-]*[\"']?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;&|)}\]]+)")
+SECRET_FLAG_RE = re.compile(r"(?i)(--[\w-]*" + SENSITIVE + r"[\w-]*\s+)(\"[^\"]*\"|'[^']*'|[^\s-][^\s]*)")
+SENSITIVE_KEY_RE = re.compile(r"(?i)" + SENSITIVE)
+# Tool arguments exported as attributes; anything else (file contents for write/edit, prompts) is dropped.
+TOOL_ARG_ALLOWLIST = ("path", "pattern", "glob", "offset", "limit", "description", "subagent_type")
 MAX_STR = 1000
 
 
@@ -66,8 +78,23 @@ def ns(ts):
     return int(datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1e9)
 
 
-def clean(s):
+def redact(s):
     s = SECRET_RE.sub("[REDACTED]", str(s))
+    s = SECRET_KV_RE.sub(lambda m: m.group(1) + "[REDACTED]", s)
+    return SECRET_FLAG_RE.sub(lambda m: m.group(1) + "[REDACTED]", s)
+
+
+def redact_obj(v):
+    """Redact a JSON-like value: sensitive keys lose their values, strings are scanned."""
+    if isinstance(v, dict):
+        return {k: "[REDACTED]" if SENSITIVE_KEY_RE.search(str(k)) else redact_obj(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [redact_obj(x) for x in v]
+    return redact(v) if isinstance(v, str) else v
+
+
+def clean(s):
+    s = redact(s)
     return s if len(s) <= MAX_STR else s[:MAX_STR] + "…"
 
 
@@ -81,7 +108,7 @@ def attr(k, v):
     elif isinstance(v, (list, tuple)):
         val = {"arrayValue": {"values": [{"stringValue": clean(x)} for x in v]}}
     elif isinstance(v, dict):
-        val = {"stringValue": clean(json.dumps(v, sort_keys=True))}
+        val = {"stringValue": clean(json.dumps(redact_obj(v), sort_keys=True))}
     else:
         val = {"stringValue": clean(v)}
     return {"key": k, "value": val}
@@ -100,6 +127,18 @@ def span(trace_id, sid, parent, name, start, end, a, error=False):
     if parent:
         s["parentSpanId"] = parent
     return s
+
+
+def sanitize_attr(a):
+    """Redact a pre-built OTLP attribute (Fullsend's own spans) the same way as ours."""
+    v = a.get("value") or {}
+    if "stringValue" in v:
+        return {"key": a.get("key"), "value": {"stringValue": clean(v["stringValue"])}}
+    if "arrayValue" in v:
+        vals = [{"stringValue": clean(x["stringValue"])} if "stringValue" in x else x
+                for x in (v["arrayValue"].get("values") or [])]
+        return {"key": a.get("key"), "value": {"arrayValue": {"values": vals}}}
+    return a
 
 
 def read_jsonl(path):
@@ -156,8 +195,34 @@ def category(p):
     return "source"
 
 
-def guidance_in(text):
-    return {g[2:] if g.startswith("./") else g for g in GUIDANCE_RE.findall(text)}
+def _norm_guidance(p):
+    rel = rel_path(p)[0] if p.startswith("/") else p
+    rel = rel[2:] if rel and rel.startswith("./") else rel
+    return rel if rel and GUIDANCE_RE.fullmatch(rel) else None
+
+
+READ_CMD_RE = re.compile(r"^\s*(?:sudo\s+)?(cat|head|tail|less|more|bat|nl|sed|awk)\b")
+
+
+def guidance_opened(c):
+    """Guidance files whose content this call returned. Failed calls, searches (grep/find/rg),
+    and paths that only appear in prompts do not count."""
+    if c.get("error") or c.get("end") is None:
+        return set()
+    a = c["args"]
+    if c["name"] == "read":
+        g = _norm_guidance(str(a.get("path", "")))
+        return {g} if g else set()
+    if c["name"] == "bash":
+        got = set()
+        for seg in re.split(r"\|\||&&|[;|\n]", str(a.get("command", ""))):
+            if READ_CMD_RE.match(seg):
+                for tok in re.findall(r"[\w@./*-]+\.md", seg):
+                    g = _norm_guidance(tok) if "*" not in tok else None
+                    if g:
+                        got.add(g)
+        return got
+    return set()
 
 
 # ---------- artifact parsing ----------
@@ -234,8 +299,9 @@ def describe_call(c):
         out["fullsend.tool.pattern"] = a.get("pattern", "")
         if a.get("path"):
             out["fullsend.tool.path"] = rel_path(a["path"])[0] or a["path"]
-    elif name not in ("read",) and not a.get("path"):
-        out["fullsend.tool.arguments"] = a
+    for k in TOOL_ARG_ALLOWLIST:
+        if k not in ("path", "pattern") and isinstance(a.get(k), (str, int, float)):
+            out[f"fullsend.tool.{k}"] = a[k]
     out["fullsend.tool.result_bytes"] = c.get("result_bytes")
     return out, target
 
@@ -309,7 +375,7 @@ def build(args):
                     cats[a["fullsend.file.category"]] += 1
                     if a["fullsend.file.category"] not in ("run-input", "fullsend-scaffold", "pi-skill"):
                         reads.append(a["fullsend.tool.path"])
-                got |= guidance_in(json.dumps(c["args"]))
+                got |= guidance_opened(c)
                 a.update({"fullsend.persona": persona, "fullsend.iteration": it})
                 start = c["start"] or ns(u.get("startedAt")) or int(run_span["startTimeUnixNano"])
                 spans.append(span(trace_id, span_id(trace_id, key, "tool", str(i)), parent_sid,
@@ -362,7 +428,8 @@ def build(args):
     dim = collections.Counter(f.get("dimension", "?") for f in findings)
     prod = result.get("producers") or {}
     risk, conf = result.get("risk") or {}, result.get("confidence") or {}
-    rr = {"fullsend.verdict": result.get("action"), "fullsend.findings.count": len(findings),
+    verdict = result.get("action") or args.verdict
+    rr = {"fullsend.verdict": verdict, "fullsend.findings.count": len(findings),
           "fullsend.findings.by_severity": dict(sev), "fullsend.findings.by_dimension": dict(dim),
           "fullsend.risk": risk.get("level") if isinstance(risk, dict) else risk,
           "fullsend.confidence": conf.get("level") if isinstance(conf, dict) else conf,
@@ -384,7 +451,8 @@ def build(args):
                                               "spans": spans}]}]}
     if not args.no_base_spans:
         for s in base:
-            if s is run_span:
+            s = dict(s, attributes=[sanitize_attr(x) for x in s.get("attributes", [])])
+            if s["spanId"] == run_sid:
                 s = dict(s, attributes=s.get("attributes", []) + attrs(common))
                 if args.run_url:
                     s["attributes"].append(attr("fullsend.run_url", args.run_url))
@@ -394,7 +462,7 @@ def build(args):
                "missed": cov["fullsend.guidance.missed"]}
     # MLflow trace tags: filterable and sortable in the trace table. MLflow's own cost
     # column prices tokens without cache discounts, so the real cost goes here too.
-    tags = {"fullsend.pr": f"{repo}#{pr}" if pr else None, "fullsend.verdict": result.get("action"),
+    tags = {"fullsend.pr": f"{repo}#{pr}" if pr else None, "fullsend.verdict": verdict,
             "fullsend.cost_usd": metrics.get("total_cost_usd"),
             "fullsend.guidance.coverage": cov["fullsend.guidance.coverage"],
             "fullsend.guidance.missed_count": len(cov["fullsend.guidance.missed"]) if applicable else None,
@@ -467,7 +535,8 @@ def self_test():
         return json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [sp]}]}]}) + "\n"
     with open(os.path.join(run, "run-telemetry.jsonl"), "w") as f:
         f.write(otlp({"traceId": tid, "spanId": run_sid, "name": "run",
-                      "startTimeUnixNano": "1000000000", "endTimeUnixNano": "9000000000"}))
+                      "startTimeUnixNano": "1000000000", "endTimeUnixNano": "9000000000",
+                      "attributes": [{"key": "cmd", "value": {"stringValue": "--api-key s3cr3tvalue1"}}]}))
         f.write(otlp({"traceId": tid, "spanId": agent_sid, "parentSpanId": run_sid, "name": "agent",
                       "startTimeUnixNano": "2000000000", "endTimeUnixNano": "8000000000",
                       "attributes": [{"key": "iteration", "value": {"intValue": "1"}}]}))
@@ -489,21 +558,47 @@ def self_test():
     with open(os.path.join(tr, "review-sub1-style-conventions-2026-11-03T00-00-01Z_a.jsonl"), "w") as f:
         f.write(msg("assistant", [call("c1", "read", {"path": "/sandbox/workspace/pr-head/.claude/rules/react.md"}),
                                   call("c2", "bash", {"command": "curl -H 'Authorization: Bearer abcdefghijklmnop'"})]))
+        f.write(msg("assistant", [
+            call("c3", "read", {"path": "/sandbox/workspace/target-repo/docs/adr/0009-x.md"}),
+            call("c4", "grep", {"pattern": "flag", "path": "/sandbox/workspace/target-repo/docs/adr/0009-x.md"}),
+            call("c5", "bash", {"command": "rg -n flag docs/adr/0009-x.md && cat AGENTS.md | head"}),
+            call("c6", "bash", {"command": 'curl -d \'{"password": "hunter2pass"}\' --token tok3nvalue x'}),
+            call("c7", "write", {"path": "/sandbox/workspace/out.json", "content": "client_secret=leakedvalue"})]))
         f.write(msg("toolResult", toolCallId="c1", durationMs=250, timestamp=1793664001500))
         f.write(msg("toolResult", toolCallId="c2", durationMs=10, timestamp=1793664001600, isError=True))
+        f.write(msg("toolResult", toolCallId="c3", durationMs=5, timestamp=1793664001700, isError=True))
+        for i in ("c4", "c5", "c6", "c7"):
+            f.write(msg("toolResult", toolCallId=i, durationMs=5, timestamp=1793664001800))
     with open(os.path.join(tr, "review-sub2-2026-11-03T00-00-01Z_b.jsonl"), "w") as f:
         f.write(msg("user", [{"type": "text", "text": "Read /x/sub-agents/test-impact-review/SKILL.md first"}]))
+        f.write(msg("assistant", [call("d1", "read", {"path": "/sandbox/workspace/pr-head/./docs/adr/0009-x.md"})]))
+    with open(os.path.join(tr, "review-2026-11-03T00-00-00Z_o.jsonl"), "w") as f:
+        f.write(msg("assistant", [call("o1", "Agent", {"description": "style",
+                                                       "prompt": "Apply docs/adr/0009-x.md"})]))
+        f.write(msg("toolResult", toolCallId="o1", durationMs=5, timestamp=1793664001900))
     guidance = os.path.join(tmp, "guidance.json")
     json.dump({"documents": [{"path": ".claude/rules/react.md"}, {"path": "docs/adr/0009-x.md"}]},
               open(guidance, "w"))
 
     args = argparse.Namespace(artifact=tmp, guidance=guidance, pr_author="alice", run_url=None,
-                              pr_files_count=3, no_base_spans=False)
+                              pr_files_count=3, no_base_spans=False, verdict=None)
     payload, summary = build(args)
     spans = payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
-    by = {s["name"]: s for s in spans}
+    by = {}
+    for sp in spans:
+        by.setdefault(sp["name"], sp)  # first span of each name, in transcript order
     get = lambda s, k: next((list(a["value"].values())[0] for a in s["attributes"] if a["key"] == k), None)
+    blob = json.dumps(spans)
+    persona_sc = by["persona style-conventions"]
     checks = [
+        ("failed read, search, prompt mention and unanswered call don't count as opened",
+         get(persona_sc, "fullsend.guidance.read") is not None
+         and "docs/adr/0009-x.md" not in json.dumps(get(persona_sc, "fullsend.guidance.read"))),
+        ("cat in a shell command counts as opened", "AGENTS.md" in json.dumps(get(persona_sc, "fullsend.guidance.read"))),
+        ("JSON credential redacted", "hunter2pass" not in blob),
+        ("CLI flag credential redacted", "tok3nvalue" not in blob),
+        ("write contents and prompts not exported", "leakedvalue" not in blob and "Apply docs" not in blob),
+        ("secret in Fullsend's own span redacted", "s3cr3tvalue1" not in blob),
         ("unnamed persona recovered from prompt", "persona test-impact-review" in by),
         ("persona parented to agent span", by["persona style-conventions"].get("parentSpanId") == agent_sid),
         ("pr-head path counted as a rule", get(by["execute_tool read"], "fullsend.file.category") == "rule"),
@@ -538,6 +633,8 @@ def main():
     p.add_argument("--pr-files", help="file with the PR's changed paths, one per line (for counts)")
     p.add_argument("--pr-author", help="PR author login, used as MLflow user")
     p.add_argument("--run-url", help="link to the Fullsend workflow run")
+    p.add_argument("--verdict", help="review verdict to use when agent-result.json has no action "
+                                     "(the host post-script decides it after the artifact is captured)")
     p.add_argument("--out", help="also write the OTLP JSON payload here")
     p.add_argument("--no-base-spans", action="store_true",
                    help="do not re-send run/agent spans (use once Fullsend exports them itself)")

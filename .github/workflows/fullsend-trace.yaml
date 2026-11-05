@@ -105,12 +105,26 @@ jobs:
           files="$RUNNER_TEMP/pr-files.txt"
           gh api --paginate "repos/$REPO/pulls/$pr/files" --jq '.[].filename' > "$files"
           author=$(gh api "repos/$REPO/pulls/$pr" --jq '.user.login')
+          # agent-result.json may lack the verdict: the host post-script decides it after
+          # the artifact is captured. Fall back to the Fullsend bot's review on that commit.
+          head_sha=$(jq -r '.head_sha // empty' "$result")
+          verdict=""
+          if [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            state=$(gh api --paginate "repos/$REPO/pulls/$pr/reviews" \
+              --jq ".[] | select(.commit_id == \"$head_sha\" and (.user.login | startswith(\"fullsend-ai-review\"))) | .state" | tail -1)
+            case "$state" in
+              APPROVED) verdict=approve ;;
+              CHANGES_REQUESTED) verdict=request-changes ;;
+              COMMENTED) verdict=comment ;;
+            esac
+          fi
           FULLSEND_ADAPTER_REPO_DIR="$GITHUB_WORKSPACE" FULLSEND_ADAPTER_PR_FILES="$files" \
             bash .fullsend/scripts/fetch-guidance-context.sh "$RUNNER_TEMP/guidance.json" \
             || echo "::warning::Guidance selection failed; tracing without coverage."
           {
             echo "files=$files"
             echo "author=$author"
+            [[ -n "$verdict" ]] && echo "verdict=$verdict"
             [[ -s "$RUNNER_TEMP/guidance.json" ]] && echo "guidance=$RUNNER_TEMP/guidance.json"
           } >> "$GITHUB_OUTPUT"
 
@@ -124,10 +138,12 @@ jobs:
           PR_FILES: ${{ steps.pr.outputs.files }}
           PR_AUTHOR: ${{ steps.pr.outputs.author }}
           GUIDANCE: ${{ steps.pr.outputs.guidance }}
+          VERDICT: ${{ steps.pr.outputs.verdict }}
         run: |
           set -euo pipefail
           args=(--artifact "$ART" --run-url "$RUN_URL")
           [[ -n "$PR_FILES" ]] && args+=(--pr-files "$PR_FILES")
           [[ -n "$PR_AUTHOR" ]] && args+=(--pr-author "$PR_AUTHOR")
           [[ -n "$GUIDANCE" ]] && args+=(--guidance "$GUIDANCE")
+          [[ -n "$VERDICT" ]] && args+=(--verdict "$VERDICT")
           python3 -I .fullsend/scripts/trace-bridge.py "${args[@]}"

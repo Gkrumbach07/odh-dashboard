@@ -240,6 +240,12 @@ describe('McpServerIconsField', () => {
       expect(previewImg('dark')).toHaveAttribute('src', darkIcon().src);
     });
 
+    it('should display sentence-case "Dark theme" label when only a dark icon is provided', () => {
+      renderField({ initialIcons: [darkIcon()] });
+
+      expect(screen.getByTestId('mcp-register-icon-preview-dark')).toHaveTextContent('Dark theme');
+    });
+
     it('should caption an explicitly-set icon as "Custom icon" in the preview', () => {
       renderField({ initialIcons: [mockMcpIcon()] });
 

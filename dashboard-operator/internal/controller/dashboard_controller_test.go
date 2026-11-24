@@ -294,7 +294,7 @@ func TestReconcile(t *testing.T) {
 			wantErr:         true,
 			wantPhase:       common.PhaseNotReady,
 			wantProvisioned: boolPtr(false),
-			wantGeneration:  1,
+			wantGeneration:  0,
 		},
 		{
 			name:       "route not ready requeues",
@@ -897,6 +897,7 @@ func TestReconcile_StatusContract(t *testing.T) {
 		wantReady       bool
 		wantProvisioned bool
 		wantPhase       common.Phase
+		wantGeneration  int64
 	}{
 		{
 			name: "all conditions present on success",
@@ -909,6 +910,7 @@ func TestReconcile_StatusContract(t *testing.T) {
 			wantReady:       true,
 			wantProvisioned: true,
 			wantPhase:       common.PhaseReady,
+			wantGeneration:  1,
 		},
 		{
 			name: "conditions reflect render failure",
@@ -919,6 +921,7 @@ func TestReconcile_StatusContract(t *testing.T) {
 			wantReady:       false,
 			wantProvisioned: false,
 			wantPhase:       common.PhaseNotReady,
+			wantGeneration:  0,
 		},
 		{
 			name: "phase tracks condition happiness — route not ready",
@@ -928,6 +931,7 @@ func TestReconcile_StatusContract(t *testing.T) {
 			wantReady:       false,
 			wantProvisioned: true,
 			wantPhase:       common.PhaseNotReady,
+			wantGeneration:  1,
 		},
 	}
 
@@ -976,7 +980,7 @@ func TestReconcile_StatusContract(t *testing.T) {
 			require.NoError(t, cli.Get(context.Background(), types.NamespacedName{Name: v1alpha1.DashboardInstanceName}, updated))
 
 			assert.Equal(t, tt.wantPhase, updated.Status.Phase, "phase")
-			assert.Equal(t, int64(1), updated.Status.ObservedGeneration, "observedGeneration")
+			assert.Equal(t, tt.wantGeneration, updated.Status.ObservedGeneration, "observedGeneration")
 
 			if tt.wantReady {
 				assert.True(t, conditions.IsStatusConditionTrue(updated, string(common.ConditionTypeReady)), "Ready should be True")
@@ -1148,6 +1152,7 @@ func TestReconcile_LegacyRedirectFailureDoesNotBlockCore(t *testing.T) {
 
 	updated := &v1alpha1.Dashboard{}
 	require.NoError(t, cli.Get(context.Background(), client.ObjectKeyFromObject(dashboard), updated))
+	assert.Zero(t, updated.Status.ObservedGeneration, "a failed reconcile must not advance observedGeneration")
 	assert.Equal(t, common.PhaseNotReady, updated.Status.Phase)
 	provisioning := conditions.FindStatusCondition(updated, string(common.ConditionTypeProvisioningSucceeded))
 	require.NotNil(t, provisioning)
@@ -1165,7 +1170,7 @@ func TestReconcile_RemovedLegacyRedirectFailureDoesNotBlockTeardown(t *testing.T
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       v1alpha1.DashboardInstanceName,
 			UID:        types.UID("dashboard-uid"),
-			Generation: 1,
+			Generation: 8,
 			Finalizers: []string{"components.platform.opendatahub.io/cleanup"},
 		},
 		Spec: v1alpha1.DashboardSpec{
@@ -1174,6 +1179,7 @@ func TestReconcile_RemovedLegacyRedirectFailureDoesNotBlockTeardown(t *testing.T
 				ManagementSpec: common.ManagementSpec{ManagementState: common.Removed},
 			},
 		},
+		Status: v1alpha1.DashboardStatus{Status: common.Status{ObservedGeneration: 7}},
 	}
 	redirectConfig := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
 		Name: "dashboard-redirect-config", Namespace: testNamespace,
@@ -1213,6 +1219,7 @@ func TestReconcile_RemovedLegacyRedirectFailureDoesNotBlockTeardown(t *testing.T
 
 	updated := &v1alpha1.Dashboard{}
 	require.NoError(t, cli.Get(context.Background(), client.ObjectKeyFromObject(dashboard), updated))
+	assert.Equal(t, int64(7), updated.Status.ObservedGeneration, "failed removal must preserve the previously observed generation")
 	assert.Equal(t, common.PhaseNotReady, updated.Status.Phase)
 	provisioning := conditions.FindStatusCondition(updated, string(common.ConditionTypeProvisioningSucceeded))
 	require.NotNil(t, provisioning)

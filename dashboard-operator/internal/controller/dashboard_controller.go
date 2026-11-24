@@ -294,7 +294,6 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, fmt.Errorf("failed to tear down resources: %w", err)
 		}
 
-		dashboard.Status.ObservedGeneration = dashboard.Generation
 		dashboard.Status.URL = ""
 		dashboard.Status.Distribution = nil
 
@@ -342,6 +341,9 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if maasPortalManaged && dashboard.Spec.Observability == nil && portalRetryAfter == 0 {
 			portalRetryAfter = observabilityRetryInterval
 		}
+		if legacyRedirectErr == nil {
+			dashboard.Status.ObservedGeneration = dashboard.Generation
+		}
 		if statusErr := r.updateStatusIfChanged(ctx, dashboard, previousStatus); statusErr != nil {
 			logger.Error(statusErr, "Failed to update status after removal")
 
@@ -350,8 +352,6 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 		return ctrl.Result{RequeueAfter: portalRetryAfter}, legacyRedirectErr
 	}
-
-	dashboard.Status.ObservedGeneration = dashboard.Generation
 
 	cfg := readOperatorConfig(ctx, r.apiReader(), r.Namespace)
 
@@ -403,6 +403,9 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	cm.Sort()
 
+	if err == nil {
+		dashboard.Status.ObservedGeneration = dashboard.Generation
+	}
 	if statusErr := r.updateStatusIfChanged(ctx, dashboard, previousStatus); statusErr != nil {
 		logger.Error(statusErr, "Failed to update status")
 	}

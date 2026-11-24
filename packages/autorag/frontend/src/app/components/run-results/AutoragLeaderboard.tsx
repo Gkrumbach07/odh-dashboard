@@ -1,3 +1,4 @@
+import { useTrackEvent } from '@odh-dashboard/analytics/react';
 import {
   Alert,
   Bullseye,
@@ -32,12 +33,17 @@ import {
 import React from 'react';
 import { Link, useParams } from 'react-router';
 import type { ColumnManagementModalColumn } from '@patternfly/react-component-groups';
-import { RunInProgress } from '@odh-dashboard/autox-core/ui/components/feature';
+import {
+  ExecutorLogsTearsheet,
+  RunInProgress,
+} from '@odh-dashboard/autox-core/ui/components/feature';
 import {
   ManageColumnsModal,
   type ColumnPreset,
 } from '@odh-dashboard/autox-core/ui/components/primitive';
+import { findFirstFailedTaskKey, useTaskExecutorError } from '@odh-dashboard/autox-core/ui/hooks';
 import { useAutoragResultsContext } from '~/app/context/AutoragResultsContext';
+import { useAutoragOutputDir } from '~/app/hooks/useAutoragOutputDir';
 import type { AutoragPattern, MetricReference } from '~/app/types/autoragPattern';
 import emptyStateImage from '~/app/bgimages/empty-state.svg';
 import { RuntimeStateKF } from '~/app/types/pipeline';
@@ -435,6 +441,7 @@ function AutoragLeaderboard({
   onViewCode,
   onRunIndexingPipeline,
 }: AutoragLeaderboardProps): React.JSX.Element | null {
+  const trackEvent = useTrackEvent();
   const { namespace, runId } = useParams<{ namespace: string; runId: string }>();
   const {
     patterns,
@@ -445,6 +452,7 @@ function AutoragLeaderboard({
     pipelineRunLoading,
     bestPatternKey,
     optimizationMetric,
+    componentStageMap,
   } = useAutoragResultsContext();
   const optimizationMetricKey = metricKey(optimizationMetric);
   const optimizationMetricLabel = metricLabel(optimizationMetric);
@@ -457,6 +465,31 @@ function AutoragLeaderboard({
 
   // Check if pipeline is still running
   const pipelineRunning = isRunInProgress(pipelineRun?.state);
+
+  // The failed-run empty state opens the executor log of the first failed
+  // task (the step where the pipeline stopped) in a tearsheet.
+  const isRunFailed =
+    pipelineRun?.state === RuntimeStateKF.FAILED || pipelineRun?.state === RuntimeStateKF.CANCELED;
+  const { rootDir } = useAutoragOutputDir(pipelineRun);
+  const failedRunTaskKey = React.useMemo(
+    () =>
+      isRunFailed && Object.keys(patterns).length === 0
+        ? findFirstFailedTaskKey(
+            pipelineRun.run_details?.task_details ?? [],
+            componentStageMap?.components.map((component) => component.id) ?? [],
+            rootDir,
+          )
+        : undefined,
+    [componentStageMap, isRunFailed, patterns, pipelineRun, rootDir],
+  );
+  const runExecutorError = useTaskExecutorError({
+    namespace,
+    runId,
+    pipelineRun,
+    taskKey: failedRunTaskKey,
+    rootDir,
+  });
+  const [isRunLogsTearsheetOpen, setIsRunLogsTearsheetOpen] = React.useState(false);
 
   // Extract all unique metric references across all patterns.
   const metricKeys = React.useMemo<MetricColumn[]>(() => {
@@ -593,6 +626,7 @@ function AutoragLeaderboard({
         const isShown = col.isShown ?? false;
         if (wasVisible !== isShown) {
           fireAutoragResultsColumnToggled(
+            trackEvent,
             getColumnAnalyticsName(
               col.key,
               columnDefs.find((column) => column.id === col.key)?.metric,
@@ -611,7 +645,7 @@ function AutoragLeaderboard({
         newVisibleIds.has(prev.id) ? prev : { id: fallbackSortId, direction: 'asc' },
       );
     },
-    [visibleColumnIds, columnDefs],
+    [trackEvent, visibleColumnIds, columnDefs],
   );
 
   // All visible columns in user order, used for both header and body rendering
@@ -1084,9 +1118,6 @@ function AutoragLeaderboard({
   // Show empty state when no patterns were produced
   if (Object.keys(patterns).length === 0) {
     const isRunSucceeded = pipelineRun?.state === RuntimeStateKF.SUCCEEDED;
-    const isRunFailed =
-      pipelineRun?.state === RuntimeStateKF.FAILED ||
-      pipelineRun?.state === RuntimeStateKF.CANCELED;
 
     // Helper to render message with pipeline run link (falls back to plain text when route params are missing)
     const messageWithLink = (before: string, linkText: string, after = '.') =>
@@ -1115,11 +1146,37 @@ function AutoragLeaderboard({
         'pipeline configuration and logs',
       );
     } else if (isRunFailed) {
-      messageContent = messageWithLink(
-        'The pipeline run did not complete successfully. Please check the',
-        'pipeline configuration and logs',
-        ' for errors.',
-      );
+      messageContent =
+        namespace && runId ? (
+          <>
+            <span>The pipeline run did not complete successfully. Please check the </span>
+            {runExecutorError.logText ? (
+              <Button
+                variant="link"
+                isInline
+                onClick={() => setIsRunLogsTearsheetOpen(true)}
+                data-testid="leaderboard-failed-run-logs-link"
+              >
+                log
+              </Button>
+            ) : (
+              'log'
+            )}
+            <span> for errors or </span>
+            <Button
+              variant="link"
+              isInline
+              component={(props) => (
+                <Link {...props} to={`/develop-train/pipelines/runs/${namespace}/runs/${runId}`} />
+              )}
+            >
+              pipeline configuration
+            </Button>
+            <span> for more advanced details.</span>
+          </>
+        ) : (
+          'The pipeline run did not complete successfully. Please check the log for errors or pipeline configuration for more advanced details.'
+        );
     } else if (isRunSucceeded) {
       messageContent = messageWithLink(
         'The pipeline run completed but did not generate any patterns. Please check the',
@@ -1134,16 +1191,25 @@ function AutoragLeaderboard({
     }
 
     return (
-      <Bullseye>
-        <EmptyState
-          headingLevel="h2"
-          titleText="No patterns produced"
-          variant={EmptyStateVariant.sm}
-          data-testid="leaderboard-empty"
-        >
-          <EmptyStateBody>{messageContent}</EmptyStateBody>
-        </EmptyState>
-      </Bullseye>
+      <>
+        <Bullseye>
+          <EmptyState
+            headingLevel="h2"
+            titleText="No patterns produced"
+            variant={EmptyStateVariant.sm}
+            data-testid="leaderboard-empty"
+          >
+            <EmptyStateBody>{messageContent}</EmptyStateBody>
+          </EmptyState>
+        </Bullseye>
+        {runExecutorError.logText ? (
+          <ExecutorLogsTearsheet
+            logText={runExecutorError.logText}
+            isOpen={isRunLogsTearsheetOpen}
+            onClose={() => setIsRunLogsTearsheetOpen(false)}
+          />
+        ) : null}
+      </>
     );
   }
 
@@ -1311,7 +1377,7 @@ function AutoragLeaderboard({
         applyColumns={handleApplyColumns}
         presets={columnPresets}
         onPresetSelect={(presetLabel) =>
-          fireAutoragLeaderboardPresetApplied(getPresetAnalyticsType(presetLabel))
+          fireAutoragLeaderboardPresetApplied(trackEvent, getPresetAnalyticsType(presetLabel))
         }
       />
     </Card>

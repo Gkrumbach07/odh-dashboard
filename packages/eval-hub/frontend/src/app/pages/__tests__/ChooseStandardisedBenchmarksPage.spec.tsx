@@ -1,15 +1,28 @@
+/* eslint-disable camelcase */
 import * as React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { setupTrackingTest } from '~/__tests__/unit/testUtils/setupTrackingTest';
 import ChooseStandardisedBenchmarksPage from '~/app/pages/ChooseStandardisedBenchmarksPage';
 import { Provider } from '~/app/types';
+
+import { EVAL_HUB_EVENTS } from '~/app/tracking/evalhubTrackingConstants';
+
+const { mockTrackEvent, render } = setupTrackingTest();
 
 const mockUseProviders = jest.fn();
 const mockNavigate = jest.fn();
 
 jest.mock('~/app/hooks/useProviders', () => ({
   useProviders: () => mockUseProviders(),
+}));
+
+jest.mock('~/app/hooks/useNamespaceSelectorWithPersistence', () => ({
+  useNamespaceSelectorWithPersistence: () => ({
+    namespaces: [{ name: 'test-project', displayName: 'Test Project' }],
+    namespacesLoaded: true,
+  }),
 }));
 
 jest.mock('react-router-dom', () => ({
@@ -20,10 +33,6 @@ jest.mock('react-router-dom', () => ({
 jest.mock('@odh-dashboard/ui-core', () => ({
   ...jest.requireActual('@odh-dashboard/ui-core'),
   ...require('~/__tests__/unit/testUtils/mocks').mockApplicationsPageModule(),
-}));
-
-jest.mock('@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils', () => ({
-  fireMiscTrackingEvent: jest.fn(),
 }));
 
 const makeProvider = (overrides: Partial<Provider> = {}): Provider => ({
@@ -98,6 +107,23 @@ describe('ChooseStandardisedBenchmarksPage', () => {
     expect(
       screen.getByTestId('benchmark-card-lm_evaluation_harness-truthfulqa_mc1'),
     ).toBeInTheDocument();
+  });
+
+  it('should track benchmark details opened from the catalog', () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Basic science Q&A' }));
+
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      EVAL_HUB_EVENTS.BENCHMARK_DETAILS_VIEWED,
+      {
+        event_source: 'evalhub_ui',
+        collection_type: 'unknown',
+        provider_type: 'unknown',
+        source: 'catalogTable',
+      },
+      expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
+    );
   });
 
   it('should filter benchmarks by framework', async () => {

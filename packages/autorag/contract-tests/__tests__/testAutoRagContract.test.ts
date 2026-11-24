@@ -36,6 +36,11 @@ describe('AutoRAG API Contract Tests', () => {
       const properties = responsesRequest.properties as Record<string, unknown>;
       const input = properties.input as Record<string, unknown>;
       const inputVariants = input.anyOf as Array<Record<string, unknown>>;
+      const tools = properties.tools as Record<string, unknown>;
+      const toolItem = tools.items as Record<string, unknown>;
+      const toolProperties = toolItem.properties as Record<string, unknown>;
+      const rankingOptions = toolProperties.ranking_options as Record<string, unknown>;
+      const rankingProperties = rankingOptions.properties as Record<string, unknown>;
 
       expect(inputVariants).toHaveLength(2);
       expect(inputVariants).toEqual(
@@ -55,6 +60,15 @@ describe('AutoRAG API Contract Tests', () => {
       );
       expect((properties.metadata as { required: string[] }).required).toContain('embedding_model');
       expect((properties.tools as { minItems: number }).minItems).toBe(1);
+      expect(rankingProperties.ranker_k).toEqual(
+        expect.objectContaining({
+          type: 'number',
+          minimum: 0,
+          exclusiveMinimum: true,
+          maximum: 16384,
+          exclusiveMaximum: true,
+        }),
+      );
 
       const modelSchemaValidator = new ContractSchemaValidator();
       modelSchemaValidator.loadSchema(
@@ -104,7 +118,10 @@ describe('AutoRAG API Contract Tests', () => {
       expect(result.error?.status).toBe(400);
       expect(result.error?.data).toEqual(
         expect.objectContaining({
-          error: expect.objectContaining({ code: '400', message: expect.any(String) }),
+          error: expect.objectContaining({
+            code: '400',
+            message: expect.any(String),
+          }),
         }),
       );
     });
@@ -511,7 +528,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       }, 8000);
@@ -521,7 +538,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket&bucket=${BUCKET}`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       }, 8000);
@@ -533,7 +550,7 @@ describe('AutoRAG API Contract Tests', () => {
         it('should accept request with valid path parameter', async () => {
           const result = await apiClient.get(`${searchParamsUri}&path=folder/subfolder`);
           expect(result).toMatchContract(apiSchema, {
-            ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+            ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
             status: 200,
           });
         }, 8000);
@@ -551,7 +568,7 @@ describe('AutoRAG API Contract Tests', () => {
         it('should accept request with valid search parameter', async () => {
           const result = await apiClient.get(`${searchParamsUri}&search=myfile`);
           expect(result).toMatchContract(apiSchema, {
-            ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+            ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
             status: 200,
           });
         }, 8000);
@@ -569,7 +586,7 @@ describe('AutoRAG API Contract Tests', () => {
         it('should accept request with valid next parameter', async () => {
           const result = await apiClient.get(`${searchParamsUri}&next=some-continuation-token`);
           expect(result).toMatchContract(apiSchema, {
-            ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+            ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
             status: 200,
           });
         }, 8000);
@@ -587,7 +604,7 @@ describe('AutoRAG API Contract Tests', () => {
         it('should accept request with valid limit parameter', async () => {
           const result = await apiClient.get(`${searchParamsUri}&limit=20`);
           expect(result).toMatchContract(apiSchema, {
-            ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+            ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
             status: 200,
           });
         }, 8000);
@@ -632,7 +649,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       });
@@ -642,7 +659,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket&bucket=${BUCKET}`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       });
@@ -652,7 +669,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
         expect(result.success).toBe(true);
@@ -663,7 +680,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket&path=autorag%20input%20data`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       });
@@ -673,7 +690,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket&search=myfile`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       });
@@ -683,7 +700,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket&limit=10`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       });
@@ -693,7 +710,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket&next=some-token`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       });
@@ -703,7 +720,7 @@ describe('AutoRAG API Contract Tests', () => {
           `/api/v1/s3/files?namespace=${NS}&secretName=test-secret-with-bucket&path=autorag%20input%20data&search=report&limit=5`,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/S3GetFilesResponse/content/application/json/schema',
+          ref: '#/components/responses/S3GetFilesResponse/content/application~1json/schema',
           status: 200,
         });
       });
@@ -718,7 +735,7 @@ describe('AutoRAG API Contract Tests', () => {
           undefined,
         );
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/EnableManagedPipelinesResponse/content/application/json/schema',
+          ref: '#/components/responses/EnableManagedPipelinesResponse/content/application~1json/schema',
           status: 200,
         });
       });

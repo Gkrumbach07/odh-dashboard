@@ -1,3 +1,4 @@
+/* eslint-disable camelcase */
 import * as React from 'react';
 import {
   Alert,
@@ -47,14 +48,11 @@ import {
   getEvaluationDisplayState,
   getEvaluationQueue,
   getEvaluationName,
-  formatOrdinal,
-  isTerminalState,
 } from '~/app/utilities/evaluationUtils';
 import { getMessageCodeLabel } from '~/app/utilities/messageCodeLabels';
 import { isPreStartFailure } from '~/app/utilities/evaluationJobPolling';
-import { useKueueAvailability } from '~/app/hooks/useKueueAvailability';
-import { useKueueWorkloadStatuses } from '~/app/hooks/useKueueWorkloadStatuses';
-import usePageVisibility from '~/app/hooks/usePageVisibility';
+import { useEvalHubTracking } from '~/app/tracking/useEvalHubTracking';
+import { EVAL_HUB_EVENTS } from '~/app/tracking/evalhubTrackingConstants';
 import EvaluationStatusLabel from './EvaluationStatusLabel';
 import EvaluationEventLog from './EvaluationEventLog';
 import './EvaluationStatusModal.scss';
@@ -322,6 +320,8 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
   onRequestStop,
   onRequestReconfigure,
 }) => {
+  const { createEvalHubTrackingScope, trackEvalHubEvent } = useEvalHubTracking();
+
   const [activeTab, setActiveTab] = React.useState<string>('progress');
   const [logBenchmarkIndex, setLogBenchmarkIndex] = React.useState<number | undefined>();
   const [isFailureSummaryExpanded, setIsFailureSummaryExpanded] = React.useState(false);
@@ -334,21 +334,6 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
   // 30s list refresh.
   const state = polledJobData?.status.state ?? job?.status.state ?? 'pending';
   const jobId = job?.resource.id;
-  const isPageVisible = usePageVisibility();
-  const { availability: kueueAvailability, loaded: kueueAvailabilityLoaded } =
-    useKueueAvailability(namespace);
-  const isKueueEnabled = kueueAvailability?.enabled === true;
-  const {
-    statusesByEvaluationId: kueueWorkloadStatusesByEvaluationID,
-    isLoading: isKueueWorkloadStatusesLoading,
-  } = useKueueWorkloadStatuses(
-    namespace,
-    jobId ? [jobId] : [],
-    isKueueEnabled,
-    isPageVisible,
-    !isTerminalState(state),
-  );
-  const kueueWorkloadStatus = jobId ? kueueWorkloadStatusesByEvaluationID.get(jobId) : undefined;
 
   const progressBenchmarks = React.useMemo(
     () =>
@@ -421,19 +406,10 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
   const effectiveJob = polledJobData ?? job;
   // Detail polling can omit hardware_config.queue even when the list response included it.
   // Keep the list assignment available so a queued run does not briefly fall back to Pending.
-  const queue = effectiveJob
-    ? (getEvaluationQueue(effectiveJob) ??
-      (job ? getEvaluationQueue(job) : undefined) ??
-      kueueWorkloadStatus?.queue_name)
+  const queueName = effectiveJob
+    ? (getEvaluationQueue(effectiveJob) ?? (job ? getEvaluationQueue(job) : undefined))
     : undefined;
-  // RHOAIENG-99645: queue assignments can persist in evaluation responses after the Kueue
-  // integration is disabled — only surface the queued display when the integration is enabled.
-  const isQueued = isKueueEnabled && state === 'pending' && Boolean(queue);
-  const isKueueStatusLoading =
-    state === 'pending' &&
-    !kueueWorkloadStatus &&
-    !queue &&
-    (!kueueAvailabilityLoaded || (isKueueEnabled && isKueueWorkloadStatusesLoading));
+  const isQueued = state === 'pending' && Boolean(queueName);
   const isInProgress = state === 'running' || state === 'pending' || state === 'stopping';
 
   const [now, setNow] = React.useState(() => new Date().toISOString());
@@ -444,6 +420,30 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
     const id = window.setInterval(() => setNow(new Date().toISOString()), 1000);
     return () => window.clearInterval(id);
   }, [isInProgress]);
+
+  const isFailed = state === 'failed' || state === 'partially_failed';
+  const isPreStart = job ? isPreStartFailure(polledJobData ?? job) : false;
+  const trackingScope = React.useRef(createEvalHubTrackingScope()).current;
+
+  React.useEffect(() => () => trackingScope.clear(), [trackingScope]);
+
+  React.useEffect(() => {
+    if (job?.resource.id) {
+      trackingScope.trackEventOnce(EVAL_HUB_EVENTS.JOB_DETAIL_OPENED, job.resource.id, {
+        evaluationName,
+        state,
+      });
+    }
+  }, [evaluationName, job?.resource.id, state, trackingScope]);
+
+  React.useEffect(() => {
+    if (job?.resource.id && isFailed) {
+      trackingScope.trackEventOnce(EVAL_HUB_EVENTS.FAILURE_DETAIL_OPENED, job.resource.id, {
+        evaluationName,
+        failure_category: isPreStart ? 'pre_start' : state,
+      });
+    }
+  }, [evaluationName, isFailed, isPreStart, job?.resource.id, state, trackingScope]);
 
   if (!job) {
     return null;
@@ -457,35 +457,55 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
     job.resource.created_at,
     isInProgress ? now : (polledJobData?.resource.updated_at ?? job.resource.updated_at),
   );
-  const isFailed = state === 'failed' || state === 'partially_failed';
   const isReconfigurable = !isInProgress;
   // Use the most-current benchmark data (polled > list) to detect pre-start failures.
-  const isPreStart = isPreStartFailure(polledJobData ?? job);
   const displayState = getEvaluationDisplayState(state, {
     isQueued,
     isPreStartFailure: isPreStart,
-    kueueWorkloadStatus,
   });
-  const isWaitingForKueueResources =
-    displayState === 'queued' &&
-    (!kueueWorkloadStatus ||
-      kueueWorkloadStatus.state === 'queued' ||
-      kueueWorkloadStatus.state === 'preempted');
-  const isInadmissible = displayState === 'inadmissible';
-  const isAdmittedByKueue = kueueWorkloadStatus?.state === 'admitted';
-  const queueName = kueueWorkloadStatus?.queue_name || queue;
-  const queuePosition = kueueWorkloadStatus?.queue_position;
-  const queueWaitTitle = isWaitingForKueueResources
+  const isWaitingForQueueResources = displayState === 'queued';
+  const queueWaitTitle = isWaitingForQueueResources
     ? `Waiting for quota${queueName ? ` in ${queueName}` : ''}`
     : undefined;
-  const queuePositionText =
-    isWaitingForKueueResources && queuePosition != null && queuePosition > 0
-      ? `${formatOrdinal(queuePosition)} in queue`
-      : undefined;
 
   const handleViewBenchmarkLogs = (bmIndex: number) => {
+    const benchmark = progressBenchmarks.find((bm) => bm.benchmark_index === bmIndex);
+    if (benchmark?.status === 'failed') {
+      trackEvalHubEvent(EVAL_HUB_EVENTS.FAILURE_DETAIL_OPENED, {
+        evaluationName,
+        failure_category: 'benchmark_logs',
+        benchmarkIndex: bmIndex,
+      });
+    }
+    trackEvalHubEvent(EVAL_HUB_EVENTS.EVALUATION_LOGS_VIEWED, {
+      evaluationName,
+      benchmarkIndex: bmIndex,
+      source: 'progress_benchmark',
+    });
     setLogBenchmarkIndex(bmIndex);
     setActiveTab('events-log');
+  };
+
+  const handleStatusTabSelect = (_event: React.SyntheticEvent, key: string | number) => {
+    const tab = String(key) === 'events-log' ? 'events_log' : 'progress';
+    const isTabChange = String(key) !== activeTab;
+    // Re-selecting Events log while a benchmark-specific log view is open still changes
+    // the displayed log scope to general logs, so the log-view event stays meaningful.
+    const isLogScopeChange = tab === 'events_log' && logBenchmarkIndex !== undefined;
+    if (isTabChange) {
+      trackEvalHubEvent(EVAL_HUB_EVENTS.EVALUATION_STATUS_TAB_SELECTED, {
+        evaluationName,
+        tab,
+      });
+    }
+    if (tab === 'events_log' && (isTabChange || isLogScopeChange)) {
+      trackEvalHubEvent(EVAL_HUB_EVENTS.EVALUATION_LOGS_VIEWED, {
+        evaluationName,
+        source: 'status_tab',
+      });
+    }
+    setActiveTab(String(key));
+    setLogBenchmarkIndex(undefined);
   };
 
   const getInProgressDescription = (): string => {
@@ -493,14 +513,8 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
       case 'stopping':
         return 'being canceled';
       case 'pending':
-        if (isAdmittedByKueue) {
-          return `admitted by Kueue through LocalQueue ${kueueWorkloadStatus.queue_name} and is pending`;
-        }
         return isQueued ? 'queued and waiting for resource admission' : 'pending';
       case 'running':
-        if (isAdmittedByKueue) {
-          return `admitted by Kueue through LocalQueue ${kueueWorkloadStatus.queue_name} and is running`;
-        }
         return isQueued ? 'queued and waiting for resource admission' : 'running';
       default:
         return state;
@@ -508,17 +522,13 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
   };
 
   let descriptionText: string | undefined;
-  if (isKueueStatusLoading) {
-    descriptionText = 'Checking resource scheduling status';
-  } else if (state === 'completed') {
-    descriptionText = `Evaluation completed successfully.${elapsed ? ` Total time: ${elapsed}` : ''}`;
+  if (state === 'completed') {
+    descriptionText = `Evaluation completed successfully.${
+      elapsed ? ` Total time: ${elapsed}` : ''
+    }`;
   } else if (isInProgress) {
-    if (isInadmissible) {
-      descriptionText = `Kueue could not admit this evaluation${
-        kueueWorkloadStatus?.message ? `: ${kueueWorkloadStatus.message}` : '.'
-      }`;
-    } else if (isWaitingForKueueResources) {
-      descriptionText = queuePositionText ?? 'Waiting for resources to become available';
+    if (isWaitingForQueueResources) {
+      descriptionText = 'Waiting for resources to become available';
     } else {
       descriptionText = `Evaluation job is ${getInProgressDescription()}.${
         elapsed ? ` Elapsed time: ${elapsed}` : ''
@@ -556,13 +566,12 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
           <EvaluationStatusLabel
             state={state}
             isQueued={isQueued}
-            isLoading={isKueueStatusLoading}
             isPreStartFailure={isPreStart}
-            kueueWorkloadStatus={kueueWorkloadStatus}
+            queueName={queueName}
           />
         </div>
       </ModalHeader>
-      <ModalBody>
+      <ModalBody data-testid="status-modal-body">
         <div className="evalhub-status-modal__header" data-testid="status-detail-header">
           <Stack className="evalhub-status-modal__header-stack">
             <StackItem>
@@ -596,16 +605,7 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
                     className="pf-v6-u-text-truncate"
                     data-testid="benchmark-name-header"
                   >
-                    {isKueueStatusLoading ? (
-                      <Skeleton
-                        width="180px"
-                        height="1em"
-                        screenreaderText="Loading evaluation status"
-                        data-testid="queue-status-loading"
-                      />
-                    ) : (
-                      <strong>{queueWaitTitle ?? benchmarkName}</strong>
-                    )}
+                    <strong>{queueWaitTitle ?? benchmarkName}</strong>
                   </Content>
                 </FlexItem>
               </Flex>
@@ -639,11 +639,16 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
                     <>
                       <p
                         ref={failureSummaryRef}
-                        className={
-                          isFailureSummaryExpanded
-                            ? undefined
-                            : 'evalhub-status-modal__failure-summary--clamped'
-                        }
+                        className={`evalhub-status-modal__failure-summary ${
+                          isFailureSummaryExpanded ? 'm-expanded' : 'm-clamped'
+                        }`}
+                        data-testid="failure-summary-text"
+                        // Only the expanded state is a scrollable region — make it
+                        // keyboard-focusable so the clipped text is reachable
+                        // without a pointer (RHAI-10244).
+                        tabIndex={isFailureSummaryExpanded ? 0 : undefined}
+                        role={isFailureSummaryExpanded ? 'region' : undefined}
+                        aria-label={isFailureSummaryExpanded ? 'Failure summary' : undefined}
                       >
                         {failureSummary}
                       </p>
@@ -674,10 +679,7 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
           </Stack>
           <Tabs
             activeKey={activeTab}
-            onSelect={(_e, key) => {
-              setActiveTab(String(key));
-              setLogBenchmarkIndex(undefined);
-            }}
+            onSelect={handleStatusTabSelect}
             data-testid="status-modal-tabs"
             className="evalhub-status-modal__tabs"
           >
@@ -696,6 +698,7 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
 
         {/* Tab content */}
         <div
+          data-testid="status-modal-tab-content"
           className={`evalhub-status-modal__tab-content ${
             activeTab === 'events-log'
               ? 'evalhub-status-modal__tab-content--events-log'
@@ -763,7 +766,12 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
             component={(props) => (
               <Link {...props} to={evaluationResultsRoute(namespace, job.resource.id)} />
             )}
-            onClick={onClose}
+            onClick={() => {
+              trackEvalHubEvent(EVAL_HUB_EVENTS.EVALUATION_RESULTS_VIEWED, {
+                evaluationName,
+              });
+              onClose();
+            }}
             data-testid="status-modal-view-results-button"
           >
             View results
@@ -772,7 +780,13 @@ const EvaluationStatusModal: React.FC<EvaluationStatusModalProps> = ({
         {onRequestReconfigure && isReconfigurable && state !== 'completed' && (
           <Button
             variant="primary"
-            onClick={() => onRequestReconfigure(job)}
+            onClick={() => {
+              trackEvalHubEvent(EVAL_HUB_EVENTS.EVALUATION_RECONFIGURE_SELECTED, {
+                evaluationName,
+                previousState: state,
+              });
+              onRequestReconfigure(job);
+            }}
             data-testid="status-modal-reconfigure-button"
           >
             Reconfigure evaluation

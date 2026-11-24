@@ -239,6 +239,7 @@ export type BYONImage = {
   recommendedAcceleratorIdentifiers: string[];
   tier?: string;
   isOOTB: boolean;
+  deprecated: boolean;
 };
 
 export type BYONImagePackage = {
@@ -526,7 +527,7 @@ export enum OdhPlatformType {
   MANAGED_RHOAI = 'OpenShift AI Cloud Service',
 } // Reference: https://github.com/red-hat-data-services/rhods-operator/blob/main/pkg/cluster/const.go
 
-export type TypedPromiseRejectedResult<R> = Omit<PromiseRejectedResult, 'reason'> & { reason: R };
+export type { TypedPromiseRejectedResult } from '@odh-dashboard/plugin-core';
 
 export enum IconSize {
   SM = 'sm',

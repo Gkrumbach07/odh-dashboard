@@ -41,23 +41,27 @@ export type DashboardConfig = K8sResourceCommon & {
       disableModelRegistry: boolean;
       disableModelRegistrySecureDB: boolean;
       disableServingRuntimeParams: boolean;
-      disableConnectionTypes: boolean;
       disableStorageClasses: boolean;
       disableNIMModelServing: boolean;
       disableAdminConnectionTypes: boolean;
+      hideCommunityPluginsSettingsPage: boolean;
       disableFineTuning: boolean;
       disableKueue: boolean;
       disableLMEval: boolean;
       disableFeatureStore: boolean;
       featureStoreAdmin: boolean;
       dataRegistry: boolean;
+      dataConnectHub: boolean;
       trainingJobs: boolean;
       genAiStudio: boolean;
       genAiTracing: boolean;
       guardrails: boolean;
+      aiSafety: boolean;
       automl: boolean;
       autorag: boolean;
       modelAsService: boolean;
+      mySubscriptions: boolean;
+      inferencePriorityField: boolean;
       mlflow: boolean;
       workbenchesV2: boolean;
       mcpCatalog: boolean;
@@ -65,10 +69,12 @@ export type DashboardConfig = K8sResourceCommon & {
       skillRegistry: boolean;
       genAiMcpRegistryServers: boolean;
       agentOps: boolean;
+      agentOpsDeploy: boolean;
       agentsCatalog: boolean;
       toolCalling: boolean;
       aiAssetCustomEndpoints: boolean;
       disableLLMd: boolean;
+      llmdTemplates: boolean;
       projectRBAC: boolean;
       roleManagement: boolean;
       deploymentWizardYAMLViewer: boolean;
@@ -81,11 +87,12 @@ export type DashboardConfig = K8sResourceCommon & {
       llmGatewayField: boolean;
       promptManagement: boolean;
       globalProjectPrompts: boolean;
+      hardwareProfileDRA: boolean;
       gpuaas: boolean;
       modelCapabilities: boolean;
-      grid: boolean;
       observabilityDashboard: boolean;
       nimWizard: boolean;
+      nimServiceOperator: boolean;
     };
     // Intentionally disjointed from the CRD, we should move away from this code-wise now; CRD later
     // groupsConfig?: {
@@ -1048,8 +1055,20 @@ export type DataScienceClusterKindStatus = {
   };
 };
 
+export type DataScienceClusterComponentSpec = {
+  managementState?: ManagementState;
+};
+
+export type DataScienceClusterKindSpec = {
+  components?: {
+    feastoperator?: DataScienceClusterComponentSpec & {
+      dataRegistry?: DataScienceClusterComponentSpec;
+    };
+  };
+};
+
 export type DataScienceClusterKind = K8sResourceCommon & {
-  spec: unknown; // we should never need to look into this
+  spec: DataScienceClusterKindSpec;
   status: DataScienceClusterKindStatus;
 };
 

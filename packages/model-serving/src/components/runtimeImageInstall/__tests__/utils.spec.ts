@@ -33,7 +33,6 @@ const servingRuntimeTarget: RuntimeImageInstallTargetExtension = {
       description: 'and the inference service deployment wizard.',
     },
     installTargetName: 'serving runtime template',
-    configureStepLabel: 'Configure template',
     component: () => Promise.resolve({ default: () => null }),
   },
 };
@@ -42,14 +41,13 @@ const acceleratorTarget: RuntimeImageInstallTargetExtension = {
   type: 'model-serving.runtime-image/install-target',
   properties: {
     id: 'llmInferenceServiceConfig',
-    label: 'LLM accelerator configuration',
+    label: 'LLM inference service configuration',
     description: 'Accelerator description',
     selectedState: {
-      listName: 'LLM accelerator configurations',
+      listName: 'LLM inference service configurations',
       description: 'and the LLM inference service deployment wizard.',
     },
-    installTargetName: 'LLM accelerator configuration',
-    configureStepLabel: 'Configure accelerator',
+    installTargetName: 'LLM inference service configuration',
     component: () => Promise.resolve({ default: () => null }),
   },
 };

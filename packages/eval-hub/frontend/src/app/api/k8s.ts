@@ -24,12 +24,9 @@ import {
   CreateCollectionRequest,
   EvaluationJob,
   EvaluationJobsResponse,
+  EvaluationJobsResult,
   InferenceServicesResponse,
-  KueueAvailability,
-  KueueWorkloadStatus,
-  KueueWorkloadStatusesResponse,
-  HardwareProfile,
-  HardwareProfilesResponse,
+  InfoResponse,
   ListCollectionsParams,
   ListEvaluationJobsParams,
   NamespaceKind,
@@ -39,7 +36,6 @@ import {
   VerifyConnectionRequest,
   VerifyConnectionResponse,
 } from '~/app/types';
-import { CatalogSecurityArtifactList } from '~/app/pages/modelCatalog/securityInsightsTypes';
 
 const isValidCollectionBenchmark = (b: unknown): b is CollectionBenchmark =>
   b != null &&
@@ -209,57 +205,16 @@ export const getEvalHubHealth =
       throw new Error('Invalid health response format');
     });
 
-export const getKueueAvailability =
+export const getInfo =
   (hostPath: string, namespace: string) =>
-  (opts: APIOptions): Promise<KueueAvailability> =>
+  (opts: APIOptions): Promise<InfoResponse> =>
     handleRestFailures(
-      restGET(
-        hostPath,
-        `${URL_PREFIX}/api/${BFF_API_VERSION}/kueue/availability`,
-        { namespace },
-        opts,
-      ),
+      restGET(hostPath, `${URL_PREFIX}/api/${BFF_API_VERSION}/info`, { namespace }, opts),
     ).then((response) => {
-      if (isModArchResponse<KueueAvailability>(response)) {
+      if (isModArchResponse<InfoResponse>(response)) {
         return response.data;
       }
-      throw new Error('Invalid Kueue availability response format');
-    });
-
-export const getKueueWorkloadStatuses =
-  (hostPath: string, namespace: string, evaluationIds: string[]) =>
-  (opts: APIOptions): Promise<KueueWorkloadStatus[]> =>
-    handleRestFailures(
-      restGET(
-        hostPath,
-        `${URL_PREFIX}/api/${BFF_API_VERSION}/kueue/workloads`,
-        // eslint-disable-next-line camelcase -- Query parameter follows the BFF OpenAPI contract.
-        { namespace, evaluation_ids: evaluationIds.join(',') },
-        opts,
-      ),
-    ).then((response) => {
-      if (isModArchResponse<KueueWorkloadStatusesResponse>(response)) {
-        return response.data.items;
-      }
-      throw new Error('Invalid Kueue Workload status response format');
-    });
-
-export const getHardwareProfiles =
-  (hostPath: string, namespace: string) =>
-  (opts: APIOptions): Promise<HardwareProfile[]> =>
-    handleRestFailures(
-      restGET(
-        hostPath,
-        `${URL_PREFIX}/api/${BFF_API_VERSION}/hardwareprofiles`,
-        { namespace },
-        opts,
-      ),
-    ).then((response) => {
-      if (isModArchResponse<HardwareProfilesResponse | HardwareProfile[]>(response)) {
-        const { data } = response;
-        return Array.isArray(data) ? data : data.items;
-      }
-      throw new Error('Invalid HardwareProfile response format');
+      throw new Error('Invalid info response format');
     });
 
 export const validateHardwareProfiles =
@@ -282,7 +237,7 @@ export const validateHardwareProfiles =
 
 export const getEvaluationJobs =
   (hostPath: string, params?: ListEvaluationJobsParams) =>
-  (opts: APIOptions): Promise<EvaluationJob[]> => {
+  (opts: APIOptions): Promise<EvaluationJobsResult> => {
     const queryParams: Record<string, string> = {};
     if (params?.namespace) {
       queryParams.namespace = params.namespace;
@@ -315,8 +270,16 @@ export const getEvaluationJobs =
       }),
     ).then((response) => {
       if (isModArchResponse<EvaluationJobsResponse | EvaluationJob[]>(response)) {
-        const { data } = response;
-        return Array.isArray(data) ? data : data.items;
+        const { data, metadata } = response;
+        const jobs = Array.isArray(data) ? data : data.items;
+        const metadataTotal = metadata?.total_count;
+        const totalCount =
+          typeof metadataTotal === 'number'
+            ? metadataTotal
+            : !Array.isArray(data) && typeof data.total_count === 'number'
+              ? data.total_count
+              : jobs.length;
+        return { jobs, totalCount, truncated: metadata?.truncated === true };
       }
       throw new Error('Invalid response format');
     });
@@ -377,7 +340,9 @@ export const getCollection =
     return handleRestFailures(
       restGET(
         hostPath,
-        `${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/collections/${encodeURIComponent(collectionId)}`,
+        `${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/collections/${encodeURIComponent(
+          collectionId,
+        )}`,
         { namespace },
         opts,
       ),
@@ -399,7 +364,9 @@ export const deleteCollection =
     return handleRestFailures(
       restDELETE(
         hostPath,
-        `${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/collections/${encodeURIComponent(collectionId)}`,
+        `${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/collections/${encodeURIComponent(
+          collectionId,
+        )}`,
         {},
         { namespace },
         { ...opts, parseJSON: false },
@@ -531,7 +498,9 @@ export const cloneCollection =
     return handleRestFailures(
       restCREATE(
         hostPath,
-        `${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/collections/${encodeURIComponent(collectionId)}/clones`,
+        `${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/collections/${encodeURIComponent(
+          collectionId,
+        )}/clones`,
         request,
         { namespace },
         opts,
@@ -617,32 +586,6 @@ export const getInferenceServices =
       throw new Error('Invalid response format');
     });
 
-export const getCatalogSecurityArtifacts =
-  (hostPath: string, sourceId: string, modelName: string, namespace?: string, pageSize?: number) =>
-  (opts: APIOptions): Promise<CatalogSecurityArtifactList> => {
-    const queryParams: Record<string, string> = {};
-    if (namespace) {
-      queryParams.namespace = namespace;
-    }
-    if (pageSize != null) {
-      queryParams.pageSize = String(pageSize);
-    }
-
-    return handleRestFailures(
-      restGET(
-        hostPath,
-        `${URL_PREFIX}/api/${BFF_API_VERSION}/catalog/sources/${encodeURIComponent(sourceId)}/security_artifacts/${encodeURIComponent(modelName)}`,
-        queryParams,
-        opts,
-      ),
-    ).then((response) => {
-      if (isModArchResponse<CatalogSecurityArtifactList>(response)) {
-        return response.data;
-      }
-      throw new Error('Invalid response format');
-    });
-  };
-
 export class LogFetchError extends Error {
   constructor(
     public readonly statusCode: number,
@@ -685,7 +628,9 @@ export const getEvaluationJobLogs =
     if (params?.since_seconds != null) {
       queryParams.set('since_seconds', String(params.since_seconds));
     }
-    const url = `${hostPath}${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/jobs/${encodeURIComponent(jobId)}/logs?${queryParams.toString()}`;
+    const url = `${hostPath}${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/jobs/${encodeURIComponent(
+      jobId,
+    )}/logs?${queryParams.toString()}`;
     const response = await fetch(url, { signal });
     if (!response.ok) {
       throw new LogFetchError(
@@ -725,7 +670,9 @@ export const getEvaluationJobBenchmarkLogs =
     if (params?.since_seconds != null) {
       queryParams.set('since_seconds', String(params.since_seconds));
     }
-    const url = `${hostPath}${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/jobs/${encodeURIComponent(jobId)}/benchmarks/${benchmarkIndex}/logs?${queryParams.toString()}`;
+    const url = `${hostPath}${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/jobs/${encodeURIComponent(
+      jobId,
+    )}/benchmarks/${benchmarkIndex}/logs?${queryParams.toString()}`;
     const response = await fetch(url, { signal });
     if (!response.ok) {
       throw new LogFetchError(
@@ -749,17 +696,20 @@ export const getEvaluationJobBenchmarkLogs =
 export const verifyConnection =
   (hostPath: string, namespace: string, request: VerifyConnectionRequest) =>
   (opts: APIOptions): Promise<VerifyConnectionResponse> =>
-    handleRestFailures(
-      restCREATE(
-        hostPath,
-        `${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/verify-connection`,
-        request,
-        { namespace },
-        opts,
-      ),
-    ).then((response) => {
+    restCREATE(
+      hostPath,
+      `${URL_PREFIX}/api/${BFF_API_VERSION}/evaluations/verify-connection`,
+      request,
+      { namespace },
+      opts,
+    ).then((response: unknown) => {
       if (isModArchResponse<VerifyConnectionResponse>(response)) {
         return response.data;
+      }
+      if (response && typeof response === 'object' && 'error' in response) {
+        const { error } = response as { error: unknown }; // eslint-disable-line @typescript-eslint/consistent-type-assertions
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw { error };
       }
       throw new Error('Invalid response format');
     });

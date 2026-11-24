@@ -14,10 +14,10 @@ import {
 } from '@patternfly/react-core';
 import { ExclamationCircleIcon } from '@patternfly/react-icons';
 import { useNavigate } from 'react-router-dom';
-import { TrackingOutcome } from '@odh-dashboard/ui-core';
+import { useTrackEvent } from '@odh-dashboard/analytics/react';
+import { TrackingOutcome } from '@odh-dashboard/analytics/types';
 import type { RuntimeImageInstallTargetProps } from '@odh-dashboard/model-serving/extension-points/runtime-image-install-target';
 import { RuntimeImageInstallTrackingEvent } from '@odh-dashboard/model-serving/components/runtimeImageInstall/tracking/runtimeImageInstallTracking';
-import { fireFormTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
 import { parseServingRuntimeTemplate } from './parseServingRuntimeTemplate';
 import { fireServingRuntimeTemplateCreated } from '../settings/servingRuntimeTemplates/tracking/servingRuntimeTemplateTracking';
 import ServingRuntimeTemplateFormBody from '../settings/servingRuntimeTemplates/ServingRuntimeTemplateFormBody';
@@ -27,6 +27,7 @@ const ServingRuntimeInstallTarget: React.FC<RuntimeImageInstallTargetProps> = ({
   onBack,
   cancelReturnRoute,
 }) => {
+  const trackEvent = useTrackEvent();
   const navigate = useNavigate();
   const parsed = React.useMemo(() => {
     try {
@@ -57,11 +58,11 @@ const ServingRuntimeInstallTarget: React.FC<RuntimeImageInstallTargetProps> = ({
               <Button
                 variant="link"
                 onClick={() => {
-                  fireServingRuntimeTemplateCreated({
+                  fireServingRuntimeTemplateCreated(trackEvent, {
                     outcome: TrackingOutcome.cancel,
                     mode: 'install',
                   });
-                  fireFormTrackingEvent(RuntimeImageInstallTrackingEvent.CREATE_COMPLETED, {
+                  trackEvent(RuntimeImageInstallTrackingEvent.CREATE_COMPLETED, {
                     outcome: TrackingOutcome.cancel,
                     configurationType: 'serving-runtime-template',
                   });
@@ -80,14 +81,11 @@ const ServingRuntimeInstallTarget: React.FC<RuntimeImageInstallTargetProps> = ({
   return (
     <Stack hasGutter>
       <StackItem>
-        <Title headingLevel="h2">Add serving runtime template</Title>
+        <Title headingLevel="h2">Configure</Title>
       </StackItem>
       <StackItem>
         <Content>
-          <p>
-            Review the pre-filled configuration for this runtime image. Edit any fields before
-            creating it on this cluster.
-          </p>
+          <p>Review or customize the pre-filled configuration.</p>
         </Content>
       </StackItem>
       <StackItem>

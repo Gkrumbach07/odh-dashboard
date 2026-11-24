@@ -1,3 +1,5 @@
+# This file is managed by fullsend. Do not edit it directly.
+# Upstream: https://github.com/fullsend-ai/fullsend/blob/main/internal/scaffold/fullsend-repo/.github/workflows/fullsend.yaml
 ---
 # fullsend shim workflow (per-repo installation mode)
 # Routes events to agent workflows via reusable-dispatch.yml.
@@ -51,7 +53,7 @@ jobs:
       issues: write
       packages: read
       pull-requests: write
-    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@d11de3ea0dde5aa652110b6716c19e000c426df7 # v0.57.1
+    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@d11de3ea0dde5aa652110b6716c19e000c426df7  # v0.57.1
     with:
       event_action: ${{ github.event.action }}
       mint_url: ${{ vars.FULLSEND_MINT_URL }}

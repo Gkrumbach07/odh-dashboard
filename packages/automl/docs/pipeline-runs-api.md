@@ -79,6 +79,7 @@ Used for forecasting future values in time series data.
 - `top_n`: Number of top models to consider (default: 3)
 - `prediction_length`: Number of timesteps to forecast (default: 1)
 - `known_covariates_names`: List of covariate columns that are known in the future
+- `preset`: Training quality tier: `speed` (default), `balanced`, or `quality`
 
 ## Authentication
 
@@ -428,11 +429,14 @@ Additional required fields for timeseries forecasting pipelines:
 | `timestamp_column` | string | Yes | Name of the timestamp/datetime column |
 | `prediction_length` | integer | No | Forecast horizon (number of timesteps, default: 1) |
 | `known_covariates_names` | array of strings | No | Optional list of known covariate column names |
+| `preset` | string | No | Training quality tier: `speed` (default), `balanced`, or `quality` |
 
 **Notes:**
 - `task_type` is required in all requests and determines which pipeline type to use
 - Unknown JSON fields are rejected (strict decoding)
 - `pipeline_id` and `pipeline_version_id` are automatically discovered and injected by the BFF
+- The BFF injects `plugins_input.mlflow.disabled: true` on every created run, disabling the
+  platform MLflow integration (AutoML owns its own experiment tracking)
 - The `task_type` field selects between the auto-discovered timeseries and tabular pipelines
 - Pipeline-runs endpoints return `404 Not Found` when required managed AutoML
   pipelines are unavailable in the namespace (see Error Responses)
@@ -510,6 +514,7 @@ curl -X POST "http://localhost:4003/api/v1/pipeline-runs?namespace=my-namespace"
     "target": "sales",
     "id_column": "store_id",
     "timestamp_column": "date",
+    "preset": "quality",
     "prediction_length": 7,
     "known_covariates_names": ["temperature", "is_holiday"],
     "top_n": 3

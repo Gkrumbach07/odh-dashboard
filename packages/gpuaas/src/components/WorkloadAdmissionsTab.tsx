@@ -11,20 +11,18 @@ import {
   t_chart_color_blue_300 as chartBlue,
   t_chart_color_orange_300 as chartOrange,
 } from '@patternfly/react-tokens';
-import SimpleSelect from '@odh-dashboard/ui-core/components/SimpleSelect';
-
-import useWorkloadAdmissionMetrics from '../hooks/useWorkloadAdmissionMetrics';
+import useWorkloadAdmissionMetrics, { getWindowConfig } from '../hooks/useWorkloadAdmissionMetrics';
+import { getAdmissionChartGridLeft } from '../utils/admissionMetrics';
 import {
-  ADMISSION_TIME_WINDOW_OPTIONS,
   buildAdmissionMetrics,
   formatAdmissionMetricHeadline,
-  formatAdmissionTooltipTimestamp,
   formatAdmissionTimestamp,
   formatAdmissionMetricValue,
   getAdmissionMetricHeadlineValue,
   getAdmissionMetricsXDomain,
   getAdmissionMetricYBounds,
   getAdmissionMetricYInterval,
+  getAdmissionTickInterval,
   getValidAdmissionMetricPoints,
   type AdmissionMetric,
 } from '../utils/workloadAdmissions';
@@ -53,18 +51,17 @@ const getAdmissionChartTheme = (): Record<string, unknown> => ({
 type WorkloadAdmissionsTabProps = {
   metrics: ReturnType<typeof useWorkloadAdmissionMetrics>;
   timeWindow: string;
-  onTimeWindowChange: (value: string) => void;
   canAccessAdminMetrics: boolean;
+  isActive: boolean;
 };
-
-const ADMISSION_DAY_MS = 24 * 60 * 60 * 1000;
 
 const AdmissionMetricChartComponent: React.FC<{
   metric: AdmissionMetric;
+  gridLeft: number;
   xDomain: [number, number];
   animateOnMount: boolean;
   timeWindow: string;
-}> = ({ metric, xDomain, animateOnMount, timeWindow }) => {
+}> = ({ metric, gridLeft, xDomain, animateOnMount, timeWindow }) => {
   if (!echartsRegistered) {
     echarts.use([LineChart, GridComponent, TooltipComponent, SVGRenderer]);
     echartsRegistered = true;
@@ -75,27 +72,37 @@ const AdmissionMetricChartComponent: React.FC<{
   const theme = React.useMemo(() => getAdmissionChartTheme(), []);
   const data = getValidAdmissionMetricPoints(metric.data);
   const { yMin, yMax, yPadding } = getAdmissionMetricYBounds(data);
+  const yDomain = React.useMemo<[number, number]>(
+    () => [Math.max(0, yMin - yPadding), yMax + yPadding],
+    [yMax, yMin, yPadding],
+  );
   const option = React.useMemo(() => {
-    const yDomain: [number, number] = [Math.max(0, yMin - yPadding), yMax + yPadding];
-    const spansMultipleCalendarDays =
-      new Date(xDomain[0]).toDateString() !== new Date(xDomain[1]).toDateString();
     return {
       animation: animateOnMount,
       animationDuration: animateOnMount ? 1200 : 0,
       animationEasing: animateOnMount ? ('cubicOut' as const) : undefined,
       animationDurationUpdate: 0,
-      grid: { left: 48, right: 8, top: 8, bottom: 28 },
+      grid: {
+        left: gridLeft,
+        right: 0,
+        top: 8,
+        bottom: 28,
+        containLabel: false,
+      },
       xAxis: {
-        type: 'time' as const,
+        type: 'value' as const,
         min: xDomain[0],
         max: xDomain[1],
-        ...(spansMultipleCalendarDays && { minInterval: ADMISSION_DAY_MS }),
+        interval: getAdmissionTickInterval(timeWindow),
         axisLine: { lineStyle: { color: 'var(--pf-t--global--border--color--default)' } },
         axisTick: { lineStyle: { color: 'var(--pf-t--global--border--color--default)' } },
         axisLabel: {
           color: 'var(--pf-t--global--text--color--subtle)',
-          fontSize: 9,
+          fontSize: 10,
           hideOverlap: true,
+          showMinLabel: true,
+          showMaxLabel: false,
+          margin: 8,
           formatter: (timestamp: number) =>
             formatAdmissionTimestamp(timestamp, timeWindow, xDomain),
         },
@@ -116,7 +123,7 @@ const AdmissionMetricChartComponent: React.FC<{
         axisTick: { lineStyle: { color: 'var(--pf-t--global--border--color--default)' } },
         axisLabel: {
           color: 'var(--pf-t--global--text--color--subtle)',
-          fontSize: 9,
+          fontSize: 10,
           formatter: (value: number) => formatAdmissionMetricValue(metric.id, value),
         },
         splitLine: {
@@ -151,9 +158,10 @@ const AdmissionMetricChartComponent: React.FC<{
               ? `${formattedValue} active`
               : formattedValue;
 
-          return `${formatAdmissionTooltipTimestamp(
+          return `${formatAdmissionTimestamp(
             Number(value[0]),
             timeWindow,
+            xDomain,
           )}<br/>${tooltipValue}`;
         },
       },
@@ -179,9 +187,9 @@ const AdmissionMetricChartComponent: React.FC<{
     metric.interpolation,
     timeWindow,
     xDomain,
-    yMin,
     yMax,
-    yPadding,
+    yDomain,
+    gridLeft,
   ]);
 
   React.useEffect(() => {
@@ -217,6 +225,7 @@ const AdmissionMetricChart = React.memo(
   AdmissionMetricChartComponent,
   (previous, next) =>
     previous.metric.id === next.metric.id &&
+    previous.gridLeft === next.gridLeft &&
     previous.metric.color === next.metric.color &&
     previous.metric.data === next.metric.data &&
     previous.xDomain[0] === next.xDomain[0] &&
@@ -247,35 +256,45 @@ const AdmissionMetricCard: React.FC<{
   animateOnMount: boolean;
   timeWindow: string;
 }> = ({ metric, xDomain, isLoading, animateOnMount, timeWindow }) => {
-  const isChartLoading = isLoading;
   const formattedValue = formatAdmissionMetricHeadline(
     metric,
     getAdmissionMetricHeadlineValue(metric),
   );
+  const validPoints = getValidAdmissionMetricPoints(metric.data);
+  const { yMin, yMax, yPadding } = getAdmissionMetricYBounds(validPoints);
+  const yAxisLabelWidth = Math.max(
+    ...[Math.max(0, yMin - yPadding), yMax + yPadding].map(
+      (value) => formatAdmissionMetricValue(metric.id, value).length,
+    ),
+  );
+  const gridLeft = getAdmissionChartGridLeft(metric.id, yAxisLabelWidth);
 
   return (
     <div
       className="gpuaas-workload-overview__admission-metric"
-      data-testid={`admission-metric-${metric.id}`}
+      data-testid={`admission-metric-card-${metric.id}`}
     >
-      {isChartLoading ? (
-        <AdmissionMetricHeaderLoading label={metric.label} />
+      {isLoading ? (
+        <>
+          <AdmissionMetricHeaderLoading label={metric.label} />
+          <AdmissionMetricChartLoading label={metric.label} />
+        </>
       ) : (
         <>
-          <div data-testid={`admission-metric-value-${metric.id}`}>
-            <Content component="h3" className="gpuaas-workload-overview__admission-value">
-              {formattedValue}
-            </Content>
+          <div className="gpuaas-workload-overview__admission-header">
+            <div data-testid={`admission-metric-value-${metric.id}`}>
+              <Content component="h3" className="gpuaas-workload-overview__admission-value">
+                {formattedValue}
+              </Content>
+            </div>
+            <Content component="p">{metric.label}</Content>
           </div>
-          <Content component="p">{metric.label}</Content>
         </>
       )}
-      {isChartLoading ? (
-        <AdmissionMetricChartLoading label={metric.label} />
-      ) : (
+      {!isLoading && (
         <AdmissionMetricChart
-          key={`${metric.id}-${timeWindow}`}
           metric={metric}
+          gridLeft={gridLeft}
           xDomain={xDomain}
           animateOnMount={animateOnMount}
           timeWindow={timeWindow}
@@ -288,41 +307,25 @@ const AdmissionMetricCard: React.FC<{
 const WorkloadAdmissionsTab: React.FC<WorkloadAdmissionsTabProps> = ({
   metrics,
   timeWindow,
-  onTimeWindowChange,
   canAccessAdminMetrics,
+  isActive,
 }) => {
-  const renderedTimeWindow = React.useRef(timeWindow);
   const [hasLoadedOnce, setHasLoadedOnce] = React.useState(false);
-  const [timeWindowChangePending, setTimeWindowChangePending] = React.useState(false);
-  const isInitialLoading = !hasLoadedOnce;
-  const isSelectedWindowLoading =
-    isInitialLoading ||
-    metrics.loading ||
-    timeWindowChangePending ||
-    renderedTimeWindow.current !== timeWindow;
-  const animateOnMount = !hasLoadedOnce && !timeWindowChangePending;
+  const isLoading = isActive && metrics.loading;
+  const animateOnMount = !hasLoadedOnce;
 
   React.useEffect(() => {
-    if (!metrics.loading && (metrics.loaded || metrics.error)) {
+    if (isActive && !metrics.loading && (metrics.loaded || metrics.error)) {
       setHasLoadedOnce(true);
     }
-    if (timeWindowChangePending && !metrics.loading) {
-      renderedTimeWindow.current = timeWindow;
-      setTimeWindowChangePending(false);
-    }
-  }, [metrics.error, metrics.loaded, metrics.loading, timeWindow, timeWindowChangePending]);
-
-  const handleTimeWindowChange = (value: string) => {
-    setTimeWindowChangePending(true);
-    onTimeWindowChange(value);
-  };
+  }, [isActive, metrics.error, metrics.loaded, metrics.loading]);
 
   const metricSeries = buildAdmissionMetrics(
     metrics,
     { blue: chartBlue.var, orange: chartOrange.var },
     canAccessAdminMetrics,
   );
-  const xDomain = getAdmissionMetricsXDomain(metricSeries);
+  const xDomain = getAdmissionMetricsXDomain(getWindowConfig(timeWindow).span, metrics.endInMs);
 
   return (
     <div
@@ -340,17 +343,6 @@ const WorkloadAdmissionsTab: React.FC<WorkloadAdmissionsTabProps> = ({
           Some metrics could not be loaded. Refresh to try again.
         </Alert>
       )}
-      <div className="gpuaas-workload-overview__admissions-window">
-        <SimpleSelect
-          options={ADMISSION_TIME_WINDOW_OPTIONS}
-          value={timeWindow}
-          onChange={handleTimeWindowChange}
-          ariaLabel="Admission time window"
-          dataTestId="admission-time-window"
-          toggleProps={{ className: 'gpuaas-workload-overview__admission-time-window-toggle' }}
-          popperProps={{ maxWidth: undefined }}
-        />
-      </div>
       <div
         className={`gpuaas-workload-overview__admission-metrics ${
           canAccessAdminMetrics ? '' : 'gpuaas-workload-overview__admission-metrics--two'
@@ -362,7 +354,7 @@ const WorkloadAdmissionsTab: React.FC<WorkloadAdmissionsTabProps> = ({
             key={metric.id}
             metric={metric}
             xDomain={xDomain}
-            isLoading={isSelectedWindowLoading}
+            isLoading={isLoading}
             animateOnMount={animateOnMount}
             timeWindow={timeWindow}
           />

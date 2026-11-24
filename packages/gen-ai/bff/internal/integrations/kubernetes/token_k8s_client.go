@@ -2,6 +2,9 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +23,14 @@ import (
 	helper "github.com/opendatahub-io/gen-ai/internal/helpers"
 	"github.com/opendatahub-io/gen-ai/internal/integrations"
 	"github.com/opendatahub-io/gen-ai/internal/integrations/bffclient"
+	"github.com/opendatahub-io/gen-ai/internal/integrations/clusterdiscovery"
 	"github.com/opendatahub-io/gen-ai/internal/integrations/kubernetes/pgvector"
 	"github.com/opendatahub-io/gen-ai/internal/models"
 	genaitypes "github.com/opendatahub-io/gen-ai/internal/types"
 	authnv1 "k8s.io/api/authentication/v1"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 
 	"gopkg.in/yaml.v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -661,9 +666,8 @@ func (kc *TokenKubernetesClient) GetOGXServers(ctx context.Context, identity *in
 }
 
 // GetNemoGuardrailsServiceURL lists NemoGuardrails CRs (trustyai.opendatahub.io/v1alpha1)
-// in the namespace and derives the in-cluster service URL from the first CR found.
-// The TrustyAI operator creates a Service with the same name as the CR on port 443.
-// Returns ("", nil) if no NemoGuardrails CR exists in the namespace.
+// in the namespace and returns the ready endpoint published by the TrustyAI operator.
+// Returns ("", nil) if no ready NemoGuardrails endpoint exists in the namespace.
 func (kc *TokenKubernetesClient) GetNemoGuardrailsServiceURL(ctx context.Context, identity *integrations.RequestIdentity, namespace string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -688,13 +692,52 @@ func (kc *TokenKubernetesClient) GetNemoGuardrailsServiceURL(ctx context.Context
 		return "", nil
 	}
 
-	crName := list.Items[0].GetName()
-	serviceURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:443", crName, namespace)
-	kc.Logger.Debug("Discovered NemoGuardrails service URL from CR",
+	cr := list.Items[0]
+	phase, _, err := unstructured.NestedString(cr.Object, "status", "phase")
+	if err != nil {
+		return "", fmt.Errorf("failed to read NemoGuardrails phase: %w", err)
+	}
+	serviceURL, _, err := unstructured.NestedString(cr.Object, "status", "endpoint")
+	if err != nil {
+		return "", fmt.Errorf("failed to read NemoGuardrails endpoint: %w", err)
+	}
+	if phase != constants.GuardrailsPhaseReady || serviceURL == "" {
+		kc.Logger.Debug("NemoGuardrails endpoint is not ready", "namespace", namespace, "crName", cr.GetName(), "phase", phase)
+		return "", nil
+	}
+
+	if !isOperatorManagedNemoEndpoint(serviceURL, namespace, cr.GetName()) {
+		return "", errors.New("NemoGuardrails endpoint is not an operator-managed Service URL")
+	}
+	kc.Logger.Debug("Discovered NemoGuardrails service URL from CR status",
 		"namespace", namespace,
-		"crName", crName,
+		"crName", cr.GetName(),
 		"serviceURL", serviceURL)
 	return serviceURL, nil
+}
+
+// The TrustyAI operator publishes HTTPS Service URLs in the CR namespace or
+// the shared AI Gateway namespace. Accept only the names it creates before
+// forwarding the user's token and conversation to the published endpoint.
+func isOperatorManagedNemoEndpoint(endpoint, namespace, crName string) bool {
+	local := fmt.Sprintf("https://%s.%s.svc.cluster.local", crName, namespace)
+	if endpoint == local {
+		return true
+	}
+
+	workloadName := strings.ToLower(namespace + "-" + crName)
+	if len(workloadName) > 63 {
+		hash := sha256.Sum256([]byte(workloadName))
+		suffix := hex.EncodeToString(hash[:4])
+		workloadName = strings.TrimRight(workloadName[:63-len(suffix)-1], "-") + "-" + suffix
+	}
+
+	for _, infraNamespace := range []string{"redhat-ai-gateway-infra", "odh-ai-gateway-infra"} {
+		if endpoint == fmt.Sprintf("https://%s.%s.svc.cluster.local", workloadName, infraNamespace) {
+			return true
+		}
+	}
+	return false
 }
 
 func (kc *TokenKubernetesClient) BearerToken() (string, error) {
@@ -780,6 +823,101 @@ func (kc *TokenKubernetesClient) GetDashboardConfigMap(ctx context.Context, name
 		return nil, fmt.Errorf("failed to get dashboard ConfigMap %s/%s: %w", namespace, name, err)
 	}
 	return configMap, nil
+}
+
+// callerScopedClient returns a controller-runtime client that reads through the
+// caller's own token, keeping trust decisions independent of the dashboard service
+// account's RBAC and limited to resources the caller is authorized to see. When the
+// identity token is exactly the token kc.Client was already constructed with (the
+// per-request token-auth factory), that client is reused instead of constructing an
+// equivalent one for every lookup. It falls back to the client's own credentials
+// for local development when no identity is available.
+func (kc *TokenKubernetesClient) callerScopedClient(identity *integrations.RequestIdentity) (client.Client, error) {
+	if identity == nil || identity.Token == "" {
+		return kc.Client, nil
+	}
+	// Constant-time comparison: an early-exit byte comparison could leak how
+	// much of the caller's token matches the client's own token.
+	clientToken := kc.Token.Raw()
+	if len(clientToken) == len(identity.Token) &&
+		subtle.ConstantTimeCompare([]byte(clientToken), []byte(identity.Token)) == 1 {
+		return kc.Client, nil
+	}
+	userConfig := rest.AnonymousClientConfig(kc.Config)
+	userConfig.BearerToken = identity.Token
+	userConfig.BearerTokenFile = ""
+	userClient, err := client.New(userConfig, client.Options{Scheme: kc.Client.Scheme()})
+	if err != nil {
+		kc.Logger.Error("failed to create user client", "error", err)
+		return nil, fmt.Errorf("failed to create user client: %w", err)
+	}
+	return userClient, nil
+}
+
+// GetService reads a core Service through the caller's own credentials so callers
+// can verify what a service DNS name actually backs (e.g. reject ExternalName
+// aliases pointing at another namespace). Reading with the user's token keeps the
+// trust decision independent of the dashboard service account's narrow RBAC and
+// limits lookups to Services the caller is authorized to see. It falls back to the
+// client's own credentials for local development when no identity is available.
+func (kc *TokenKubernetesClient) GetService(ctx context.Context, identity *integrations.RequestIdentity, namespace string, name string) (*corev1.Service, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	reader, err := kc.callerScopedClient(identity)
+	if err != nil {
+		return nil, err
+	}
+
+	service := &corev1.Service{}
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, service); err != nil {
+		return nil, fmt.Errorf("failed to get Service %s/%s: %w", namespace, name, err)
+	}
+	return service, nil
+}
+
+// GetServiceEndpointSlices lists the EndpointSlices backing a Service through the
+// caller's own credentials, so callers can verify which addresses the Service
+// actually routes to (e.g. reject manually managed slices pointing at Pods outside
+// the caller's namespace). It falls back to the client's own credentials for local
+// development when no identity is available.
+func (kc *TokenKubernetesClient) GetServiceEndpointSlices(ctx context.Context, identity *integrations.RequestIdentity, namespace string, serviceName string) ([]discoveryv1.EndpointSlice, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	reader, err := kc.callerScopedClient(identity)
+	if err != nil {
+		return nil, err
+	}
+
+	sliceList := &discoveryv1.EndpointSliceList{}
+	if err := reader.List(ctx, sliceList,
+		client.InNamespace(namespace),
+		client.MatchingLabels{discoveryv1.LabelServiceName: serviceName}); err != nil {
+		return nil, fmt.Errorf("failed to list EndpointSlices for Service %s/%s: %w", namespace, serviceName, err)
+	}
+	return sliceList.Items, nil
+}
+
+// ListPods reads the core Pods matching a label selector through the caller's own
+// credentials so callers can verify that endpoints' Pod references are real
+// selector-backed Pods and that their addresses belong to those Pods. It falls back
+// to the client's own credentials for local development when no identity is
+// available.
+func (kc *TokenKubernetesClient) ListPods(ctx context.Context, identity *integrations.RequestIdentity, namespace string, selector map[string]string) ([]corev1.Pod, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	reader, err := kc.callerScopedClient(identity)
+	if err != nil {
+		return nil, err
+	}
+
+	podList := &corev1.PodList{}
+	if err := reader.List(ctx, podList, client.InNamespace(namespace), client.MatchingLabels(selector)); err != nil {
+		return nil, fmt.Errorf("failed to list Pods in namespace %s: %w", namespace, err)
+	}
+	return podList.Items, nil
 }
 
 // ValidatedVectorStore pairs a VectorIOProvider with its associated RegisteredVectorStore
@@ -1528,10 +1666,7 @@ func (kc *TokenKubernetesClient) GetAAModelsFromExternalModels(ctx context.Conte
 // otherwise falls back to the BFF's own OTEL_EXPORTER_OTLP_ENDPOINT env var.
 func (kc *TokenKubernetesClient) resolveCollectorEndpoint() string {
 	if kc.otelConfigManager != nil && kc.otelConfigManager.collectorNamespace != "" {
-		return fmt.Sprintf("http://%s-collector.%s.svc:4318",
-			constants.GenAICollectorName,
-			kc.otelConfigManager.collectorNamespace,
-		)
+		return clusterdiscovery.GenAICollectorEndpoint(kc.otelConfigManager.collectorNamespace)
 	}
 	return os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 }
@@ -2399,8 +2534,11 @@ func (kc *TokenKubernetesClient) generateLlamaStackConfig(ctx context.Context, n
 				return "", fmt.Errorf("cannot find external model '%s': %w", model.ModelName, err)
 			}
 			if model.ModelType == string(models.ModelTypeEmbedding) {
-				config.AddCustomEndpointProviderAndModel(extDetails.providerID, extDetails.endpointURL, i, extDetails.modelID, string(models.ModelTypeEmbedding), extDetails.providerType, extDetails.metadata, model.EmbeddingDimension, model.IsClusterLocal)
-				kc.Logger.Info("Registered embedding model (custom endpoint)", "model", extDetails.modelID, "providerID", extDetails.providerID)
+				// Proxy-routed registration: register under genai-bff-proxy so query-time
+				// embedding requests flow through the BFF's genai-proxy, which resolves the
+				// real endpoint and credentials per request.
+				config.AddProxyRoutedEmbeddingModel(extDetails.modelID, extDetails.metadata, model.EmbeddingDimension)
+				kc.Logger.Info("Registered embedding model (proxy-routed via genai-bff-proxy)", "model", extDetails.modelID)
 			} else {
 				kc.Logger.Info("Validated external model", "model", extDetails.modelID, "providerID", extDetails.providerID)
 			}
@@ -2518,9 +2656,10 @@ func (kc *TokenKubernetesClient) generateLlamaStackConfig(ctx context.Context, n
 			"providerID", constants.PassthroughProviderID, "baseURL", passthroughURL)
 	} else {
 		// Without GatewayDomain the remote::passthrough provider cannot be registered.
-		// Namespace and custom-endpoint embedding models use static providers; MaaS
-		// embedding models are validation-only. Transcription models are not registered
-		// in Llama Stack. All other supported model sources require passthrough routing.
+		// Namespace embedding models use static in-cluster vLLM providers; MaaS embedding
+		// models are validation-only. Transcription models are not registered in Llama
+		// Stack. All other supported models — custom-endpoint models included — require
+		// passthrough routing.
 		for _, m := range installModels {
 			if !requiresPassthroughProvider(m) {
 				continue
@@ -2562,14 +2701,18 @@ func (kc *TokenKubernetesClient) generateLlamaStackConfig(ctx context.Context, n
 }
 
 // requiresPassthroughProvider reports whether a supported model requires
-// remote::passthrough for inference routing. Namespace and custom-endpoint
-// embedding models use static providers, MaaS embedding models are validation-only,
-// and transcription models are not registered in Llama Stack.
+// remote::passthrough for inference routing. Namespace embedding models use
+// static in-cluster vLLM providers, MaaS embedding models are validation-only,
+// and transcription models are not registered in Llama Stack. Custom-endpoint
+// models — embedding included — route through the genai-bff-proxy passthrough
+// provider.
 func requiresPassthroughProvider(model models.InstallModel) bool {
 	switch model.ModelSourceType {
-	case models.ModelSourceTypeNamespace, models.ModelSourceTypeMaaS, models.ModelSourceTypeCustomEndpoint:
+	case models.ModelSourceTypeNamespace, models.ModelSourceTypeMaaS:
 		return model.ModelType != string(models.ModelTypeEmbedding) &&
 			model.ModelType != string(models.ModelTypeTranscription)
+	case models.ModelSourceTypeCustomEndpoint:
+		return model.ModelType != string(models.ModelTypeTranscription)
 	default:
 		return false
 	}
@@ -2686,18 +2829,31 @@ func (kc *TokenKubernetesClient) validateExternalModelsConfig(config *models.Ext
 
 // getExternalModelDetails retrieves external model details from a pre-fetched ExternalModelsConfig.
 func (kc *TokenKubernetesClient) getExternalModelDetails(config *models.ExternalModelsConfig, modelID string) (externalModelDetailsResult, error) {
-	// Find the model by model_id
-	var foundModel *models.RegisteredModel
+	// Find the model by model_id. More than one match across providers is
+	// ambiguous: proxy-routed registrations keep only the native model ID, so
+	// query-time resolution (ResolveCustomEndpointModelProvider) cannot tell the
+	// providers apart and the request fails. Reject at install time with a clear
+	// error rather than installing a config whose retrieval silently fails.
+	var matches []*models.RegisteredModel
 	for i := range config.RegisteredResources.Models {
 		if config.RegisteredResources.Models[i].ModelID == modelID {
-			foundModel = &config.RegisteredResources.Models[i]
-			break
+			matches = append(matches, &config.RegisteredResources.Models[i])
 		}
 	}
 
-	if foundModel == nil {
+	if len(matches) == 0 {
 		return externalModelDetailsResult{}, fmt.Errorf("external model with model_id '%s' not found in ConfigMap", modelID)
 	}
+	if len(matches) > 1 {
+		providerIDs := make([]string, 0, len(matches))
+		for _, m := range matches {
+			providerIDs = append(providerIDs, m.ProviderID)
+		}
+		return externalModelDetailsResult{}, fmt.Errorf(
+			"external model '%s' is registered under %d providers (%s); model IDs must be unique across custom-endpoint providers — remove the duplicate registration or rename one of the models",
+			modelID, len(matches), strings.Join(providerIDs, ", "))
+	}
+	foundModel := matches[0]
 
 	// Find the provider for this model
 	var foundProvider *models.InferenceProvider
@@ -2737,6 +2893,11 @@ func (kc *TokenKubernetesClient) getExternalModelDetails(config *models.External
 
 // getModelDetailsFromServingRuntime queries the serving runtime and inference service
 // to get detailed model configuration information
+// ErrServingModelNotFound indicates that no InferenceService or LLMInferenceService
+// matches a model reference. It is distinct from lookup failures (RBAC, timeout,
+// resource not ready), which must not be mistaken for absence.
+var ErrServingModelNotFound = errors.New("serving model not found")
+
 func (kc *TokenKubernetesClient) getModelDetailsFromServingRuntime(ctx context.Context, namespace string, modelID string) (modelDetailsResult, error) {
 	// First try to find InferenceService by name
 	targetISVC, err := kc.findInferenceServiceByModelName(ctx, namespace, modelID)
@@ -2747,6 +2908,11 @@ func (kc *TokenKubernetesClient) getModelDetailsFromServingRuntime(ctx context.C
 		targetLLMSVC, llmErr := kc.findLLMInferenceServiceByModelName(ctx, namespace, modelID)
 		if llmErr != nil {
 			kc.Logger.Error("failed to find both InferenceService and LLMInferenceService for model", "modelID", modelID, "inferenceServiceError", err, "llmInferenceServiceError", llmErr)
+			if errors.Is(err, ErrServingModelNotFound) && errors.Is(llmErr, ErrServingModelNotFound) {
+				// Neither resource exists — a distinguishable not-found for callers that
+				// need to tell absence apart from lookup failures.
+				return modelDetailsResult{}, fmt.Errorf("%w: no InferenceService or LLMInferenceService for model '%s' in namespace %s", ErrServingModelNotFound, modelID, namespace)
+			}
 			return modelDetailsResult{}, fmt.Errorf("neither InferenceService nor LLMInferenceService for model '%s' found: InferenceService error: %w, LLMInferenceService error: %w", modelID, err, llmErr)
 		}
 
@@ -2935,7 +3101,7 @@ func (kc *TokenKubernetesClient) findInferenceServiceByModelName(ctx context.Con
 		}
 	}
 
-	return nil, fmt.Errorf("InferenceService with model name '%s' not found in namespace %s", modelName, namespace)
+	return nil, fmt.Errorf("%w: InferenceService with name '%s' not found in namespace %s", ErrServingModelNotFound, modelName, namespace)
 }
 
 // findLLMInferenceServiceByModelName finds an LLMInferenceService by its model name
@@ -2956,7 +3122,7 @@ func (kc *TokenKubernetesClient) findLLMInferenceServiceByModelName(ctx context.
 		}
 	}
 
-	return nil, fmt.Errorf("LLMInferenceService with model name '%s' not found in namespace %s", modelName, namespace)
+	return nil, fmt.Errorf("%w: LLMInferenceService with name '%s' not found in namespace %s", ErrServingModelNotFound, modelName, namespace)
 }
 
 // Address name types from the KServe LLMInferenceService status contract.
@@ -3139,6 +3305,45 @@ func (kc *TokenKubernetesClient) GetInferenceServiceURL(ctx context.Context, _ *
 	return details.endpointURL, nil
 }
 
+// GetServingModelDetails resolves a model reference to the internal endpoint URL of the
+// InferenceService or LLMInferenceService serving it, along with the model ID the server
+// accepts in requests (the served model name). The reference may match the resource name
+// or, for LLMInferenceServices, the served model name (spec.model.name) — vector stores
+// reference the served name, which can differ from the resource name.
+func (kc *TokenKubernetesClient) GetServingModelDetails(ctx context.Context, namespace, modelRef string) (string, string, error) {
+	details, err := kc.getModelDetailsFromServingRuntime(ctx, namespace, modelRef)
+	if err == nil {
+		return details.endpointURL, details.modelID, nil
+	}
+	if !errors.Is(err, ErrServingModelNotFound) {
+		// Real lookup failure (RBAC, timeout, not-ready): propagate so callers cannot
+		// mistake it for absence.
+		return "", "", err
+	}
+	// No resource named modelRef — the reference may be the served model name of an
+	// LLMInferenceService whose resource name differs; match those before giving up.
+	var llmSvcList kservev1alpha1.LLMInferenceServiceList
+	if listErr := kc.Client.List(ctx, &llmSvcList, client.InNamespace(namespace)); listErr != nil {
+		kc.Logger.Debug("GetServingModelDetails: unable to list LLMInferenceServices",
+			"namespace", namespace, "error", listErr)
+		return "", "", fmt.Errorf("failed to list LLMInferenceServices in namespace %s: %w", namespace, listErr)
+	}
+	for i := range llmSvcList.Items {
+		llmSvc := &llmSvcList.Items[i]
+		if llmSvc.Spec.Model.Name == nil || strings.TrimSpace(*llmSvc.Spec.Model.Name) != modelRef {
+			continue
+		}
+		endpointURL, extractErr := kc.extractEndpointFromLLMInferenceService(ctx, llmSvc)
+		if extractErr != nil {
+			return "", "", extractErr
+		}
+		kc.Logger.Debug("GetServingModelDetails: matched LLMInferenceService by served model name",
+			"modelRef", modelRef, "serviceName", llmSvc.Name, "endpoint", endpointURL)
+		return endpointURL, modelRef, nil
+	}
+	return "", "", err
+}
+
 // GetModelProviderInfo retrieves provider configuration for a model from LlamaStackConfig
 func (kc *TokenKubernetesClient) GetModelProviderInfo(ctx context.Context, identity *integrations.RequestIdentity, namespace string, modelID string) (*genaitypes.ModelProviderInfo, error) {
 	// Load OGX config from the ConfigMap referenced by the namespace OGXServer
@@ -3265,6 +3470,20 @@ func (kc *TokenKubernetesClient) CreateExternalModelSecret(ctx context.Context, 
 	return nil
 }
 
+// DuplicateModelError is returned when creating an external model whose model_id is
+// already registered under a custom-endpoint provider. CreateExternalModelHandler
+// maps it to HTTP 409 Conflict.
+type DuplicateModelError struct {
+	ModelID   string
+	Providers []string
+}
+
+func (e *DuplicateModelError) Error() string {
+	return fmt.Sprintf(
+		"model ID '%s' is already registered under provider(s) %s; model IDs must be unique across custom-endpoint providers — remove the duplicate registration or rename the model",
+		e.ModelID, strings.Join(e.Providers, ", "))
+}
+
 // CreateOrUpdateExternalModelConfigMap creates or updates the gen-ai-aa-custom-model-endpoints ConfigMap
 func (kc *TokenKubernetesClient) CreateOrUpdateExternalModelConfigMap(ctx context.Context, identity *integrations.RequestIdentity, namespace string, providerID string, secretName string, req models.ExternalModelRequest) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -3305,6 +3524,22 @@ func (kc *TokenKubernetesClient) CreateOrUpdateExternalModelConfigMap(ctx contex
 				return fmt.Errorf("failed to parse ConfigMap YAML: %w", err)
 			}
 		}
+	}
+
+	// Reject duplicate model IDs up front. Query-time proxy resolution
+	// (ResolveCustomEndpointModelProvider) and playground installation
+	// (getExternalModelDetails) both require model IDs to be unique across
+	// custom-endpoint providers; appending a duplicate would let this call
+	// succeed while producing a ConfigMap whose models fail at install or
+	// retrieval time with no hint that this registration was the cause.
+	var duplicateProviders []string
+	for _, m := range config.RegisteredResources.Models {
+		if m.ModelID == req.ModelID {
+			duplicateProviders = append(duplicateProviders, m.ProviderID)
+		}
+	}
+	if len(duplicateProviders) > 0 {
+		return &DuplicateModelError{ModelID: req.ModelID, Providers: duplicateProviders}
 	}
 
 	// Select provider type based on model type: embedding models use passthrough, inference models use openai

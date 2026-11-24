@@ -1,9 +1,79 @@
-# SMOKE TEST (side files): stock agents v0.57.1 review harness with file
-# overrides on the stock pr-review skill. No local skill, scripts or schema.
+# Dashboard overlay on the stock Fullsend review harness (agents v0.57.1).
+# The stock pr-review skill, agent definition, result schema and validation
+# loop all come from `base:`. What is ours:
+#   - reviewer personas added to, or replacing files in, the stock skill
+#     (personas/, see personas/README.md)
+#   - a host pre-script that runs the stock pre-review and then the Jira,
+#     CodeRabbit and PR-image adapters
+#   - a host post-script that renders the sticky comment and computes the
+#     verdict from the stock result plus the personas' side files
 base: https://raw.githubusercontent.com/fullsend-ai/agents/ea29de9bb8b1729b04c0597b48a5c7aae62deb71/harness/review.yaml#sha256=c31ab2ff59b288ad1b8e3755751549c00c1606649cdb239bbbe5df58ba6f3112
 
 skills:
+  # File overrides on the stock skill. They apply to the base harness's
+  # pr-review because this repo has no skills/pr-review/SKILL.md. `null`
+  # removes a stock file; a path adds or replaces one. Every reviewer the
+  # roster ends up with needs a model in config.yaml `agents[].subagents`,
+  # and that list must not name a persona that is not staged.
   - skills/pr-review:
+      # PatternFly conventions are covered by style-review.
       sub-agents/user-experience.md: null
+      # Stock challenger plus PR Justifications and the audit side file.
       sub-agents/challenger.md: personas/challenger.md
-      sub-agents/odh-sidecar-probe.md: personas/odh-sidecar-probe.md
+      sub-agents/rating.md: personas/rating.md
+      sub-agents/style-review.md: personas/style-review.md
+      sub-agents/rbac-review.md: personas/rbac-review.md
+      sub-agents/product-ask-review.md: personas/product-ask-review.md
+      sub-agents/test-impact-review.md: personas/test-impact-review.md
+      sub-agents/pr-description-review.md: personas/pr-description-review.md
+
+host_files:
+  # Trusted Jira snapshot for product-ask-review, written by the host
+  # pre-script. Absent when the PR links no issue or the fetch failed.
+  - src: .run/jira.json
+    dest: /sandbox/workspace/odh-review/jira.json
+    optional: true
+  # Images captured from the PR body by the host pre-script, and the manifest
+  # that lets a reviewer report them as unavailable when the tarball is
+  # missing. test-impact-review reads these.
+  - src: .run/pr-images.tar.gz
+    dest: /sandbox/workspace/odh-review/pr-images.tar.gz
+    optional: true
+  - src: .run/pr-images.json
+    dest: /sandbox/workspace/odh-review/pr-images.json
+    optional: true
+
+env:
+  # REVIEW_RISK_ASSESSMENT_ENABLED is off: risk and confidence come from the
+  # rating persona and .fullsend/rating-policy.json. The base sets it under
+  # forge.github.env, so it is repeated there below.
+  #
+  # REVIEW_GIT_FETCH_DEPTH "0" unshallows target-repo: the stock correctness
+  # reviewer runs `git log` on modified test files.
+  #
+  # The adapter credentials come from the FULLSEND_GITHUB_RUNNER_SECRETS
+  # repository secret (ADR 0136), one JSON object holding these four names.
+  # pre-review.sh unsets them before it starts any child and passes each
+  # adapter only the names its dimensions.json row declares. They must stay
+  # out of env.sandbox and host_files.
+  runner:
+    REVIEW_RISK_ASSESSMENT_ENABLED: "false"
+    REVIEW_GIT_FETCH_DEPTH: "0"
+    CODERABBIT_API_KEY: "${CODERABBIT_API_KEY}"
+    JIRA_URL: "${JIRA_URL}"
+    JIRA_USERNAME: "${JIRA_USERNAME}"
+    JIRA_API_TOKEN: "${JIRA_API_TOKEN}"
+    JIRA_BASE_URL: "https://redhat.atlassian.net"
+  sandbox:
+    REVIEW_RISK_ASSESSMENT_ENABLED: "false"
+
+pre_script: scripts/pre-review.sh
+post_script: scripts/post-review.sh
+
+forge:
+  github:
+    env:
+      runner:
+        REVIEW_RISK_ASSESSMENT_ENABLED: "false"
+      sandbox:
+        REVIEW_RISK_ASSESSMENT_ENABLED: "false"

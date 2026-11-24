@@ -44,6 +44,38 @@
 | Model Catalog service         | Cluster / dev port-forward | Catalog sources, models, settings endpoints.                                   |
 | `kubeflow/model-registry`     | Upstream                   | Source of `upstream/`; contribute fixes upstream then re-vendor.               |
 
+## Model Catalog Insights Tabs
+
+Model-details pages in the model catalog expose two artifact-driven tabs, delivered in this
+package (`src/modelCatalog/`) so they follow the model catalog's own gating rather than the Eval
+Hub module's:
+
+- **Quality Insights** — evaluation-metrics artifacts per benchmark (evaluation, category,
+  benchmark, score). Calls the BFF `artifacts` catch-all with fixed evaluation-metrics filters.
+- **Safety and Security Insights** — security-metrics artifacts (e.g. toxicity, jailbreak
+  resistance). Calls the BFF `security_artifacts` route, which applies the security-metrics
+  filter server-side.
+
+Both tabs are registered in `extensions.ts` with `shouldShow` predicates that probe the same BFF
+routes (`pageSize=1`): a tab is hidden when the user cannot access the route (403/404) or when no
+matching artifacts exist, so visibility is data-dependent — a catalog model without artifacts
+simply does not show the tabs. Predicates stay pending while the catalog instances namespace is
+unresolved, and the tab content stays in loading state until the namespace resolves.
+
+## Tracking
+
+- Insights tabs and the interaction-provider extension use the host callbacks from
+  `@odh-dashboard/analytics/react`. Federated features inherit the host provider; do not
+  wrap them in a no-op provider or initialize Segment here.
+- Preserve event names, properties, counts, once-only view events, and the 500 ms filter
+  debounce. Simple events with omitted properties still forward `{}`. Page operations
+  remain separate from custom events; exposing the page callback does not add router tracking.
+- Intentional adapter difference: migrated miscellaneous events no longer emit the legacy
+  last-resort warning in development. Shared development logging and delivery suppression
+  remain host-owned.
+- The upstream standalone bootstrap uses an empty plugin store and does not render these
+  dashboard extensions, so it needs no analytics provider or new dependency for this migration.
+
 ## Known Issues / Gotchas
 
 - **Upstream vendoring**: Do not land kubeflow-bound fixes only in `upstream/` — contribute to [kubeflow/model-registry](https://github.com/kubeflow/model-registry), then run `pnpm run update-subtree`. Local-only patches drift from upstream and complicate sync.

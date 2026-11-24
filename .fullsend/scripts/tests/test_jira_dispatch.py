@@ -220,9 +220,18 @@ class SelectRecordTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 dispatch.select_record([bad], 0)
 
+    def test_rhai_and_rhoaieng_issues_are_accepted(self):
+        for key in ("RHAI-1", "RHOAIENG-1"):
+            with self.subTest(key=key):
+                selected = dispatch.select_record([record(key)], 0)
+                self.assertEqual(selected, {"include": [record(key)]})
+
     def test_other_project_or_tenant_is_rejected(self):
         for bad in (
-            record("RHAI-1"),
+            record("RHAISTRAT-1"),
+            record("AIPCC-1"),
+            record("RHAI-"),
+            record("RHAI-RHOAIENG-1"),
             record("RHOAIENG-1", url="https://other.atlassian.net/browse/RHOAIENG-1"),
             record("RHOAIENG-1", url="https://redhat.atlassian.net/browse/RHOAIENG-2"),
         ):
@@ -251,14 +260,26 @@ class KeysTests(unittest.TestCase):
 
 
 class ApiTests(unittest.TestCase):
-    def test_failed_gh_call_logs_its_error_and_raises(self):
-        err = subprocess.CalledProcessError(1, "gh", stderr="HTTP 404: Not Found\n")
+    def _logged_failure(self, stderr_text):
+        err = subprocess.CalledProcessError(1, "gh", stderr=stderr_text)
         with mock.patch.object(dispatch.subprocess, "run", side_effect=err), mock.patch(
             "sys.stderr"
         ) as stderr, self.assertRaises(subprocess.CalledProcessError):
             dispatch.api("repos/x/y/actions/runs/1")
-        logged = "".join(call.args[0] for call in stderr.write.call_args_list)
-        self.assertIn("gh api repos/x/y/actions/runs/1 failed: HTTP 404: Not Found", logged)
+        return "".join(call.args[0] for call in stderr.write.call_args_list)
+
+    def test_failed_gh_call_logs_status_only_and_raises(self):
+        logged = self._logged_failure(
+            'gh: Not Found (HTTP 404)\n{"message":"Not Found","secret_hint":"s3cr3t-value"}\n'
+        )
+        self.assertIn("gh api repos/x/y/actions/runs/1 failed (exit 1, HTTP 404)", logged)
+        self.assertNotIn("s3cr3t-value", logged)
+        self.assertNotIn("Not Found", logged)
+
+    def test_failed_gh_call_without_status_says_unknown(self):
+        logged = self._logged_failure("connection reset by peer token=abc123\n")
+        self.assertIn("(exit 1, HTTP unknown)", logged)
+        self.assertNotIn("abc123", logged)
 
 
 class WorkflowContractTests(unittest.TestCase):
@@ -311,6 +332,7 @@ class WorkflowContractTests(unittest.TestCase):
         jql = workflow("fullsend-poll-jira.yaml")["jobs"]["poll"]["steps"][2]["env"]["JQL"]
         self.assertIn('(labels = "ready-to-code" OR comment ~ "\\"fs-code\\"")', jql)
         self.assertIn("(labels is EMPTY OR labels not in (", jql)
+        self.assertIn("project in (RHAI, RHOAIENG)", jql)
         for label in ("opt-in-autofix", "jira-autofix", "jira-autofix-pending", "jira-autofix-review"):
             self.assertIn(f'"{label}"', jql)
 

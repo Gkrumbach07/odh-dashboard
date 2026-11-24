@@ -1,11 +1,10 @@
-import { renderHook, act, waitFor } from '@testing-library/react';
-import { fireMiscTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
+import { act, waitFor } from '@testing-library/react';
+import { setupTrackingTest } from '~/__tests__/unit/testUtils/setupTrackingTest';
+
 import { EVAL_HUB_EVENTS } from '~/app/tracking/evalhubTrackingConstants';
 import { useConnectionValidation } from '~/app/hooks/useConnectionValidation';
 
-jest.mock('@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils', () => ({
-  fireMiscTrackingEvent: jest.fn(),
-}));
+const { mockTrackEvent, renderHook } = setupTrackingTest();
 
 const mockVerifyConnection = jest.fn();
 jest.mock('~/app/api/k8s', () => ({
@@ -13,11 +12,23 @@ jest.mock('~/app/api/k8s', () => ({
 }));
 
 jest.mock('~/app/utils/validationUtils', () => ({
+  RECOGNIZED_CONNECTION_ERROR_CODES: new Set([
+    'CONNECTION_FAILED',
+    'TIMEOUT',
+    'UNAUTHORIZED',
+    'FORBIDDEN',
+  ]),
   getUserFriendlyConnectionError: (code: string | undefined, mode: string) =>
     code ? `Error ${code} for ${mode}` : `Unknown error for ${mode}`,
 }));
 
-const mockFireMisc = jest.mocked(fireMiscTrackingEvent);
+const expectTracked = (eventName: string, properties: unknown): void => {
+  expect(mockTrackEvent).toHaveBeenCalledWith(
+    eventName,
+    expect.objectContaining(properties),
+    expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
+  );
+};
 
 const defaultParams = {
   namespace: 'test-ns',
@@ -44,7 +55,7 @@ describe('useConnectionValidation - Tracking Events', () => {
       });
 
       await waitFor(() => {
-        expect(mockFireMisc).toHaveBeenCalledWith(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
+        expectTracked(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
           outcome: 'success',
           endpointType: 'model',
         });
@@ -67,7 +78,7 @@ describe('useConnectionValidation - Tracking Events', () => {
       });
 
       await waitFor(() => {
-        expect(mockFireMisc).toHaveBeenCalledWith(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
+        expectTracked(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
           outcome: 'success',
           endpointType: 'agent',
         });
@@ -76,7 +87,27 @@ describe('useConnectionValidation - Tracking Events', () => {
   });
 
   describe('Evaluations External Connection Tested - Error', () => {
-    it('should fire error tracking event when connection fails', async () => {
+    it('should fire error tracking event with recognized error code', async () => {
+      mockVerifyConnection.mockReturnValue(() =>
+        Promise.reject({ error: { code: 'CONNECTION_FAILED' } }),
+      );
+
+      const { result } = renderHook(() => useConnectionValidation(defaultParams));
+
+      await act(async () => {
+        await result.current.handleVerifyConnection();
+      });
+
+      await waitFor(() => {
+        expectTracked(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
+          outcome: 'error',
+          endpointType: 'model',
+          error: 'Error CONNECTION_FAILED for model',
+        });
+      });
+    });
+
+    it('should fire error tracking event with generic message for unrecognized error code', async () => {
       mockVerifyConnection.mockReturnValue(() => Promise.reject({ error: { code: '503' } }));
 
       const { result } = renderHook(() => useConnectionValidation(defaultParams));
@@ -86,10 +117,10 @@ describe('useConnectionValidation - Tracking Events', () => {
       });
 
       await waitFor(() => {
-        expect(mockFireMisc).toHaveBeenCalledWith(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
+        expectTracked(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
           outcome: 'error',
           endpointType: 'model',
-          error: 'Error 503 for model',
+          error: 'Unknown error for model',
         });
       });
     });
@@ -104,7 +135,7 @@ describe('useConnectionValidation - Tracking Events', () => {
       });
 
       await waitFor(() => {
-        expect(mockFireMisc).toHaveBeenCalledWith(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
+        expectTracked(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, {
           outcome: 'error',
           endpointType: 'model',
           error: 'Unknown error for model',
@@ -117,7 +148,7 @@ describe('useConnectionValidation - Tracking Events', () => {
     it('should not fire tracking event on initial render', () => {
       renderHook(() => useConnectionValidation(defaultParams));
 
-      expect(mockFireMisc).not.toHaveBeenCalled();
+      expect(mockTrackEvent).not.toHaveBeenCalled();
     });
 
     it('should not fire tracking event when namespace is undefined', async () => {
@@ -129,7 +160,7 @@ describe('useConnectionValidation - Tracking Events', () => {
         await result.current.handleVerifyConnection();
       });
 
-      expect(mockFireMisc).not.toHaveBeenCalled();
+      expect(mockTrackEvent).not.toHaveBeenCalled();
     });
   });
 });

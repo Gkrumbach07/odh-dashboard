@@ -37,7 +37,7 @@ describe('Core BFF Operator Subscription Status - OpenShift Platform', () => {
       for (const client of [apiClient, restrictedClient]) {
         const result = expectSuccess(await client.get('/api/operator-subscription-status'));
         expect(result).toMatchContract(apiSchema, {
-          ref: '#/components/responses/OperatorSubscriptionStatusResponse/content/application/json/schema',
+          ref: '#/components/responses/OperatorSubscriptionStatusResponse/content/application~1json/schema',
           status: 200,
         });
         expect(result.response.data).toEqual({
@@ -57,12 +57,14 @@ describe('Core BFF Operator Subscription Status - OpenShift Platform', () => {
     expect({ status: error.status, data: error.data, headers: error.headers }).toMatchContract(
       apiSchema,
       {
-        ref: '#/components/schemas/ErrorResponse',
+        ref: '#/components/schemas/MessageErrorResponse',
         status: 404,
       },
     );
     expect(error.data).toMatchObject({
-      error: { code: 'NOT_FOUND' },
+      code: 'NOT_FOUND',
+      message: 'the requested resource could not be found',
+      error: 'the requested resource could not be found',
     });
   });
 

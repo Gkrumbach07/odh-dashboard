@@ -492,9 +492,9 @@ export const checkExternalProviderExists = (
   const retryIntervalMs = options.retryIntervalMs ?? MAAS_STATE_DEFAULT_RETRY_INTERVAL_MS;
   const name = assertValidK8sLabel(resourceName, 'ExternalProvider name');
   const ns = assertValidK8sNamespace(projectName);
-  const ocCommand = `oc get externalprovider ${quoteShellArg(name)} -n ${quoteShellArg(
-    ns,
-  )} -o json`;
+  const ocCommand = `oc get externalproviders.inference.opendatahub.io ${quoteShellArg(
+    name,
+  )} -n ${quoteShellArg(ns)} -o json`;
   let attempts = 0;
 
   const checkState = (): Cypress.Chainable<CommandLineResult> =>
@@ -672,7 +672,9 @@ export const checkExternalModelExists = (
 ): Cypress.Chainable<CommandLineResult> => {
   const name = assertValidK8sLabel(resourceName, 'ExternalModel name');
   const ns = assertValidK8sNamespace(projectName);
-  const ocCommand = `oc get externalmodel ${quoteShellArg(name)} -n ${quoteShellArg(ns)} -o json`;
+  const ocCommand = `oc get externalmodels.inference.opendatahub.io ${quoteShellArg(
+    name,
+  )} -n ${quoteShellArg(ns)} -o json`;
   const resourceLabel = `ExternalModel ${name} in namespace ${ns}`;
 
   if (options.expectDeleted === true) {
@@ -688,7 +690,7 @@ export const checkExternalModelExists = (
 
   return pollMaaSResourceState(
     resourceLabel,
-    'ExternalModel',
+    'externalmodels.inference.opendatahub.io',
     name,
     ns,
     ocCommand,
@@ -851,9 +853,9 @@ export const cleanupExternalModel = (
 ): Cypress.Chainable<CommandLineResult> => {
   const name = assertValidK8sLabel(resourceName, 'ExternalModel name');
   const ns = assertValidK8sNamespace(projectName);
-  const ocCommand = `oc delete ExternalModel ${quoteShellArg(name)} -n ${quoteShellArg(
-    ns,
-  )} --ignore-not-found`;
+  const ocCommand = `oc delete externalmodels.inference.opendatahub.io ${quoteShellArg(
+    name,
+  )} -n ${quoteShellArg(ns)} --ignore-not-found`;
   cy.log(`Executing delete ExternalModel command: ${ocCommand}`);
   return cy.exec(ocCommand, { failOnNonZeroExit: false });
 };
@@ -878,9 +880,9 @@ export const cleanupExternalProvider = (
 ): Cypress.Chainable<CommandLineResult> => {
   const name = assertValidK8sLabel(resourceName, 'ExternalProvider name');
   const ns = assertValidK8sNamespace(projectName);
-  const ocCommand = `oc delete ExternalProvider ${quoteShellArg(name)} -n ${quoteShellArg(
-    ns,
-  )} --ignore-not-found`;
+  const ocCommand = `oc delete externalproviders.inference.opendatahub.io ${quoteShellArg(
+    name,
+  )} -n ${quoteShellArg(ns)} --ignore-not-found`;
   cy.log(`Executing delete ExternalProvider command: ${ocCommand}`);
   return cy.exec(ocCommand, { failOnNonZeroExit: false });
 };
@@ -1238,19 +1240,11 @@ export const checkMaaSSubscriptionState = (
   )} -o json`;
 
   if (options.expectDeleted === true) {
-    cy.log(`Checking MaaSSubscription is absent: ${name} in namespace ${ns}`);
-    return cy.exec(ocCommand, { failOnNonZeroExit: false }).then((result) => {
-      if (result.exitCode !== 0 && ocGetIndicatesResourceNotFound(result)) {
-        cy.log(`✅ MaaSSubscription ${name} is absent from namespace ${ns}`);
-        return cy.wrap(result);
-      }
-      if (result.exitCode === 0) {
-        throw new Error(`MaaSSubscription ${name} still exists in namespace ${ns}`);
-      }
-      throw new Error(
-        `Unexpected oc error while verifying MaaSSubscription deletion: ${result.stderr}`,
-      );
-    });
+    return assertMaaSResourceDeleted(
+      `MaaSSubscription ${name} in namespace ${ns}`,
+      ocCommand,
+      options,
+    );
   }
   cy.log(`Checking MaaSSubscription exists: ${name} in namespace ${ns}`);
   const resourceLabel = `MaaSSubscription ${name} in namespace ${ns}`;

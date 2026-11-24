@@ -1,13 +1,16 @@
 import yaml from 'js-yaml';
 import { deleteOpenShiftProject } from '../../../utils/oc_commands/project';
-import { deleteS3TestFiles } from '../../../utils/oc_commands/s3Cleanup';
+import { deleteAutoXS3TestFiles } from '../../../utils/oc_commands/autoXS3Cleanup';
 import { provisionProjectForAutoX } from '../../../utils/autoXPipelines';
 import { retryableBefore } from '../../../utils/retryableHooks';
 import { generateTestUUID } from '../../../utils/uuidGenerator';
 import type { AutoragTestData } from '../../../types';
 import { autoragConfigurePage } from '../../../pages/autorag/configurePage';
 import { autoragResultsPage } from '../../../pages/autorag/resultsPage';
-import { cleanupAutoragInfrastructure } from '../../../utils/oc_commands/autoragInfra';
+import {
+  cleanupAutoragInfrastructure,
+  provisionAutoragPgvector,
+} from '../../../utils/oc_commands/autoragInfra';
 import {
   configureAutoragRun,
   checkAutoragMaaSReadiness,
@@ -47,10 +50,11 @@ describe('AutoRAG Experiments List and Run Management E2E', () => {
         projectName = `${testData.projectNamePrefix}-${uuid}`;
         cleanupReady = true;
       })
-      .then(() => checkAutoragMaaSReadiness())
+      .then(() => checkAutoragMaaSReadiness(testData))
       .then((fixture) => {
         maasFixture = fixture;
         provisionProjectForAutoX(projectName, testData.dspaSecretName, testData.awsBucket);
+        provisionAutoragPgvector(projectName);
       }),
   );
 
@@ -65,13 +69,15 @@ describe('AutoRAG Experiments List and Run Management E2E', () => {
       testData.vectorDbSecretName,
       connectionOwnership,
     );
-    deleteS3TestFiles(projectName, testData.awsBucket, `*${uuid}*`);
+    deleteAutoXS3TestFiles(projectName, testData.awsBucket, `*${uuid}*`);
     deleteOpenShiftProject(projectName, { wait: false, ignoreNotFound: true });
   });
 
   it(
     'Can submit a run, verify it in experiments list, and stop it',
-    { tags: ['@AutoRAG', '@AutoRAGRegression', '@Featureflagged'] },
+    {
+      tags: ['@AutoRAG', '@AutoRAGCI', '@AutoRAGRegression', '@Featureflagged'],
+    },
     () => {
       configureAutoragRun(testData, projectName, uuid, getMaaSFixture(), {
         createConnections: true,
@@ -90,9 +96,14 @@ describe('AutoRAG Experiments List and Run Management E2E', () => {
         getMaaSFixture(),
       ).then((runId) => {
         cy.step('Terminate the submitted run and confirm');
+        cy.intercept('POST', '**/pipeline-runs/*/terminate*').as('autoragTerminateRun');
         autoragResultsPage.findStopRunButton().click();
         autoragResultsPage.findStopRunModal().should('be.visible');
         autoragResultsPage.findConfirmStopRunButton().click();
+        cy.wait('@autoragTerminateRun').then(({ request, response }) => {
+          expect(request.url).to.include(`/pipeline-runs/${encodeURIComponent(runId)}/terminate`);
+          expect(response?.statusCode).to.equal(200);
+        });
 
         cy.step('Verify the submitted run reaches a terminal state');
         verifyAutoragRunTerminated(projectName, runId);

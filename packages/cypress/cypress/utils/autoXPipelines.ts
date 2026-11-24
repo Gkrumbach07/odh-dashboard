@@ -1,8 +1,10 @@
+import { assertAutoXDataConnectionEndpoint, resolveAutoXS3Endpoint } from './autoXS3';
 import { createDataConnection } from './oc_commands/dataConnection';
 import { createDSPASecret, createDSPA } from './oc_commands/dspa';
-import { AWS_BUCKETS } from './s3Buckets';
+import { AWS_BUCKETS, parseS3Endpoint } from './s3Buckets';
 import { createCleanProject } from './projectChecker';
 import type {
+  CommandLineResult,
   DataConnectionReplacements,
   DspaReplacements,
   DspaSecretReplacements,
@@ -14,23 +16,10 @@ type AutoXDspaReplacements = DspaReplacements & {
 };
 
 /**
- * Parse an S3 endpoint URL into host and scheme components.
- * e.g. "https://s3.us-west.cloud-object-storage.appdomain.cloud/" → { host: "s3.us-west...", scheme: "https" }
- */
-const parseS3Endpoint = (endpoint: string): { host: string; scheme: string } => {
-  try {
-    const url = new URL(endpoint);
-    return { host: url.host, scheme: url.protocol.replace(':', '') };
-  } catch {
-    return { host: endpoint.replace(/\/+$/, ''), scheme: 'https' };
-  }
-};
-
-/**
  * Provision a Project for AutoML/AutoRAG pipelines.
  *
  * Uses a custom DSPA template (autox_dspa.yaml) that:
- * - Derives host and scheme from the bucket ENDPOINT in test-variables.yml
+ * - Derives host and scheme from the resolved AutoX S3 endpoint
  * - Sets podToPodTLS: true
  *
  * @param projectName Project Name
@@ -43,11 +32,11 @@ export const provisionProjectForAutoX = (
   bucketKey: 'BUCKET_2' | 'BUCKET_3',
 ): void => {
   const bucketConfig = AWS_BUCKETS[bucketKey];
-  // Use DSPA_S3_ENDPOINT env var for in-cluster DSPA connectivity (disconnected clusters),
+  // Use DSPA_S3_ENDPOINT for in-cluster AutoX connectivity (disconnected clusters),
   // falling back to the external ENDPOINT (connected clusters / CI).
   // Must use full FQDN: CYPRESS_DSPA_S3_ENDPOINT=http://minio.ns.svc.cluster.local:9000
-  const dspaEndpoint = Cypress.env('DSPA_S3_ENDPOINT') as string | undefined;
-  const { host, scheme } = parseS3Endpoint(dspaEndpoint ?? bucketConfig.ENDPOINT);
+  const s3Endpoint = resolveAutoXS3Endpoint(bucketConfig.ENDPOINT);
+  const { host, scheme } = parseS3Endpoint(s3Endpoint);
 
   createCleanProject(projectName);
 
@@ -56,10 +45,12 @@ export const provisionProjectForAutoX = (
     AWS_ACCESS_KEY_ID: Buffer.from(AWS_BUCKETS.AWS_ACCESS_KEY_ID).toString('base64'),
     AWS_DEFAULT_REGION: Buffer.from(bucketConfig.REGION).toString('base64'),
     AWS_S3_BUCKET: Buffer.from(bucketConfig.NAME).toString('base64'),
-    AWS_S3_ENDPOINT: Buffer.from(bucketConfig.ENDPOINT).toString('base64'),
+    AWS_S3_ENDPOINT: Buffer.from(s3Endpoint).toString('base64'),
     AWS_SECRET_ACCESS_KEY: Buffer.from(AWS_BUCKETS.AWS_SECRET_ACCESS_KEY).toString('base64'),
   };
-  createDataConnection(dataConnectionReplacements);
+  createDataConnection(dataConnectionReplacements).then(() =>
+    assertAutoXDataConnectionEndpoint(projectName, s3Endpoint),
+  );
 
   const dspaSecretReplacements: DspaSecretReplacements = {
     DSPA_SECRET_NAME: dspaSecretName,
@@ -83,6 +74,107 @@ export const provisionProjectForAutoX = (
   createDSPA(dspaReplacements, 'resources/yaml/autox_dspa.yaml');
 };
 
+export const AUTORAG_MANAGED_PIPELINE_NAMES = [
+  'documents-rag-optimization-pipeline',
+  'documents-indexing-pipeline',
+] as const;
+
+type PipelineSummary = {
+  pipeline_id?: string;
+  display_name?: string;
+};
+
+type PipelineListResponse = {
+  pipelines?: PipelineSummary[];
+};
+
+type PipelineVersionSummary = {
+  pipeline_version_id?: string;
+};
+
+type PipelineVersionListResponse = {
+  pipeline_versions?: PipelineVersionSummary[];
+};
+
+const MANAGED_PIPELINE_CURL_CONNECT_TIMEOUT_SECONDS = 5;
+const MANAGED_PIPELINE_CURL_MAX_TIME_SECONDS = 25;
+
+const shellQuote = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`;
+
+const listManagedPipelines = (projectName: string): Cypress.Chainable<PipelineSummary[]> => {
+  const pipelineListCmd =
+    `oc exec deploy/ds-pipeline-dspa -n ${shellQuote(projectName)} -c ds-pipeline-api-server -- ` +
+    `curl --connect-timeout ${MANAGED_PIPELINE_CURL_CONNECT_TIMEOUT_SECONDS} ` +
+    `--max-time ${MANAGED_PIPELINE_CURL_MAX_TIME_SECONDS} -ksSf ` +
+    `'https://localhost:8888/apis/v2beta1/pipelines?page_size=100' 2>/dev/null`;
+  return cy
+    .exec(pipelineListCmd, { failOnNonZeroExit: false, timeout: 30000, log: false })
+    .then((result: CommandLineResult): PipelineSummary[] => {
+      if (result.exitCode !== 0) {
+        return [];
+      }
+
+      try {
+        return (JSON.parse(result.stdout) as PipelineListResponse).pipelines ?? [];
+      } catch {
+        return [];
+      }
+    });
+};
+
+const hasUsablePipelineVersions = (
+  projectName: string,
+  pipelines: PipelineSummary[],
+): Cypress.Chainable<boolean> => {
+  const checkPipeline = (index: number): Cypress.Chainable<boolean> => {
+    if (index >= pipelines.length) {
+      return cy.wrap(true);
+    }
+
+    const pipelineId = pipelines[index].pipeline_id;
+    if (!pipelineId) {
+      return cy.wrap(false);
+    }
+
+    if (!/^[A-Za-z0-9._-]+$/.test(pipelineId)) {
+      return cy.wrap(false);
+    }
+
+    const versionsCmd =
+      `oc exec deploy/ds-pipeline-dspa -n ${shellQuote(
+        projectName,
+      )} -c ds-pipeline-api-server -- ` +
+      `curl --connect-timeout ${MANAGED_PIPELINE_CURL_CONNECT_TIMEOUT_SECONDS} ` +
+      `--max-time ${MANAGED_PIPELINE_CURL_MAX_TIME_SECONDS} -ksSf ${shellQuote(
+        `https://localhost:8888/apis/v2beta1/pipelines/${encodeURIComponent(
+          pipelineId,
+        )}/versions?page_size=100`,
+      )} 2>/dev/null`;
+
+    return cy
+      .exec(versionsCmd, { failOnNonZeroExit: false, timeout: 30000, log: false })
+      .then((result: CommandLineResult) => {
+        if (result.exitCode !== 0) {
+          return false;
+        }
+
+        try {
+          const response = JSON.parse(result.stdout) as PipelineVersionListResponse;
+          const hasVersion = (response.pipeline_versions ?? []).some(
+            (version) =>
+              typeof version.pipeline_version_id === 'string' && !!version.pipeline_version_id,
+          );
+          return hasVersion;
+        } catch {
+          return false;
+        }
+      })
+      .then((ready) => (ready ? checkPipeline(index + 1) : cy.wrap(false)));
+  };
+
+  return checkPipeline(0);
+};
+
 /**
  * Wait for operator-provisioned managed pipelines to appear in KFP.
  *
@@ -91,53 +183,88 @@ export const provisionProjectForAutoX = (
  * so if the first BFF request lands before pipelines exist, subsequent requests
  * (including run submission) will get a cached 404 for up to 5 minutes.
  *
- * This function polls the KFP API from inside the API server pod every 15s
- * (up to 5 min) to confirm pipelines exist before any BFF request is made.
+ * When expected names are supplied, this function also verifies that every
+ * expected pipeline has at least one usable version before returning.
  */
-export const waitForManagedPipelines = (projectName: string): void => {
-  const pipelineListCmd = `oc exec deploy/ds-pipeline-dspa -n ${projectName} -c ds-pipeline-api-server -- curl -ksSf https://localhost:8888/apis/v2beta1/pipelines 2>/dev/null`;
+export const waitForManagedPipelines = (
+  projectName: string,
+  expectedNames: readonly string[] = [],
+): void => {
   const maxAttempts = 20;
   const intervalMs = 15000;
 
-  cy.log('Waiting for managed pipelines to be provisioned by the operator...');
-
-  const poll = (attempt: number): void => {
-    if (attempt >= maxAttempts) {
-      throw new Error(
-        `Managed pipelines not found after ${maxAttempts} attempts in ${projectName}`,
-      );
+  cy.log('Waiting for the DSPA pipeline server rollout to stabilize...');
+  cy.exec(
+    `oc rollout status deploy/ds-pipeline-dspa -n ${shellQuote(projectName)} --timeout=120s`,
+    {
+      failOnNonZeroExit: false,
+      timeout: 130000,
+    },
+  ).then((rolloutResult: CommandLineResult) => {
+    if (rolloutResult.exitCode !== 0) {
+      throw new Error(`DSPA pipeline server did not stabilize in ${projectName}.`);
     }
 
-    cy.exec(pipelineListCmd, { failOnNonZeroExit: false, timeout: 30000 }).then((result) => {
-      if (result.exitCode === 0) {
-        try {
-          const parsed = JSON.parse(result.stdout) as {
-            pipelines?: unknown[];
-            totalSize?: number;
-          };
-          if (parsed.pipelines && parsed.pipelines.length > 0) {
-            cy.log(
-              `Managed pipelines found (${parsed.pipelines.length}) on attempt ${attempt + 1}`,
-            );
-            return;
-          }
-        } catch {
-          // JSON parse failed — pod may be restarting
-        }
+    cy.log('Waiting for managed pipelines to be provisioned by the operator...');
+    const poll = (attempt: number): void => {
+      if (attempt >= maxAttempts) {
+        throw new Error(
+          `Managed pipelines ${expectedNames.length ? expectedNames.join(', ') : ''} ` +
+            `were not ready after ${maxAttempts} attempts in ${projectName}.`,
+        );
       }
 
-      cy.log(`Attempt ${attempt + 1}/${maxAttempts}: pipelines not yet available, retrying...`);
-      // eslint-disable-next-line cypress/no-unnecessary-waiting
-      cy.wait(intervalMs);
-      poll(attempt + 1);
-    });
-  };
+      listManagedPipelines(projectName).then((pipelines) => {
+        const requiredPipelines = expectedNames
+          .map((name) => pipelines.find((pipeline) => pipeline.display_name === name))
+          .filter((pipeline): pipeline is PipelineSummary => pipeline !== undefined);
+        const namesReady =
+          expectedNames.length === 0
+            ? pipelines.length > 0
+            : requiredPipelines.length === expectedNames.length;
 
-  poll(0);
+        if (namesReady && expectedNames.length === 0) {
+          cy.log(`Managed pipelines found (${pipelines.length}) on attempt ${attempt + 1}`);
+          return;
+        }
 
-  cy.log('Waiting for ds-pipeline rollout to stabilize...');
-  cy.exec(`oc rollout status deploy/ds-pipeline-dspa -n ${projectName} --timeout=120s`, {
-    failOnNonZeroExit: false,
-    timeout: 130000,
+        if (namesReady) {
+          hasUsablePipelineVersions(projectName, requiredPipelines).then((versionsReady) => {
+            if (versionsReady) {
+              cy.log(
+                `Managed pipelines ${expectedNames.join(
+                  ', ',
+                )} and usable versions found on attempt ${attempt + 1}`,
+              );
+              return;
+            }
+
+            cy.log(
+              `Attempt ${
+                attempt + 1
+              }/${maxAttempts}: managed pipeline versions are not ready, retrying...`,
+            );
+            // eslint-disable-next-line cypress/no-unnecessary-waiting
+            cy.wait(intervalMs).then(() => poll(attempt + 1));
+          });
+          return;
+        }
+
+        const availableNames = pipelines.map((pipeline) => pipeline.display_name).filter(Boolean);
+        cy.log(
+          `Attempt ${attempt + 1}/${maxAttempts}: managed pipelines not ready (found ${
+            availableNames.join(', ') || 'none'
+          }), retrying...`,
+        );
+        // eslint-disable-next-line cypress/no-unnecessary-waiting
+        cy.wait(intervalMs).then(() => poll(attempt + 1));
+      });
+    };
+
+    poll(0);
   });
+};
+
+export const waitForAutoragManagedPipelines = (projectName: string): void => {
+  waitForManagedPipelines(projectName, AUTORAG_MANAGED_PIPELINE_NAMES);
 };

@@ -13,12 +13,32 @@ class StartEvaluationRunPage {
     return cy.findByTestId('start-evaluation-form');
   }
 
+  findTestDataRefSourceToggle() {
+    return cy.findByTestId('start-evaluation-test-data-ref-source-toggle');
+  }
+
+  findTestDataRefOption(optionLabel: string) {
+    return cy.findByRole('option', { name: optionLabel });
+  }
+
+  findTestDataRefField(field: string) {
+    return cy.findByTestId(`start-evaluation-test-data-ref-${field}`);
+  }
+
+  findTestDataRefFieldError(field: string) {
+    return cy.findByTestId(`start-evaluation-test-data-ref-${field}-error`);
+  }
+
   findBenchmarkNameDisplay() {
     return cy.findByTestId('benchmark-name-display');
   }
 
   findRunDescription() {
     return cy.findByTestId('start-evaluation-run-description');
+  }
+
+  findRunPrerequisite() {
+    return cy.findByTestId('start-evaluation-run-prerequisite');
   }
 
   findEvaluationNameInput() {
@@ -45,14 +65,6 @@ class StartEvaluationRunPage {
     return cy.findByTestId('source-mode-toggle');
   }
 
-  findSourceModeSelect() {
-    return cy.findByTestId('source-mode-select');
-  }
-
-  findSourceModeOption(mode: 'model' | 'agent' | 'prerecorded') {
-    return cy.get(`[data-testid="source-mode-option-${mode}"]`);
-  }
-
   findModelPickerToggle() {
     return cy.findByTestId('model-picker-toggle');
   }
@@ -67,10 +79,6 @@ class StartEvaluationRunPage {
 
   findModelNameInput() {
     return cy.findByTestId('model-name-input');
-  }
-
-  findAgentNameInput() {
-    return cy.findByTestId('agent-name-input');
   }
 
   findEndpointUrlInput() {
@@ -123,6 +131,10 @@ class StartEvaluationRunPage {
 
   findHardwareProfileOption(profileName: string) {
     return cy.findByTestId(`hardware-profile-option-${profileName}`);
+  }
+
+  findHardwareProfileDefaultOption() {
+    return cy.findByTestId('hardware-profile-option-default');
   }
 
   findHardwareProfileHelperText() {

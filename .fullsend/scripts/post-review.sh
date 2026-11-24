@@ -1,35 +1,48 @@
 #!/usr/bin/env bash
-# Vendored from fullsend-ai/agents scripts/post-review.sh
-# @ bb167e241317812f30bd596878868b5134c4b002, the last revision before
-# upstream's multi-forge rewrite. The prior-findings projection, the
-# label_actions hardening, the PR file-list retry and the failed outcome for
-# action=failure are from ce2eedd097dcccf17e29f4a7cd337ec4d95d7194; the rest
-# is not synced past the first commit. Compared with 2da538b8 (v0.48.1):
-# upstream's later changes are the finding-id ledger, the risk verdict gate
-# and GitLab paths, none of which this host uses (README "Upstream sync").
+# Host post-script for the review agent: renders the sticky review comment and
+# computes the review verdict on the runner, after the sandbox is destroyed.
 #
-# Local changes from the stock script:
-#   1. Set the GitHub review action from findings (any medium+ →
-#      request-changes; risk/confidence/needs-human → comment) and rewrite
-#      the sticky comment. Floors/caps live in rating-policy.json.
-#   2. Categorize sticky ## TODO (Findings / Checks / Judgement / Nits).
-#      Do not append the stock /fs-fix "Next steps" footer.
-#   3. Link file/line references in the sticky summary and suppress inline
-#      review comments by omitting line numbers only from the CLI payload.
-#   4. Render the durable structured review: change summary, host status,
-#      Signal|Level|Assessment (risk/confidence), decisions, findings, Jira
-#      coherence, inspected evidence, signals, checks, and labels.
-#   5. Resolve human-facing Check/Producer names from dimensions.json `label`
-#      (fallback: registry id). Machine matching still uses `id`.
-#   6. Producers table columns: Producer | Type | Ran | Result (kind-aware;
-#      Type from registry output; Ran/Result/adapter status from result.producers;
-#      findings Result from producers.raised; Challenger audit from
-#      producers.challenger.removed_findings). Rows are sorted alphabetically
-#      by Type, then Producer.
-#   7. Absolutize FULLSEND_CONFIG_DIR when FULLSEND_DIR is relative — post_script
-#      CWD is runDir, so a bare ".fullsend" would miss dimensions.json
-#      (labels → ids, Type/Result → —).
-
+# The sandbox runs the stock Fullsend pr-review skill, so agent-result.json
+# follows the stock review-result schema. Its `action` and `body` are not
+# used. What this script reads:
+#   - agent-result.json: findings, head_sha, pr_number, repo, label_actions,
+#     and `action: failure` with its `reason`.
+#   - <iteration output>/odh/*.json: side files the dashboard personas write
+#     (personas/README.md): the challenger audit, the rating and change
+#     summary, the product-ask section and the readiness checks.
+#   - <runDir>/personas.json: the runner's list of staged personas, and
+#     <iteration>/transcripts/: one file per dispatched sub-agent.
+#   - ${FULLSEND_CONFIG_DIR}/.run/collected.json: host adapter envelopes from
+#     pre-review.sh (Jira status, CodeRabbit status and findings), and
+#     .run/jira.json for trusted issue links.
+#   - dimensions.json (producer labels, kinds, categories) and
+#     rating-policy.json (verdict floors, caps and refuse lists).
+#
+# Flow: normalize_stock_result folds those inputs into one object
+# (schemas/sticky-input.schema.json), the severity filter drops findings below
+# the threshold, transform_review_result sets the action and renders the body,
+# and `fullsend post-review` posts it.
+#
+# What the host decides:
+#   1. The action, from findings, checks, risk, confidence and product ask
+#      (blocking severities -> request-changes; human-judgment severities,
+#      refused risk or confidence, a could-not-verify check, an errored host
+#      adapter or a protected path -> comment; otherwise approve).
+#   2. The sticky comment: change summary, status, signals, checks, findings
+#      (with the Justified section), product ask, TODO and the collapsed
+#      review details (producers table, challenger audit, evidence, labels).
+#      File references link to the PR's Files changed view.
+#   3. Inline review comments are suppressed: line numbers are removed from
+#      the copy handed to the CLI.
+#   4. The prior-findings marker (review-findings-v2) for the next run's
+#      pre-script, in the stock field layout. Host adapter findings are left
+#      out of it: their category is not one the stock pre-script accepts.
+#   5. Outcome and contextual labels, the protected-path approve gate and the
+#      stale-head re-dispatch.
+#
+# FULLSEND_CONFIG_DIR is made absolute because post_script runs with
+# CWD=runDir. The host-adapter credentials that env.runner hands every host
+# script are unset before any child starts; this script never reads them.
 #
 # Harness may fetch this script with sibling files in scripts/.
 #
@@ -37,10 +50,6 @@
 #   post-review.sh              # CI / harness post_script
 #   post-review.sh --self-test  # local checks, no GitHub
 #
-# Stock behavior kept: severity filter, protected-path, labels,
-# stale-head (exit 10), and the formal fullsend post-review disposition.
-#
-# Runs on the GitHub Actions runner AFTER the sandbox is destroyed.
 # CWD is runDir.
 #
 # Required environment variables:
@@ -56,12 +65,21 @@
 #                                       approve actions; default supplied by
 #                                       harness/review.yaml
 #
+# Optional environment variables:
+#   FULLSEND_PERSONAS_FILE            — persona manifest path; default is
+#                                       personas.json in runDir
+#
 # Exit codes:
 #   0 — review posted
 #   1 — error (review not posted, fallback comment posted, or the result's
 #       action was "failure": the notice is published but the review did
 #       not complete)
 set -euo pipefail
+
+# env.runner in harness/review.yaml gives every host-side script the
+# host-adapter credentials. Only pre-review.sh uses them, so drop them before
+# this script starts any child. Keep the list in step with env.runner.
+unset CODERABBIT_API_KEY JIRA_URL JIRA_USERNAME JIRA_API_TOKEN
 
 REVIEW_STICKY_MARKER='<!-- fullsend:review-agent -->'
 
@@ -91,18 +109,625 @@ resolve_fullsend_config_dir() {
 FULLSEND_CONFIG_DIR="$(resolve_fullsend_config_dir)"
 export FULLSEND_CONFIG_DIR
 
-# $1 = path to agent-result.json. Writes transformed JSON to stdout.
+# Build the sticky input (schemas/sticky-input.schema.json) that
+# transform_review_result consumes, from what a run leaves on the host:
+#   $1  agent-result.json in the stock review-result shape. Findings, head_sha,
+#       pr_number, repo, reason and label_actions are used. The agent's action
+#       and body are not: the host computes both. `action: failure` is kept so
+#       the failure path still applies.
+#   $2  the personas' side-file directory (<iteration output>/odh, see
+#       personas/README.md): challenger.json, rating.json (which also holds
+#       the change summary) and one <registry id>.json per check and section
+#       row.
+#   $3  the runner's persona manifest (personas.json), when there is one.
+#   $4  the iteration's transcripts directory, when there is one. A file named
+#       review-sub<N>-<persona>-<timestamp>… shows that persona was dispatched.
+#   ${FULLSEND_CONFIG_DIR}/dimensions.json and .run/collected.json: the
+#       producer registry and the host adapter envelopes (Jira, CodeRabbit).
+#
+# Side files are model output and are not validated by the runner. A missing
+# or malformed one is treated as that persona not reporting: a check becomes
+# could-not-verify, a missing rating becomes medium risk and low confidence,
+# and neither can stop the review from being posted. CodeRabbit findings are merged as they
+# are; they do not go through the challenger. The TODO list is built here from
+# the normalized findings, checks, rating and product ask.
+normalize_stock_result() {
+  python3 - "$@" <<'PY'
+import json, os, re, sys
+
+SEVERITIES = ("critical", "high", "medium", "low", "info")
+CHECK_STATUSES = ("pass", "fail", "warning", "not-applicable", "could-not-verify")
+PA_STATUSES = ("none", "aligned", "mismatch-justified", "mismatch-unjustified")
+ADAPTER_STATUSES = ("ok", "none", "skipped", "error")
+ACTIONS = ("approve", "request-changes", "comment", "reject", "failure")
+FAILURE_REASONS = ("tool-failure", "missing-context", "ambiguous-findings", "token-limit", "time-budget")
+RISK_LEVELS = ("low", "medium", "high", "critical")
+CONFIDENCE_LEVELS = ("low", "medium", "high")
+CHALLENGER_ACTIONS = ("kept", "downgraded", "merged", "removed", "justified")
+# Categories the stock orchestrator raises itself and never hands the challenger.
+UNCHALLENGED_CATEGORIES = frozenset({
+    "sub-agent-failure", "protected-path", "provenance-warning", "scope-authorization-implicit",
+})
+CHALLENGER_FAILURE_PREFIX = "The challenger sub-agent did not return findings:"
+IMAGE_LIMIT_PREFIX = "Could not verify image evidence:"
+CHANGE_SUMMARY_MAX = 500
+NO_CHANGE_SUMMARY = "No change summary was recorded for this run."
+FINDING_ID_RE = re.compile(r"f_[A-Za-z0-9]+")
+DIMENSION_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+
+
+def load_json(path):
+    """Parsed JSON, or None when the file is absent or unreadable."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError, RecursionError):
+        return None
+
+
+def text(value):
+    return value.strip() if isinstance(value, str) and value.strip() else ""
+
+
+def positive_int(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,9}", value.strip() or "x") and int(value) > 0:
+        return int(value)
+    return None
+
+
+def clean_finding(raw, strict):
+    """A finding reduced to the fields the sticky input allows.
+
+    strict (side files, adapter envelopes): a finding without a valid
+    severity, category or description is dropped. Otherwise (the agent
+    result, already validated by the runner) a bad field is replaced so the
+    finding still counts toward the verdict."""
+    if not isinstance(raw, dict):
+        return None
+    severity = raw.get("severity").lower() if isinstance(raw.get("severity"), str) else ""
+    category = text(raw.get("category"))
+    description = text(raw.get("description"))
+    if severity not in SEVERITIES:
+        if strict:
+            return None
+        severity = "medium"
+    if not category or not description:
+        if strict:
+            return None
+        category = category or "uncategorized"
+        description = description or "No description was recorded for this finding."
+    out = {
+        "severity": severity,
+        "category": category,
+        "file": text(raw.get("file")) or "N/A",
+        "description": description,
+    }
+    line = positive_int(raw.get("line"))
+    if line:
+        out["line"] = line
+    if text(raw.get("remediation")):
+        out["remediation"] = raw["remediation"].strip()
+    if isinstance(raw.get("actionable"), bool):
+        out["actionable"] = raw["actionable"]
+    if text(raw.get("dimension")):
+        out["dimension"] = raw["dimension"].strip()
+    if isinstance(raw.get("id"), str) and FINDING_ID_RE.fullmatch(raw["id"]):
+        out["id"] = raw["id"]
+    return out
+
+
+def finding_dimensions(finding):
+    """Persona ids on a finding; a merged finding lists several, comma-separated."""
+    ids = []
+    for part in (finding.get("dimension") or "").split(","):
+        part = part.strip()
+        if DIMENSION_RE.fullmatch(part) and part != "orchestrator" and part not in ids:
+            ids.append(part)
+    return ids
+
+
+def is_challenger_failure(finding):
+    return (finding.get("category") == "sub-agent-failure"
+            and finding["description"].startswith(CHALLENGER_FAILURE_PREFIX))
+
+
+def load_registry(config_dir):
+    loaded = load_json(os.path.join(config_dir, "dimensions.json")) if config_dir else None
+    rows = loaded.get("dimensions") if isinstance(loaded, dict) else None
+    return [r for r in rows if isinstance(r, dict) and text(r.get("id"))] if isinstance(rows, list) else []
+
+
+def output_kind(row):
+    output = row.get("output") if isinstance(row.get("output"), str) else "findings"
+    return output.split(":", 1)[0].strip().lower() or "findings"
+
+
+def row_label(row):
+    return text(row.get("label")) or row["id"]
+
+
+def load_manifest(path):
+    """Staged personas by name, or None when there is no valid manifest."""
+    loaded = load_json(path)
+    if not isinstance(loaded, dict) or loaded.get("version") != 1:
+        return None
+    personas = loaded.get("personas")
+    if not isinstance(personas, list) or not personas:
+        return None
+    staged = {}
+    for persona in personas:
+        if not isinstance(persona, dict) or not text(persona.get("name")):
+            return None
+        staged[persona["name"].strip()] = persona
+    return staged
+
+
+def clean_rated(raw, levels):
+    if not isinstance(raw, dict):
+        return None
+    level = raw.get("level").strip().lower() if isinstance(raw.get("level"), str) else ""
+    why = text(raw.get("why"))
+    if level not in levels or not why:
+        return None
+    return {"level": level, "why": why}
+
+
+def clean_check(raw, check_id):
+    """The check a persona reported, under its registry id."""
+    check = raw.get("check") if isinstance(raw, dict) else None
+    if not isinstance(check, dict):
+        return None
+    status = check.get("status") if isinstance(check.get("status"), str) else ""
+    summary = text(check.get("summary"))
+    if status not in CHECK_STATUSES or not summary:
+        return None
+    out = {"id": check_id, "status": status, "summary": summary}
+    details = check.get("details")
+    if isinstance(details, str):
+        details = [details]
+    if isinstance(details, list):
+        kept = [d.strip() for d in details if text(d)]
+        if kept:
+            out["details"] = kept
+    return out
+
+
+def clean_pa_record(raw, with_key):
+    if not isinstance(raw, dict) or raw.get("status") not in PA_STATUSES:
+        return None
+    out = {"status": raw["status"]}
+    if with_key:
+        if not isinstance(raw.get("key"), str) or not raw["key"].strip():
+            return None
+        out["key"] = raw["key"].strip()
+        if isinstance(raw.get("url"), str):
+            out["url"] = raw["url"]
+    for field in ("aligned", "mismatched"):
+        if isinstance(raw.get(field), list):
+            out[field] = [item for item in raw[field] if isinstance(item, str)]
+    for field in ("justified_in_description", "needs_human"):
+        if isinstance(raw.get(field), bool):
+            out[field] = raw[field]
+    return out
+
+
+def clean_product_ask(raw):
+    section = raw.get("product_ask") if isinstance(raw, dict) else None
+    out = clean_pa_record(section, with_key=False)
+    if out is None:
+        return None
+    if isinstance(section.get("issues"), list):
+        issues = [clean_pa_record(issue, with_key=True) for issue in section["issues"]]
+        issues = [issue for issue in issues if issue]
+        if issues:
+            out["issues"] = issues
+    return out
+
+
+def clean_label_actions(raw):
+    if not isinstance(raw, dict) or not text(raw.get("reason")) or not isinstance(raw.get("actions"), list):
+        return None
+    actions = [
+        {"action": item["action"], "label": item["label"]}
+        for item in raw["actions"]
+        if isinstance(item, dict) and item.get("action") in ("add", "remove") and text(item.get("label"))
+    ][:20]
+    return {"reason": raw["reason"].strip(), "actions": actions} if actions else None
+
+
+def trim_summary(value):
+    """Change summary within the 500 characters the personas contract allows."""
+    summary = " ".join(value.split())
+    if len(summary) <= CHANGE_SUMMARY_MAX:
+        return summary
+    return summary[:CHANGE_SUMMARY_MAX - 1].rstrip() + "…"
+
+
+def base_fields(result):
+    out = {"schema_version": "3"}
+    pr_number = positive_int(result.get("pr_number")) or positive_int(os.environ.get("PR_NUMBER"))
+    if pr_number:
+        out["pr_number"] = pr_number
+    repo = text(result.get("repo")) or text(os.environ.get("REPO_FULL_NAME"))
+    if repo:
+        out["repo"] = repo
+    if text(result.get("head_sha")):
+        out["head_sha"] = result["head_sha"].strip()
+    return out
+
+
+def failure(result, reason):
+    out = base_fields(result)
+    out["action"] = "failure"
+    out["reason"] = reason if reason in FAILURE_REASONS else "tool-failure"
+    return out
+
+
+TRANSCRIPT_RE = re.compile(r"review-sub[0-9]+-([a-z0-9][a-z0-9-]{0,63})-[0-9]{4}-[0-9]{2}-[0-9]{2}T")
+
+
+def transcript_personas(path):
+    """Personas with a sub-agent transcript, or None when that cannot be told."""
+    try:
+        names = os.listdir(path) if path and os.path.isdir(path) else []
+    except OSError:
+        names = []
+    found = {m.group(1) for m in (TRANSCRIPT_RE.match(name) for name in names) if m}
+    return found or None
+
+
+def load_policy(config_dir):
+    """The lists of rating-policy.json the TODO recipe needs, with the host defaults."""
+    policy = {
+        "blocking_finding_severities": ["critical", "high"],
+        "exclude_blocking_categories": ["protected-path"],
+        "human_judgment_finding_severities": ["medium"],
+        "risk_refuse_approve": ["high", "critical"],
+        "confidence_refuse_approve": ["low"],
+    }
+    loaded = load_json(os.path.join(config_dir, "rating-policy.json")) if config_dir else None
+    for key in policy:
+        if isinstance(loaded, dict) and isinstance(loaded.get(key), list):
+            policy[key] = loaded[key]
+    return {key: frozenset(str(v).lower() for v in values) for key, values in policy.items()}
+
+
+def todo_text(value):
+    flat = " ".join(str(value).split())
+    return flat if len(flat) <= 300 else flat[:299].rstrip() + "…"
+
+
+def build_todo(out, config_dir, labels):
+    """The closed TODO recipe: findings, checks, judgement, nits."""
+    policy = load_policy(config_dir)
+    rank = {name: i for i, name in enumerate(("info", "low", "medium", "high", "critical"))}
+    threshold = rank.get(os.environ.get("REVIEW_FINDING_SEVERITY_THRESHOLD") or "", 0)
+    todo = []
+
+    def add(category, value):
+        item = {"category": category, "text": todo_text(value)}
+        if item["text"] and item not in todo:
+            todo.append(item)
+
+    def where(finding):
+        if finding["file"] == "N/A":
+            return ""
+        return finding["file"] + (f":{finding['line']}" if finding.get("line") else "") + ": "
+
+    posted = [f for f in out["findings"] if rank[f["severity"]] >= threshold]
+    for finding in posted:
+        gated = policy["blocking_finding_severities"] | policy["human_judgment_finding_severities"]
+        if finding["severity"] in gated and finding["category"].lower() not in policy["exclude_blocking_categories"]:
+            add("findings", where(finding) + (finding.get("remediation") or finding["description"]))
+    for check in out["checks"]:
+        if check["status"] == "fail":
+            add("checks", check["summary"])
+    for check in out["checks"]:
+        if check["status"] == "could-not-verify":
+            add("judgement", f"Verify {labels.get(check['id'], check['id'])} by hand: {check['summary']}")
+    if out["risk"]["level"] in policy["risk_refuse_approve"]:
+        add("judgement", f"A human must decide whether to approve: risk is {out['risk']['level']}. {out['risk']['why']}")
+    if out["confidence"]["level"] in policy["confidence_refuse_approve"]:
+        add("judgement", f"A human must decide whether to approve: confidence is {out['confidence']['level']}. {out['confidence']['why']}")
+    section = out.get("product_ask") or {}
+    if section.get("needs_human") or (section.get("status") == "mismatch-unjustified" and "needs_human" not in section):
+        add("judgement", "Decide whether the PR can go ahead although it does not match the linked issue (see Product ask).")
+    for finding in posted:
+        if finding["severity"] in ("low", "info") and finding.get("actionable") is True:
+            add("nits", where(finding) + finding["description"])
+    return todo
+
+
+def normalize(result_path, side_dir, manifest_path, transcripts_dir):
+    result = load_json(result_path)
+    if not isinstance(result, dict):
+        return failure({}, "tool-failure")
+    if result.get("action") == "failure":
+        return failure(result, result.get("reason"))
+
+    config_dir = os.environ.get("FULLSEND_CONFIG_DIR") or ""
+    registry = load_registry(config_dir)
+    reviewer_rows = [r for r in registry if r.get("kind") != "cli-adapter"]
+    adapter_rows = [r for r in registry if r.get("kind") == "cli-adapter"]
+    staged = load_manifest(manifest_path)
+    transcripts = transcript_personas(transcripts_dir)
+    notes = []
+
+    def side_file(name):
+        """(parsed object or None, whether a file was there at all)."""
+        path = os.path.join(side_dir, name + ".json") if side_dir else ""
+        present = bool(path) and os.path.exists(path)
+        loaded = load_json(path)
+        return (loaded if isinstance(loaded, dict) else None), present
+
+    out = base_fields(result)
+    if result.get("action") in ACTIONS:
+        out["action"] = result["action"]
+
+    agent_findings = [f for f in (clean_finding(raw, strict=False)
+                                  for raw in (result.get("findings") if isinstance(result.get("findings"), list) else []))
+                      if f]
+    challenger_failed = any(is_challenger_failure(f) for f in agent_findings)
+
+    # Host adapters: status for every registry row, findings from the ones
+    # that report findings.
+    collected = load_json(os.path.join(config_dir, ".run", "collected.json")) if config_dir else None
+    envelopes = {}
+    for envelope in collected if isinstance(collected, list) else []:
+        if isinstance(envelope, dict):
+            key = text(envelope.get("id")) or text(envelope.get("dimension"))
+            if key and key not in envelopes:
+                envelopes[key] = envelope
+    raised = {}
+    adapters = []
+    host_findings = []
+    for row in adapter_rows:
+        entry = {"id": row["id"]}
+        envelope = envelopes.get(row["id"])
+        status = envelope.get("status") if isinstance(envelope, dict) else None
+        if isinstance(status, str) and status.strip().lower() in ADAPTER_STATUSES:
+            entry["status"] = status.strip().lower()
+            if isinstance(envelope.get("reason"), str):
+                entry["reason"] = envelope["reason"]
+        else:
+            # No envelope (the pre-script ran no adapters, or not this one):
+            # the adapter did not run. That is not an adapter error.
+            entry.update(status="skipped", reason="not-run")
+        adapters.append(entry)
+        if entry.get("status") != "ok" or output_kind(row) != "findings":
+            continue
+        categories = [c for c in (row.get("categories") or []) if text(c)]
+        mine = []
+        for raw in envelope.get("findings") if isinstance(envelope.get("findings"), list) else []:
+            finding = clean_finding(raw, strict=True)
+            if not finding:
+                continue
+            if categories and finding["category"] not in categories:
+                finding["category"] = categories[0]
+            finding["dimension"] = row["id"]
+            finding.pop("id", None)
+            mine.append(finding)
+        raised[row["id"]] = mine
+        host_findings += mine
+
+    # Challenger audit.
+    audit, audit_present = side_file("challenger")
+    as_raised = None
+    adjudicated = None
+    if audit and isinstance(audit.get("as_raised"), list) and isinstance(audit.get("adjudicated"), list):
+        as_raised = [f for f in (clean_finding(raw, strict=True) for raw in audit["as_raised"]) if f]
+        adjudicated = []
+        for raw in audit["adjudicated"]:
+            finding = clean_finding(raw, strict=True)
+            action = raw.get("challenger_action") if isinstance(raw, dict) else None
+            if finding and action in CHALLENGER_ACTIONS:
+                # A merged entry with merged_into was absorbed into another
+                # finding; the one without it is the survivor.
+                if action == "merged" and not isinstance(raw.get("merged_into"), dict):
+                    action = "merged-survivor"
+                adjudicated.append((finding, action, text(raw.get("challenger_reason"))))
+    # Readiness checks, product ask and rating, each from its persona's side file.
+    reported = set()
+    checks = []
+    summary = ""
+    rating_row = False
+    for row in reviewer_rows:
+        kind = output_kind(row)
+        if kind == "findings":
+            continue
+        loaded, present = side_file(row["id"])
+        label = row_label(row)
+        problem = (f"{label} wrote a result the host could not read." if present
+                   else f"{label} did not report a result for this run.")
+        if kind == "check":
+            check = clean_check(loaded, row["id"])
+            if check:
+                reported.add(row["id"])
+                notes += [d for d in check.get("details", []) if d.startswith(IMAGE_LIMIT_PREFIX)]
+            else:
+                check = {"id": row["id"], "status": "could-not-verify", "summary": problem}
+            checks.append(check)
+        elif kind == "section":
+            section = clean_product_ask(loaded)
+            if section:
+                reported.add(row["id"])
+                out["product_ask"] = section
+            else:
+                notes.append(problem)
+        elif kind == "signal":
+            rating_row = True
+            risk = clean_rated((loaded or {}).get("risk"), RISK_LEVELS)
+            confidence = clean_rated((loaded or {}).get("confidence"), CONFIDENCE_LEVELS)
+            summary = text((loaded or {}).get("change_summary"))
+            if risk or confidence:
+                reported.add(row["id"])
+            if not (risk and confidence):
+                notes.append(problem if not (risk or confidence)
+                             else f"{label} reported only part of its result.")
+            out["risk"] = risk or {
+                "level": "medium", "why": f"{label} did not report a risk level; medium is assumed."}
+            # Low is the level the policy refuses to approve.
+            out["confidence"] = confidence or {
+                "level": "low", "why": f"{label} did not report a confidence level; low is assumed."}
+    if not rating_row:
+        out["risk"] = {"level": "medium", "why": "No rating reviewer is registered; medium is assumed."}
+        out["confidence"] = {"level": "low", "why": "No rating reviewer is registered; low is assumed."}
+    out["change_summary"] = trim_summary(summary) if summary else NO_CHANGE_SUMMARY
+    out["checks"] = checks
+
+    # A persona that reports only through a side file returns no findings. If
+    # the orchestrator recorded that as a failure although the side file is
+    # there and valid, the persona ran: drop the failure finding.
+    agent_findings = [
+        f for f in agent_findings
+        if not (f["category"] == "sub-agent-failure" and f["severity"] == "info"
+                and finding_dimensions(f) and all(d in reported for d in finding_dimensions(f)))
+    ]
+    failed_dimensions = set()
+    for finding in agent_findings:
+        if finding["category"] == "sub-agent-failure":
+            failed_dimensions.update(finding_dimensions(finding))
+
+    # As-raised findings per persona: the challenger's record where it has one,
+    # plus surviving findings it never saw (the stock orchestrator withholds
+    # low and info findings from a large challenger input).
+    reviewer_raised = {}
+    seen = set()
+    for finding in as_raised or []:
+        for dim in finding_dimensions(finding):
+            reviewer_raised.setdefault(dim, []).append(finding)
+            seen.add((dim, finding["category"], finding["file"], finding.get("line")))
+    for finding in agent_findings:
+        if finding["category"] == "sub-agent-failure":
+            continue
+        for dim in finding_dimensions(finding):
+            if (dim, finding["category"], finding["file"], finding.get("line")) not in seen:
+                reviewer_raised.setdefault(dim, []).append(finding)
+
+    challengeable = [f for f in agent_findings if f["category"] not in UNCHALLENGED_CATEGORIES]
+    if challenger_failed:
+        challenger = {"status": "failed"}
+    elif adjudicated is not None:
+        count = lambda *actions: sum(1 for _, action, _ in adjudicated if action in actions)
+        removed = []
+        for finding, action, reason in adjudicated:
+            if action in ("removed", "justified"):
+                entry = dict(finding)
+                entry.pop("id", None)
+                entry["challenger_action"] = action
+                if reason:
+                    entry["removal_reason"] = reason
+                removed.append(entry)
+        challenger = {
+            "status": "ran",
+            "input": len(as_raised),
+            "kept": count("kept", "merged-survivor"),
+            "removed": len(removed),
+            "merged": count("merged"),
+            "downgraded": count("downgraded"),
+            "removed_findings": removed,
+        }
+    elif audit_present:
+        # A file was written, so the challenger ran; its counts are unusable.
+        challenger = {"status": "ran"}
+        notes.append("The challenger's audit could not be read, so what it removed or justified is not shown.")
+    elif not challengeable:
+        challenger = {"status": "skipped", "reason": (
+            "no reviewer findings to adjudicate (host adapter findings are not challenged)"
+            if host_findings else "no findings to adjudicate")}
+    else:
+        challenger = {"status": "skipped", "reason": (
+            "no challenger audit was recorded (low time budget, or the audit was not written)")}
+        notes.append("No challenger audit was recorded, so the findings are shown as the reviewers raised them.")
+
+    # Producers table: who ran, who did not, and why.
+    dispatched = []
+    skipped = []
+    known = [row["id"] for row in reviewer_rows]
+    extra = [name for name, persona in (staged or {}).items()
+             if persona.get("role") == "dimension" and name not in known]
+    extra += [dim for dim in reviewer_raised if dim not in known and dim not in extra
+              and dim not in raised]
+    for row in reviewer_rows + [{"id": name} for name in extra]:
+        rid = row["id"]
+        kind = output_kind(row)
+        if rid in failed_dimensions:
+            skipped.append({"id": rid, "reason": "did not return a result (sub-agent failure)"})
+        elif kind != "findings":
+            if rid in reported:
+                dispatched.append(rid)
+            elif transcripts is not None and rid in transcripts:
+                skipped.append({"id": rid, "reason": "ran but did not report"})
+            else:
+                skipped.append({"id": rid, "reason": "did not report"})
+        elif rid in reviewer_raised or (transcripts is not None and rid in transcripts):
+            dispatched.append(rid)
+            raised[rid] = reviewer_raised.get(rid, [])
+        elif staged is not None and rid not in staged:
+            skipped.append({"id": rid, "reason": "not staged for this run"})
+        elif transcripts is not None:
+            # Transcripts name every dispatched persona, so this one was not.
+            skipped.append({"id": rid, "reason": "not selected"})
+        elif staged is not None and staged[rid].get("always") is True:
+            dispatched.append(rid)
+            raised[rid] = []
+        else:
+            skipped.append({"id": rid, "reason": "no findings or not selected"})
+
+    out["findings"] = agent_findings + host_findings
+    out["producers"] = {
+        "dispatched": dispatched,
+        "adapters": adapters,
+        "skipped": skipped,
+        "raised": raised,
+        "challenger": challenger,
+    }
+    if notes:
+        out["inspected"] = {"could_not_verify": notes}
+    todo = build_todo(out, config_dir, {row["id"]: row_label(row) for row in registry})
+    if todo:
+        out["todo"] = todo
+    labels = clean_label_actions(result.get("label_actions"))
+    if labels:
+        out["label_actions"] = labels
+    return out
+
+
+try:
+    args = sys.argv[1:] + ["", "", "", ""]
+    normalized = normalize(args[0], args[1], args[2], args[3])
+except Exception as exc:  # A normalizer fault must still post a notice.
+    sys.stderr.write(f"::warning::Review result could not be normalized ({type(exc).__name__}); posting a failure notice\n")
+    normalized = {"schema_version": "3", "action": "failure", "reason": "tool-failure"}
+json.dump(normalized, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PY
+}
+
+# $1 = path to a sticky input (normalize_stock_result output). Writes it back
+# with the host-computed action and the rendered comment body.
 transform_review_result() {
   python3 - "$1" <<'PY'
-import json, os, re, sys
+import hashlib, json, os, re, sys
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
+
+JIRA_KEY_RE = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 
 # Host policy: .fullsend/rating-policy.json (floors/caps/refuse lists only).
 # Judgment criteria live in the rating skill — not here.
 DEFAULT_POLICY = {
-    "blocking_finding_severities": ["critical", "high", "medium"],
+    "blocking_finding_severities": ["critical", "high"],
     "exclude_blocking_categories": ["protected-path"],
+    # Below the blocking bar, these severities still defer to a human
+    # instead of approving. Empty the list to let them ride with approve.
+    "human_judgment_finding_severities": ["medium"],
     "risk_refuse_approve": ["high", "critical"],
     "confidence_refuse_approve": ["low"],
     "product_ask": {
@@ -149,6 +774,8 @@ def load_rating_policy():
                     merged[key] = value
     merged["_blocking_severities"] = _lower_set(merged.get("blocking_finding_severities"))
     merged["_exclude_categories"] = _lower_set(merged.get("exclude_blocking_categories"))
+    merged["_human_judgment_severities"] = _lower_set(
+        merged.get("human_judgment_finding_severities"))
     merged["_risk_refuse"] = _lower_set(merged.get("risk_refuse_approve"))
     merged["_confidence_refuse"] = _lower_set(merged.get("confidence_refuse_approve"))
     return merged
@@ -228,12 +855,27 @@ def is_blocking(finding):
     severity = (finding.get("severity") or "info").lower()
     return severity in POLICY["_blocking_severities"]
 
+def is_human_judgment_finding(finding):
+    """A below-bar finding that still defers to a human."""
+    cat = (finding.get("category") or "").lower()
+    if cat in POLICY["_exclude_categories"]:
+        return False
+    return (finding.get("severity") or "").lower() in POLICY["_human_judgment_severities"]
+
 def is_actionable_nit(finding):
     severity = (finding.get("severity") or "info").lower()
     return severity in ("low", "info") and bool(finding.get("actionable"))
 
 def blocking_count(result):
     return sum(1 for finding in (result.get("findings") or []) if is_blocking(finding))
+
+def human_judgment_findings(result):
+    """Non-excluded findings at a human-judgment severity."""
+    return [f for f in (result.get("findings") or []) if is_human_judgment_finding(f)]
+
+def human_judgment_needed(result):
+    """True when below-bar findings must yield comment instead of approve."""
+    return bool(human_judgment_findings(result))
 
 def checks(result):
     return [c for c in (result.get("checks") or []) if isinstance(c, dict)]
@@ -249,6 +891,8 @@ def needs_human(result):
     if os.environ.get("REVIEW_FORCE_PROTECTED_PATH"):
         return True
     if checks_with_status(result, "could-not-verify"):
+        return True
+    if errored_adapters(result):
         return True
     if "needs_human" in pa:
         if pa.get("needs_human"):
@@ -270,6 +914,16 @@ def producers_block(result):
     """Self-contained producers object on the review result (schema v3)."""
     raw = result.get("producers") if isinstance(result, dict) else None
     return raw if isinstance(raw, dict) else None
+
+def errored_adapters(result):
+    """Adapters that reported status=error, as "<Label> (<reason>)" notes."""
+    producers = producers_block(result)
+    notes = []
+    for item in (producers or {}).get("adapters") or []:
+        if isinstance(item, dict) and str(item.get("status") or "").strip().lower() == "error":
+            name = result_label(item.get("id") or "adapter")
+            notes.append(f"{name} ({adapter_reason(item) or 'adapter error'})")
+    return notes
 
 def add_limit(inspected, note):
     notes = list(inspected.get("could_not_verify") or [])
@@ -393,10 +1047,11 @@ def unverified_producers(result):
     """Everything this run could not establish, by whatever shape reported it.
 
     A readiness check that could not be verified is a producer that did not
-    establish its result."""
+    establish its result. An errored adapter is also incomplete."""
     names = []
     for check in checks_with_status(result, "could-not-verify"):
-        names.append(dimension_label(check.get("id") or "readiness check"))
+        names.append(result_label(check.get("id") or "readiness check"))
+    names.extend(errored_adapters(result))
     producers = producers_block(result)
     if producers is not None and challenger_problem(challenger_record(producers), result.get("findings") or []):
         names.append("challenger (its skip state contradicts the reported findings)")
@@ -442,7 +1097,7 @@ def infer_todo_category(text, result):
     nit_match = False
     for finding in (result.get("findings") or []):
         desc = (finding.get("description") or "").strip()
-        if is_blocking(finding):
+        if is_blocking(finding) or is_human_judgment_finding(finding):
             rem = (finding.get("remediation") or "").strip()
             if (rem and rem in text) or (desc and desc in text):
                 return "findings"
@@ -518,6 +1173,8 @@ def compute_action(result):
         return "request-changes", "blocking-findings"
     if failed_checks(result):
         return "request-changes", "check-fail"
+    if human_judgment_needed(result):
+        return "comment", "human-judgment-findings"
     refuse = approve_refuse_reason(result)
     if refuse == "risk":
         return "comment", "risk-blocks-approve"
@@ -526,6 +1183,34 @@ def compute_action(result):
     if needs_human(result):
         return "comment", "needs-human"
     return "approve", "no-blocking-findings"
+
+def compute_product_ask_overall(result):
+    """Overwrite top-level product_ask.status from per-issue statuses when issues[] is present."""
+    pa = result.get("product_ask")
+    if not isinstance(pa, dict):
+        return result
+    issues = pa.get("issues")
+    if not isinstance(issues, list) or not issues:
+        return result
+    rank = {"mismatch-unjustified": 3, "mismatch-justified": 2, "aligned": 1, "none": 0}
+    best = 0
+    any_human = False
+    any_justified = False
+    for issue in issues:
+        s = issue.get("status") or "none"
+        best = max(best, rank.get(s, 0))
+        if issue.get("needs_human"):
+            any_human = True
+        if issue.get("justified_in_description"):
+            any_justified = True
+    reverse = {v: k for k, v in rank.items()}
+    pa["status"] = reverse.get(best, "none")
+    if any_human:
+        pa["needs_human"] = True
+    if any_justified:
+        pa["justified_in_description"] = True
+    return result
+
 
 def apply_product_ask(result):
     """Floor confidence for unjustified Jira-vs-description mismatch. Never bump risk."""
@@ -554,9 +1239,12 @@ def augment_inspected(result):
     could_not_verify = list(inspected.get("could_not_verify") or [])
     for check in checks_with_status(result, "could-not-verify"):
         note = (
-            f"{dimension_label(check.get('id') or 'readiness check')}: "
+            f"{result_label(check.get('id') or 'readiness check')}: "
             f"{check.get('summary') or 'could not be verified'}"
         )
+        if note not in could_not_verify:
+            could_not_verify.append(note)
+    for note in errored_adapters(result):
         if note not in could_not_verify:
             could_not_verify.append(note)
     if could_not_verify:
@@ -576,6 +1264,20 @@ def suppress_mentions(text):
     """Keep agent prose from turning @words into GitHub mentions/links."""
     return re.sub(r"@(?=[A-Za-z0-9-])", "@\u200b", text or "")
 
+def escape_link_syntax(text):
+    """Escape backslashes and brackets so Markdown renders them literally."""
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+def repo_relative_path(path):
+    """Diff-anchor path: repo-relative, no leading slash or ./ prefix.
+
+    .lstrip("./") would eat the dot in .github/x.yml, so strip explicitly.
+    """
+    p = (path or "").strip()
+    while p.startswith("./"):
+        p = p[2:]
+    return p.lstrip("/")
+
 def render_location(result, finding, server_url):
     path = (finding.get("file") or "").strip()
     line = finding.get("line")
@@ -585,16 +1287,47 @@ def render_location(result, finding, server_url):
     safe_display = code_span_text(label)
     repo = (result.get("repo") or os.environ.get("GITHUB_REPOSITORY") or "").strip("/")
     sha = (result.get("head_sha") or "").strip()
-    if not path or path.lower() == "n/a" or not repo or not sha:
+    pr_number = str(result.get("pr_number") or os.environ.get("PR_NUMBER") or "").strip()
+    if not path or path.lower() == "n/a" or not repo:
         return f"`{safe_display}`"
-    target = f"{server_url.rstrip('/')}/{repo}/blob/{sha}/{quote(path.lstrip('/'), safe='/')}"
-    if line:
-        target += f"#L{line}"
-    link_label = safe_display.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    link_label = escape_link_syntax(safe_display)
+    # Only an ASCII line number can form a GitHub line anchor.
+    line_suffix = str(line).strip() if line else ""
+    if not re.fullmatch(r"[0-9]+", line_suffix):
+        line_suffix = ""
+    if pr_number:
+        # PR-scoped diff anchor — the destination inline review comments use.
+        # A commit-pinned /blob/ URL is not the PR diff: when the head commit
+        # is not on a branch in this repo (fork PR head, force-push), GitHub
+        # warns "This commit does not belong to any branch..." and the reader
+        # leaves the review flow. `diff-` is the SHA256 of the repo-relative
+        # path; R is the post-image (right) side. Files that are not part of
+        # the PR diff have no anchor, so GitHub lands at the top of the diff.
+        anchor = "diff-" + hashlib.sha256(
+            repo_relative_path(path).encode("utf-8")
+        ).hexdigest()
+        target = f"{server_url.rstrip('/')}/{repo}/pull/{pr_number}/changes#{anchor}"
+        if line_suffix:
+            target += f"R{line_suffix}"
+    elif sha:
+        # No PR context: keep the commit-pinned file view.
+        target = (
+            f"{server_url.rstrip('/')}/{repo}/blob/{sha}/"
+            f"{quote(repo_relative_path(path), safe='/')}"
+        )
+        if line_suffix:
+            target += f"#L{line_suffix}"
+    else:
+        return f"`{safe_display}`"
     return f"[{link_label}]({target})"
 
 def clean(text):
-    return suppress_mentions(str(text or "").strip())
+    # Normalize every line ending to LF first: GitHub treats a bare CR as a
+    # line ending, so a value that reaches a renderer before flattening could
+    # otherwise start a new Markdown block.
+    return suppress_mentions(
+        str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    )
 
 def render_remediation(text):
     """A one-line remediation stays inline; a patch snippet gets a fenced block.
@@ -603,7 +1336,7 @@ def render_remediation(text):
     them unreadable. List continuation needs four-space indentation, and the
     fence is padded past any backticks inside the snippet.
     """
-    body = suppress_mentions(str(text or "").strip())
+    body = clean(text)
     if not body:
         return []
     if "\n" not in body:
@@ -623,11 +1356,46 @@ def table_cell(text):
 def inline_text(text):
     """Untrusted finding/audit field for Markdown outside tables.
 
-    clean() only strips @mentions. Neutralize HTML so a field cannot close
-    the host <details> block; flatten newlines so a value cannot inject
-    headings or extra list items.
+    clean() normalizes line endings and strips @mentions. Neutralize HTML so
+    a field cannot close the host <details> block; flatten newlines so a
+    value cannot inject headings or extra list items.
     """
     return clean(text).replace("\n", " ").replace("<", "&lt;")
+
+def markdown_prose(text):
+    """Agent/Jira-echoed prose that may keep newlines and Markdown styling.
+
+    Strips HTML comments (concealment) before clean()/mention suppression so
+    values like `@<!-- conceal -->org/team` cannot reassemble into a live
+    mention. Escapes raw `<` (no HTML expected) and keeps newlines so
+    multi-line Markdown remains readable. Unlike inline_text(), does not
+    flatten newlines.
+    """
+    stripped = re.sub(r"<!--.*?-->", "", str(text or ""), flags=re.S)
+    return clean(stripped).replace("<", "&lt;")
+
+def prose_bullet_lines(items):
+    """Render prose array items as Markdown bullets with indented continuations."""
+    lines = []
+    for item in items:
+        body = markdown_prose(item)
+        if not body:
+            continue
+        first, *rest = body.split("\n")
+        lines.append(f"- {first}")
+        lines.extend(f"  {cont}" if cont.strip() else "" for cont in rest)
+    return lines
+
+def label_text(text):
+    """Registry label or id as literal Markdown.
+
+    Ids are result data; flattening and escaping link syntax keeps a forged
+    id from adding blocks or becoming a bot-authored link."""
+    return escape_link_syntax(inline_text(text))
+
+def result_label(dim_id):
+    """Display label for a result-authored registry id."""
+    return label_text(dimension_label(dim_id))
 
 def code_span_text(text):
     """Untrusted text for a single Markdown inline-code span (`...`).
@@ -677,8 +1445,10 @@ def render_header(result, action):
     run_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     repo = os.environ.get("GITHUB_REPOSITORY") or result.get("repo") or ""
     run_id = os.environ.get("GITHUB_RUN_ID", "")
+    # No `<!-- fullsend:review-agent -->` line here: `fullsend post-review`
+    # adds that marker itself and, from v0.48, HTML-escapes any other
+    # `<!-- fullsend:` comment in the body, so a copy here shows as text.
     lines = [
-        "<!-- fullsend:review-agent -->",
         f"<!-- **Head SHA:** {sha} -->",
         "",
         f"Finished Review · `{action}` · Commit: `{short}`",
@@ -867,14 +1637,20 @@ def justified_findings(result):
     ]
 
 def render_justified_section(result):
-    """Render ### Justified under ## Findings with omit markers."""
+    """Render ### Justified under ## Findings.
+
+    Heading-delimited on purpose. `fullsend post-review` runs agent-authored
+    bodies through upstream's NeutralizeMarkers, which HTML-escapes every
+    `<!-- fullsend:` opener, so an HTML comment wrapper would surface as
+    visible text in the sticky. Readers find these items by the
+    `### Justified (N)` heading.
+    """
     items = justified_findings(result)
     if not items:
         return []
     run_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     lines = [
         "",
-        "<!-- fullsend:justified-findings -->",
         f"### Justified ({len(items)})",
         "",
         "_These findings were raised by review producers but the PR's "
@@ -895,7 +1671,6 @@ def render_justified_section(result):
         reason = inline_text(finding.get("removal_reason") or "")
         if reason:
             lines.append(f"  - Justification: {reason}")
-    lines += ["", "<!-- /fullsend:justified-findings -->"]
     return lines
 
 def render_removed_audit(result):
@@ -1069,21 +1844,21 @@ def adapter_producer_row(entry, result, review_checks):
         return None
     if not isinstance(name, str) or not name:
         return None
-    shown = dimension_label(name)
+    shown = result_label(name)
     typ = dimension_type(name)
     if not isinstance(envelope, dict) or "status" not in envelope:
-        return (clean(shown), typ, "❔", "adapter status missing")
+        return (shown, typ, "❔", "adapter status missing")
     status = str(envelope.get("status") or "").strip().lower()
     reason = adapter_reason(envelope)
     if status == "ok":
         res = producer_result(name, result, review_checks, kind=typ)
-        return (clean(shown), typ, "✅", res)
+        return (shown, typ, "✅", res)
     if status in ("none", "skipped"):
         default = "No usable adapter context." if status == "none" else "Adapter skipped."
-        return (clean(shown), typ, "⚪", reason or default)
+        return (shown, typ, "⚪", reason or default)
     if status == "error":
-        return (clean(shown), typ, "❌", reason or "Adapter error.")
-    return (clean(shown), typ, "❔", reason or f"Unrecognized adapter status: {status or 'missing'}")
+        return (shown, typ, "❌", reason or "Adapter error.")
+    return (shown, typ, "❔", reason or f"Unrecognized adapter status: {status or 'missing'}")
 
 def producer_rows(result):
     """What ran, by kind, with a Result cell — from result.producers only.
@@ -1101,7 +1876,7 @@ def producer_rows(result):
         if isinstance(name, str):
             typ = dimension_type(name)
             rows.append((
-                clean(dimension_label(name)),
+                result_label(name),
                 typ,
                 "✅",
                 producer_result(name, result, review_checks, kind=typ),
@@ -1114,7 +1889,7 @@ def producer_rows(result):
         if isinstance(row, dict) and isinstance(row.get("id"), str):
             reason = clean(row.get("reason") or "not selected")
             rows.append((
-                clean(dimension_label(row["id"])),
+                result_label(row["id"]),
                 dimension_type(row["id"]),
                 "➖",
                 reason,
@@ -1124,8 +1899,21 @@ def producer_rows(result):
 
 def status_headline(result, action):
     """Visible status line: icon + bold label + remainder."""
+    errs = errored_adapters(result)
+    incomplete = inline_text(", ".join(errs)) if errs else ""
+    incomplete_note = (
+        f" Review incomplete — {incomplete}. Retry or escalate." if errs else ""
+    )
     if action == "request-changes":
-        return f"{mark(ACTION_MARK, action)} **Waiting on author** — {author_wait_detail(result)}"
+        return (f"{mark(ACTION_MARK, action)} **Waiting on author** — "
+                f"{author_wait_detail(result)}{incomplete_note}")
+    if action == "comment" and errs:
+        return f"{mark(ACTION_MARK, action)} **Review incomplete** — {incomplete}. Retry or escalate."
+    if action == "comment" and human_judgment_needed(result):
+        count = len(human_judgment_findings(result))
+        noun = "finding" if count == 1 else "findings"
+        return (f"{mark(ACTION_MARK, action)} **Needs human judgment** — "
+                f"{count} non-blocking {noun}. Human still finalizes.")
     if action == "comment" and needs_human(result):
         return f"{mark(ACTION_MARK, action)} **Needs human judgment.**"
     if action == "comment":
@@ -1140,7 +1928,7 @@ def status_headline(result, action):
     if action == "approve":
         return f"{mark(ACTION_MARK, action)} **Agent bar cleared for this head.** Human still finalizes."
     if action == "reject":
-        return f"{mark(ACTION_MARK, action)} **Approach rejected.**"
+        return f"{mark(ACTION_MARK, action)} **Approach rejected.**{incomplete_note}"
     return f"{mark(ACTION_MARK, action)} This review did not complete. Do not treat this head as reviewed."
 
 def render_signal_table(result):
@@ -1168,7 +1956,7 @@ def render_checks_table(result):
     for check in rows:
         status = check.get("status") or ""
         lines.append(
-            f"| {table_cell(dimension_label(check.get('id')))} | {mark(STATUS_MARK, status)} {table_cell(status)} "
+            f"| {table_cell(result_label(check.get('id')))} | {mark(STATUS_MARK, status)} {table_cell(status)} "
             f"| {check_details_cell(check)} |")
     return lines
 
@@ -1184,21 +1972,215 @@ def render_todo_section(result):
         items = by_category[cid]
         if not items:
             continue
-        lines += ["", label] + [f"- {clean(text)}" for text in items]
+        lines += ["", label] + [f"- {inline_text(text)}" for text in items]
     return lines
+
+def _pa_status_line(label, record, suffix=""):
+    status = record.get("status") or "none"
+    human = " · needs human review" if record.get("needs_human") else ""
+    return f"**{label}:** `{clean(status)}`{human}{suffix}"
+
+
+def load_trusted_jira_context():
+    """URLs, failed fetches, and omitted keys from the host Jira snapshot."""
+    empty = {"urls": {}, "failed": [], "omitted": []}
+    config_dir = os.environ.get("FULLSEND_CONFIG_DIR") or ""
+    if not config_dir:
+        return empty
+    path = os.path.join(config_dir, ".run", "jira.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError, TypeError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+
+    issues = data.get("issues")
+    if not isinstance(issues, list):
+        issues = []
+
+    entries = []
+    if data.get("key"):
+        entries.append(data)
+    entries.extend(issue for issue in issues if isinstance(issue, dict))
+    urls = {
+        str(issue.get("key")): str(issue.get("url") or "")
+        for issue in entries
+        if issue.get("key")
+    }
+
+    failed = []
+    seen_failed = set()
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.get("status") != "error":
+            continue
+        key = str(issue.get("key") or "").strip()
+        if not key or key in seen_failed:
+            continue
+        seen_failed.add(key)
+        failed.append({
+            "key": key,
+            "reason": str(issue.get("reason") or "error"),
+        })
+
+    omitted = []
+    seen_omitted = set()
+    raw_omitted = data.get("omitted_keys")
+    if isinstance(raw_omitted, list):
+        for item in raw_omitted:
+            key = str(item or "").strip()
+            if not key or key in seen_omitted:
+                continue
+            seen_omitted.add(key)
+            omitted.append(key)
+
+    return {"urls": urls, "failed": failed, "omitted": omitted}
+
+
+TRUSTED_JIRA = load_trusted_jira_context()
+TRUSTED_JIRA_ISSUES = TRUSTED_JIRA["urls"]
+
+
+def trusted_jira_issue_url(key):
+    url = TRUSTED_JIRA_ISSUES.get(key, "")
+    if not url:
+        return ""
+    parsed = urlsplit(url)
+    expected_path = f"/browse/{quote(key, safe='')}"
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != expected_path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return ""
+    return url
+
+
+def _pa_key_label(key):
+    """Safe label for a trusted Jira key. Invalid shapes are omitted, never echoed."""
+    key = str(key or "").strip()
+    if not key or not JIRA_KEY_RE.fullmatch(key):
+        return ""
+    url = trusted_jira_issue_url(key)
+    return f"[{key}]({url})" if url else f"`{code_span_text(key)}`"
+
+
+class PaIssueKeyResolver:
+    """Map untrusted issues[] entries onto keys from the host Jira snapshot.
+
+    Match a well-formed key, then its URL. Fall back to a lone unclaimed
+    snapshot key only when the snapshot holds a single distinct key, key-only
+    failure entries included, and the reported key is unusable, so masked or
+    truncated metadata still renders. A well-formed key that contradicts an
+    existing snapshot is never swapped for a different issue, a key absent
+    from an existing snapshot is never published even when it is well formed,
+    and a key outside ``JIRA_KEY_RE`` is never returned.
+    """
+
+    def __init__(self):
+        # Every well-formed key in the snapshot, including key-only entries
+        # whose fetch failed, so snapshot absence stays distinguishable from
+        # the absence of URL-bearing keys.
+        self.snapshot_keys = {
+            key for key in TRUSTED_JIRA_ISSUES if JIRA_KEY_RE.fullmatch(key)
+        }
+        # URL-bearing snapshot keys, the only candidates for URL recovery.
+        self.url_keys = [
+            key for key in TRUSTED_JIRA_ISSUES
+            if JIRA_KEY_RE.fullmatch(key) and trusted_jira_issue_url(key)
+        ]
+        self.claimed = set()
+
+    def _claim(self, key):
+        if key in self.snapshot_keys and key not in self.claimed:
+            self.claimed.add(key)
+            return key
+        return ""
+
+    def resolve(self, issue):
+        if not isinstance(issue, dict):
+            return ""
+        raw = str(issue.get("key") or "").strip()
+        well_formed = bool(JIRA_KEY_RE.fullmatch(raw))
+        if well_formed and self._claim(raw):
+            return raw
+        if well_formed and self.snapshot_keys:
+            # A well-formed key outside an existing snapshot contradicts it;
+            # never borrow a different issue via URL recovery.
+            return ""
+        url = str(issue.get("url") or "").strip()
+        if url:
+            for candidate in self.url_keys:
+                if candidate in self.claimed:
+                    continue
+                if trusted_jira_issue_url(candidate) == url:
+                    return self._claim(candidate)
+        if not well_formed and len(self.snapshot_keys) == 1:
+            # Only a snapshot holding exactly one distinct key, key-only
+            # failures included, may resolve an unusable key to itself.
+            return self._claim(next(iter(self.snapshot_keys)))
+        # With no snapshot, a well-formed key is still safe to display.
+        return raw if well_formed and not self.snapshot_keys else ""
+
+
+def render_product_ask_evaluation_limits():
+    """Surface snapshot fetch failures and omitted keys in the published review."""
+    failed = TRUSTED_JIRA["failed"]
+    omitted = TRUSTED_JIRA["omitted"]
+    if not failed and not omitted:
+        return []
+    lines = [
+        "",
+        "**Evaluation limits:** Product-ask covered only the issues that could be fetched. The following linked issues were not evaluated:",
+        "",
+    ]
+    for item in failed:
+        label = _pa_key_label(item["key"])
+        if label:
+            lines.append(
+                f"- {label} — could not fetch (`{code_span_text(item['reason'])}`)"
+            )
+    for key in omitted:
+        label = _pa_key_label(key)
+        if label:
+            lines.append(f"- {label} — omitted (10-key cap)")
+    lines.append("")
+    return lines
+
+
+def _render_pa_block(issue, suffix=""):
+    lines = [_pa_status_line("Status", issue, suffix), ""]
+    if issue.get("aligned"):
+        lines += ["Aligned:"] + prose_bullet_lines(issue["aligned"]) + [""]
+    if issue.get("mismatched"):
+        lines += ["Mismatched:"] + prose_bullet_lines(issue["mismatched"]) + [""]
+    return lines
+
 
 def render_product_ask_section(pa):
     if not pa or (pa.get("status") or "none") == "none":
         return []
-    status = pa.get("status") or "none"
+    issues = pa.get("issues") if isinstance(pa.get("issues"), list) else []
+    ok_issues = [i for i in issues if (i.get("status") or "none") != "none"]
+    resolver = PaIssueKeyResolver()
     lines = ["", "## Product ask", ""]
-    human = " · needs human review" if pa.get("needs_human") else ""
-    lines.append(f"**Status:** `{clean(status)}`{human}")
-    lines.append("")
-    if pa.get("aligned"):
-        lines += ["Aligned:"] + [f"- {clean(item)}" for item in pa["aligned"]] + [""]
-    if pa.get("mismatched"):
-        lines += ["Mismatched:"] + [f"- {clean(item)}" for item in pa["mismatched"]] + [""]
+    if len(ok_issues) > 1:
+        lines += [_pa_status_line("Overall", pa), ""]
+        for issue in ok_issues:
+            link = _pa_key_label(resolver.resolve(issue))
+            lines += [f"### {link or 'Linked Jira issue'}", ""]
+            lines += _render_pa_block(issue)
+    elif len(ok_issues) == 1:
+        link = _pa_key_label(resolver.resolve(ok_issues[0]))
+        lines += _render_pa_block(ok_issues[0], suffix=f" · {link}" if link else "")
+    else:
+        lines += _render_pa_block(pa)
+    lines += render_product_ask_evaluation_limits()
     return lines
 
 def render_body(result, previous_md, action):
@@ -1210,7 +2192,7 @@ def render_body(result, previous_md, action):
         lines += ["", f"This review did not complete (`{reason}`). Do not treat this head as reviewed."]
         return "\n".join(lines).rstrip() + "\n"
 
-    lines += ["", "## Change summary", "", clean(result.get("change_summary"))]
+    lines += ["", "## Change summary", "", inline_text(result.get("change_summary"))]
     lines += ["", "## Status", "", status_headline(result, action)]
     lines += render_signal_table(result)
     lines += render_checks_table(result)
@@ -1226,12 +2208,14 @@ def render_body(result, previous_md, action):
                 origin = ""
                 if finding.get("dimension"):
                     origin_ids = producer_ids(finding)
-                    origin_shown = ", ".join(dimension_label(i) for i in origin_ids) or clean(finding.get("dimension"))
+                    origin_shown = ", ".join(
+                        code_span_text(dimension_label(i)) for i in origin_ids
+                    ) or code_span_text(finding.get("dimension"))
                     origin = f"`{origin_shown}` · "
                 tail = " · actionable follow-up" if is_actionable_nit(finding) else ""
-                lines += ["", f"- {origin}**{clean(finding.get('category'))}** ({loc}){tail}: {clean(finding.get('description'))}"]
+                lines += ["", f"- {origin}**{inline_text(finding.get('category'))}** ({loc}){tail}: {inline_text(finding.get('description'))}"]
                 if finding.get("why"):
-                    lines.append(f"  - Why: {clean(finding.get('why'))}")
+                    lines.append(f"  - Why: {inline_text(finding.get('why'))}")
                 if finding.get("remediation"):
                     lines += render_remediation(finding.get("remediation"))
         lines += render_justified_section(result)
@@ -1269,10 +2253,10 @@ def render_body(result, previous_md, action):
     if inspected.get("summary") or inspected.get("could_not_verify"):
         details_body += ["### Evidence inspected", ""]
         if inspected.get("summary"):
-            details_body += [clean(inspected["summary"]), ""]
+            details_body += [inline_text(inspected["summary"]), ""]
         if inspected.get("could_not_verify"):
             details_body += ["**Could not verify:**", ""]
-            details_body += [f"- {clean(i)}" for i in inspected["could_not_verify"]] + [""]
+            details_body += [f"- {inline_text(i)}" for i in inspected["could_not_verify"]] + [""]
 
     sig = clean(os.environ.get("REVIEW_SIGNALS"))
     if sig:
@@ -1313,6 +2297,7 @@ result = normalize_protected_findings(result)
 result = reconcile_producers(result)
 result = apply_host_todos(result)
 result = augment_inspected(result)
+result = compute_product_ask_overall(result)
 result = apply_product_ask(result)
 result = cap_confidence(result)
 action, _reason = compute_action(result)
@@ -1324,6 +2309,22 @@ if body:
 json.dump(out, sys.stdout, indent=2)
 sys.stdout.write("\n")
 PY
+}
+
+# Usage: find_personas_file <agent-result.json>
+# Prints the runner's persona manifest path, or nothing. The runner writes it
+# to runDir, which is this script's CWD and two or three levels above the
+# result file.
+find_personas_file() {
+  local result_dir candidate
+  result_dir="$(dirname "$1")"
+  for candidate in "${FULLSEND_PERSONAS_FILE:-}" personas.json \
+    "${result_dir}/../../personas.json" "${result_dir}/../personas.json"; do
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
 }
 
 # Fullsend v0.39.0 has no switch for summary-only review findings. Its CLI
@@ -1344,8 +2345,15 @@ prepare_summary_only_result() {
 #
 # From fullsend-ai/agents scripts/post-review.src.sh
 # @ ce2eedd097dcccf17e29f4a7cd337ec4d95d7194. Local changes:
-#   - The allowed categories are the registry rows' `categories`, not a fixed
-#     list, so ODH dimensions project too.
+#   - The allowed categories are the reviewer rows' `categories` in the
+#     registry, limited to scripts/stock/review-categories.json when that file
+#     exists, so the stock pre-script accepts every projected finding.
+#   - Findings in a host adapter's category (CodeRabbit) are left out. The
+#     stock pre-script rejects a marker holding a category it does not know,
+#     and the adapter reports them again on every run.
+#   - Each finding carries `id`, `actionable` and `dimension` when the result
+#     has them, and the marker carries the posted `action`, in the layout the
+#     stock scripts write. Dispositions are not written.
 #   - A findings row that result.producers records as dispatched but not
 #     returned counts as a failed dimension, because the agent may already
 #     have dropped its info-tier failure finding.
@@ -1362,11 +2370,17 @@ prepare_summary_only_result() {
 append_prior_findings_projection() {
   local result_file="$1" unfiltered_file="$2"
   local registry="${FULLSEND_CONFIG_DIR:-}/dimensions.json"
+  local stock_categories="${FULLSEND_CONFIG_DIR:-}/scripts/stock/review-categories.json"
   local projection="" marker encoded
+  [[ -f "${stock_categories}" ]] || stock_categories=/dev/null
   if [[ -f "${registry}" && -f "${unfiltered_file}" ]]; then
-    projection="$(jq -c --slurpfile unfiltered "${unfiltered_file}" --slurpfile registry "${registry}" '
+    projection="$(jq -c --slurpfile unfiltered "${unfiltered_file}" --slurpfile registry "${registry}" \
+      --slurpfile stock "${stock_categories}" '
+      def host_category:
+        IN($registry[0].dimensions[] | select(.kind == "cli-adapter") | .categories[]?);
       def allowed_category:
-        IN($registry[0].dimensions[].categories[]?);
+        IN($registry[0].dimensions[] | select(.kind != "cli-adapter") | .categories[]?)
+        and (($stock | length) == 0 or (($stock[0] | type) == "array" and IN($stock[0][])));
       def safe_path:
         type == "string" and length > 0 and . != "N/A" and
         test("^[ -~]+$") and
@@ -1382,7 +2396,7 @@ append_prior_findings_projection() {
       def projectable:
         (.category | type == "string" and allowed_category) and (.file == "N/A" or (.file | safe_path));
       (.findings // []) as $findings
-      | ($findings | map(select(non_dimensional_finding | not))) as $dimension_findings
+      | ($findings | map(select((non_dimensional_finding or (.category | host_category)) | not))) as $dimension_findings
       | [$registry[0].dimensions[]
           | select(.kind != "cli-adapter" and ((.output // "findings") == "findings"))
           | .id] as $findings_rows
@@ -1401,12 +2415,20 @@ append_prior_findings_projection() {
           and ($dimension_failed | not) then
           {
             version: 2,
+            action,
             findings: [
               $dimension_findings[]
               | {severity, category, file: (if .file == "N/A" then null else .file end)}
-                + (if (.line | type) == "number" then {line} else {} end)
+                + (if (.id | type == "string" and test("^f_[A-Za-z0-9]+$")) then {id} else {} end)
+                + (if (.line | type == "number" and . > 0 and floor == .) then {line} else {} end)
+                + (if (.actionable | type) == "boolean" then {actionable} else {} end)
+                + (if (.dimension | type == "string" and test("^[a-z0-9][a-z0-9-]{0,63}$")) then {dimension} else {} end)
             ]
           }
+          # The stock pre-script rejects a marker with a repeated id.
+          | .findings |= reduce .[] as $f ([];
+              . as $seen
+              | . + [if ($f.id != null and any($seen[]; .id == $f.id)) then $f | del(.id) else $f end])
         else empty
         end
     ' "${result_file}")" || {
@@ -1414,8 +2436,9 @@ append_prior_findings_projection() {
       projection=""
     }
   fi
-  # Nothing to project: still write a marker, one whose payload pre-review.sh
-  # rejects, so the comment never lacks the single marker it is checked for.
+  # Nothing to project: still write a marker, one whose payload the stock
+  # pre-script rejects, so the next run is a full first review and text in the
+  # body can never stand in for a marker the host did not write.
   [[ -n "${projection}" ]] || projection='{"version":2,"withheld":true}'
   encoded="$(printf '%s' "${projection}" | base64 | tr -d '\n')"
   marker="<!-- fullsend:review-findings-v2:${encoded} -->"
@@ -1453,6 +2476,35 @@ run_self_test() {
   tmp=$(mktemp -d)
   cleanup_self_test() { rm -rf "${tmp}"; }
   trap cleanup_self_test EXIT
+
+  # Every adapter credential the registry names reaches this script through
+  # env.runner, so the unset line at the top must list it. Only the top-level
+  # env.runner mapping counts: a mention elsewhere in the harness does not.
+  # The workflow hands them over in one secret (FULLSEND_GITHUB_RUNNER_SECRETS).
+  local cred_name unset_line runner_env shim missing_creds=""
+  shim="${POST_REVIEW_SCRIPT_DIR}/../../.github/workflows/fullsend.yaml"
+  unset_line="$(grep -m1 -E '^unset CODERABBIT_API_KEY' "${POST_REVIEW_SCRIPT_DIR}/post-review.sh")"
+  runner_env="$(awk '
+    /^[^[:space:]#]/ { in_env = ($0 ~ /^env:[[:space:]]*$/); in_runner = 0; next }
+    in_env && /^  [^[:space:]#]/ { in_runner = ($0 ~ /^  runner:[[:space:]]*$/); next }
+    in_runner && /^    [A-Z]/ { print }
+  ' "${POST_REVIEW_SCRIPT_DIR}/../harness/review.yaml")"
+  while IFS= read -r cred_name; do
+    [[ -n "${cred_name}" ]] || continue
+    if [[ " ${unset_line#unset } " != *" ${cred_name} "* ]] \
+      || ! grep -qxF "    ${cred_name}: \"\${${cred_name}}\"" <<<"${runner_env}" \
+      || { [[ -f "${shim}" ]] && ! grep -qF 'FULLSEND_GITHUB_RUNNER_SECRETS: ${{ secrets.FULLSEND_GITHUB_RUNNER_SECRETS }}' "${shim}"; }; then
+      missing_creds+=" ${cred_name}"
+    fi
+  done < <(jq -r '[.dimensions[] | select(.kind == "cli-adapter") | .host.credentials // {}
+    | .url_env, .username_env, .token_env | select(type == "string" and . != "")] | unique[]' \
+    "${POST_REVIEW_SCRIPT_DIR}/../dimensions.json")
+  if [[ -z "${unset_line}" || -n "${missing_creds}" ]]; then
+    echo "FAIL adapter credentials: not unset here, not in env.runner, or the workflow does not pass the runner secrets:${missing_creds:- (no unset line)}" >&2
+    fail=1
+  else
+    echo "PASS adapter credentials are unset before any child"
+  fi
 
   # Relative FULLSEND_DIR must still resolve when CWD is not the workspace
   # (post_script runs in runDir). Without this, labels/Type/Result collapse.
@@ -1520,9 +2572,33 @@ run_self_test() {
 
   render_fixture needs-human comment "{${common},\"findings\":[],\"todo\":[{\"category\":\"judgement\",\"text\":\"Decide which product scope this PR implements.\"}],\"product_ask\":{\"status\":\"mismatch-justified\",\"needs_human\":true}}"
 
-  local pa body
+  local jira_config body
+  jira_config="${tmp}/jira-config"
+  mkdir -p "${jira_config}/.run"
+  write_default_jira_snapshot() {
+    cat > "${jira_config}/.run/jira.json" <<'JSON'
+{
+  "key": "RHOAIENG-100655",
+  "url": "https://jira.example.test/browse/RHOAIENG-100655",
+  "issues": [
+    {"key": "RHOAIENG-100580", "url": "https://jira.example.test/browse/RHOAIENG-100580"},
+    {"key": "RHOAIENG-100583", "url": "https://jira.example.test/browse/RHOAIENG-100583"},
+    {"key": "RHOAIENG-100655", "url": "https://jira.example.test/browse/RHOAIENG-100655"},
+    {"key": "bad]\n[more]\n@org/team\n<script>alert(1)</script>", "url": "https://jira.example.test/browse/RHOAIENG-100655"}
+  ]
+}
+JSON
+  }
+  write_default_jira_snapshot
+  render_jira_fixture() {
+    local name="$1"
+    (
+      export FULLSEND_CONFIG_DIR="${jira_config}"
+      transform_review_result "${tmp}/${name}.json" > "${tmp}/${name}-out.json"
+    )
+  }
   printf '%s' "{${common},\"product_ask\":{\"status\":\"mismatch-unjustified\",\"mismatched\":[\"Jira asks for export\"]}}" > "${tmp}/product-ask.json"
-  transform_review_result "${tmp}/product-ask.json" > "${tmp}/product-ask-out.json"
+  render_jira_fixture product-ask
   if ! jq -e '.action == "comment" and .risk.level == "low" and .confidence.level == "low" and (.confidence.why | contains("Jira"))' "${tmp}/product-ask-out.json" >/dev/null; then
     echo "FAIL product-ask: want confidence floor only (risk unchanged) + comment" >&2
     fail=1
@@ -1533,8 +2609,354 @@ run_self_test() {
     echo "PASS product-ask floors confidence only; risk unchanged"
   fi
 
-  # Gate matrix: any medium finding → request-changes (no advisory carve-out).
-  render_fixture medium-blocks request-changes "{${common},\"findings\":[{\"severity\":\"medium\",\"category\":\"style-conventions\",\"file\":\"a.ts\",\"line\":1,\"description\":\"Naming drift.\",\"why\":\"Public export renamed without alias.\"}],\"product_ask\":{\"status\":\"none\"}}"
+  # Multi-issue product-ask: overall computed from per-issue statuses.
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-100580\",\"url\":\"https://jira.example.test/browse/RHOAIENG-100580\",\"status\":\"aligned\",\"aligned\":[\"Export feature matches.\"]},{\"key\":\"RHOAIENG-100583\",\"url\":\"https://jira.example.test/browse/RHOAIENG-100583\",\"status\":\"mismatch-unjustified\",\"mismatched\":[\"Jira asks for import.\"],\"needs_human\":true}]}}" > "${tmp}/pa-multi.json"
+  render_jira_fixture pa-multi
+  body=$(jq -r .body "${tmp}/pa-multi-out.json")
+  if ! grep -qF '**Overall:** `mismatch-unjustified` · needs human review' <<<"${body}"; then
+    echo "FAIL pa-multi: Overall line missing or wrong" >&2
+    fail=1
+  elif ! grep -qF '### [RHOAIENG-100580](https://jira.example.test/browse/RHOAIENG-100580)' <<<"${body}"; then
+    echo "FAIL pa-multi: first issue heading missing" >&2
+    fail=1
+  elif ! grep -qF '### [RHOAIENG-100583](https://jira.example.test/browse/RHOAIENG-100583)' <<<"${body}"; then
+    echo "FAIL pa-multi: second issue heading missing" >&2
+    fail=1
+  elif ! jq -e '.confidence.level == "low"' "${tmp}/pa-multi-out.json" >/dev/null; then
+    echo "FAIL pa-multi: confidence floor not applied from computed overall" >&2
+    fail=1
+  else
+    echo "PASS pa-multi: overall computed, per-issue headings, confidence floored"
+  fi
+
+  # Single-issue product-ask: key linked on status line, no Overall.
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-100655\",\"url\":\"https://jira.example.test/browse/RHOAIENG-100655\",\"status\":\"aligned\",\"aligned\":[\"Fixes the bug.\"]}]}}" > "${tmp}/pa-single.json"
+  render_jira_fixture pa-single
+  body=$(jq -r .body "${tmp}/pa-single-out.json")
+  if grep -qF '**Overall:**' <<<"${body}"; then
+    echo "FAIL pa-single: Overall line should not appear for one issue" >&2
+    fail=1
+  elif ! grep -qF '[RHOAIENG-100655](https://jira.example.test/browse/RHOAIENG-100655)' <<<"${body}"; then
+    echo "FAIL pa-single: key link missing on status line" >&2
+    fail=1
+  elif ! grep -qF '**Status:** `aligned`' <<<"${body}"; then
+    echo "FAIL pa-single: Status line missing" >&2
+    fail=1
+  else
+    echo "PASS pa-single: single issue renders linked status, no Overall"
+  fi
+
+  # Hostile issue metadata cannot escape the link or inject Markdown/HTML.
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-100655\",\"url\":\"https://example.com)\\n\\n@org/team\\n\\n[more](https://example.com\",\"status\":\"aligned\",\"aligned\":[\"Safe link only.\"]},{\"key\":\"bad]\\n[more]\\n@org/team\\n<script>alert(1)</script>\",\"url\":\"https://example.com\",\"status\":\"aligned\",\"aligned\":[\"Hostile key only.\"]}]}}" > "${tmp}/pa-hostile.json"
+  render_jira_fixture pa-hostile
+  body=$(jq -r .body "${tmp}/pa-hostile-out.json")
+  if ! grep -qF '[RHOAIENG-100655](https://jira.example.test/browse/RHOAIENG-100655)' <<<"${body}"; then
+    echo "FAIL pa-hostile: trusted issue link missing" >&2
+    fail=1
+  elif grep -qF -e 'https://example.com)' \
+                -e '[more](https://example.com' \
+                -e '<script>' \
+                -e '@org/team' <<<"${body}"; then
+    echo "FAIL pa-hostile: hostile URL, Markdown, HTML, or mention reached the body" >&2
+    fail=1
+  elif grep -qF 'bad]' <<<"${body}"; then
+    echo "FAIL pa-hostile: hostile key reached the body" >&2
+    fail=1
+  elif ! grep -qF '### Linked Jira issue' <<<"${body}"; then
+    echo "FAIL pa-hostile: unresolved issue heading missing" >&2
+    fail=1
+  else
+    echo "PASS pa-hostile: trusted link kept, hostile key omitted, metadata escaped"
+  fi
+
+  # Hostile aligned/mismatched prose: strip comments before mention suppression,
+  # escape HTML, keep newlines. Comment-separated @mentions must not go live.
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-100655\",\"url\":\"https://jira.example.test/browse/RHOAIENG-100655\",\"status\":\"aligned\",\"aligned\":[\"Matches.\\n\\n<!-- hide -->\\n## Injected\\n<script>alert(1)</script>\\n@<!-- conceal -->org/team\"],\"mismatched\":[\"Drift.\\n<!-- x -->\\n<details>\\n@<!-- hide -->alice\"]}]}}" > "${tmp}/pa-prose.json"
+  render_jira_fixture pa-prose
+  body=$(jq -r .body "${tmp}/pa-prose-out.json")
+  if ! grep -qF 'Matches.' <<<"${body}"; then
+    echo "FAIL pa-prose: aligned prose missing" >&2
+    fail=1
+  elif grep -qF -e '<!-- hide -->' -e '<!-- x -->' -e '<!-- conceal -->' <<<"${body}"; then
+    echo "FAIL pa-prose: injected HTML comment leaked into body" >&2
+    fail=1
+  elif grep -qF '<script>' <<<"${body}"; then
+    echo "FAIL pa-prose: raw script tag leaked into body" >&2
+    fail=1
+  elif ! grep -qF '&lt;script>alert(1)&lt;/script>' <<<"${body}"; then
+    echo "FAIL pa-prose: HTML was not escaped" >&2
+    fail=1
+  elif ! grep -qF '&lt;details>' <<<"${body}"; then
+    echo "FAIL pa-prose: mismatched HTML was not escaped" >&2
+    fail=1
+  elif grep -qF 'Matches. ## Injected' <<<"${body}"; then
+    echo "FAIL pa-prose: newlines were flattened into a single line" >&2
+    fail=1
+  elif ! grep -qE '^  ## Injected$' <<<"${body}"; then
+    echo "FAIL pa-prose: multi-line prose was not kept as list continuation" >&2
+    fail=1
+  elif grep -qF -e '@org/team' -e '@alice' <<<"${body}"; then
+    echo "FAIL pa-prose: comment-separated mention became a live @mention" >&2
+    fail=1
+  else
+    echo "PASS pa-prose: comments stripped, HTML escaped, newlines kept, mentions suppressed"
+  fi
+
+  # Legacy product-ask without issues: same block as before.
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"aligned\":[\"Matches.\"]}}" > "${tmp}/pa-legacy.json"
+  transform_review_result "${tmp}/pa-legacy.json" > "${tmp}/pa-legacy-out.json"
+  body=$(jq -r .body "${tmp}/pa-legacy-out.json")
+  if grep -qF '**Overall:**' <<<"${body}"; then
+    echo "FAIL pa-legacy: Overall line should not appear without issues" >&2
+    fail=1
+  elif ! grep -qF '**Status:** `aligned`' <<<"${body}"; then
+    echo "FAIL pa-legacy: Status line missing" >&2
+    fail=1
+  elif ! grep -qF 'Matches.' <<<"${body}"; then
+    echo "FAIL pa-legacy: aligned items missing" >&2
+    fail=1
+  else
+    echo "PASS pa-legacy: legacy single-key renders unchanged"
+  fi
+
+  # Mixed fetch success/failure: aligned evaluation must still show fetch limits.
+  cat > "${jira_config}/.run/jira.json" <<'JSON'
+{
+  "id": "jira-snapshot",
+  "status": "ok",
+  "key": "RHOAIENG-100580",
+  "url": "https://jira.example.test/browse/RHOAIENG-100580",
+  "issues": [
+    {"key": "RHOAIENG-100580", "url": "https://jira.example.test/browse/RHOAIENG-100580", "summary": "Export"},
+    {"key": "RHOAIENG-100583", "status": "error", "reason": "http-404"},
+    {"key": "RHOAIENG-100655", "status": "error", "reason": "URLError"}
+  ]
+}
+JSON
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-100580\",\"url\":\"https://jira.example.test/browse/RHOAIENG-100580\",\"status\":\"aligned\",\"aligned\":[\"Export feature matches.\"]}]}}" > "${tmp}/pa-partial.json"
+  render_jira_fixture pa-partial
+  body=$(jq -r .body "${tmp}/pa-partial-out.json")
+  if ! grep -qF '**Status:** `aligned`' <<<"${body}"; then
+    echo "FAIL pa-partial: aligned status missing" >&2
+    fail=1
+  elif ! grep -qF '**Evaluation limits:**' <<<"${body}"; then
+    echo "FAIL pa-partial: evaluation-limit notice missing" >&2
+    fail=1
+  elif ! grep -qF '`RHOAIENG-100583` — could not fetch (`http-404`)' <<<"${body}"; then
+    echo "FAIL pa-partial: failed key/reason not rendered" >&2
+    fail=1
+  elif ! grep -qF '`RHOAIENG-100655` — could not fetch (`URLError`)' <<<"${body}"; then
+    echo "FAIL pa-partial: second failed key not rendered" >&2
+    fail=1
+  else
+    echo "PASS pa-partial: mixed fetch failure surfaces evaluation limits"
+  fi
+
+  # Over-cap omitted keys: notice even when every fetched issue aligned.
+  cat > "${jira_config}/.run/jira.json" <<'JSON'
+{
+  "id": "jira-snapshot",
+  "status": "ok",
+  "key": "RHOAIENG-100580",
+  "url": "https://jira.example.test/browse/RHOAIENG-100580",
+  "issues": [
+    {"key": "RHOAIENG-100580", "url": "https://jira.example.test/browse/RHOAIENG-100580", "summary": "Export"}
+  ],
+  "omitted_keys": ["RHOAIENG-100511", "RHOAIENG-100512"]
+}
+JSON
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-100580\",\"url\":\"https://jira.example.test/browse/RHOAIENG-100580\",\"status\":\"aligned\",\"aligned\":[\"Export feature matches.\"]}]}}" > "${tmp}/pa-omitted.json"
+  render_jira_fixture pa-omitted
+  body=$(jq -r .body "${tmp}/pa-omitted-out.json")
+  if ! grep -qF '**Evaluation limits:**' <<<"${body}"; then
+    echo "FAIL pa-omitted: evaluation-limit notice missing" >&2
+    fail=1
+  elif ! grep -qF '`RHOAIENG-100511` — omitted (10-key cap)' <<<"${body}"; then
+    echo "FAIL pa-omitted: first omitted key missing" >&2
+    fail=1
+  elif ! grep -qF '`RHOAIENG-100512` — omitted (10-key cap)' <<<"${body}"; then
+    echo "FAIL pa-omitted: second omitted key missing" >&2
+    fail=1
+  elif grep -qF 'could not fetch' <<<"${body}"; then
+    echo "FAIL pa-omitted: fetch-failure wording should not appear" >&2
+    fail=1
+  else
+    echo "PASS pa-omitted: over-cap keys surface evaluation limits"
+  fi
+
+  # An issues[].key that is not a valid key never reaches the body; the label
+  # comes from the host snapshot instead.
+  cat > "${jira_config}/.run/jira.json" <<'JSON'
+{
+  "key": "RHOAIENG-100828",
+  "url": "https://jira.example.test/browse/RHOAIENG-100828",
+  "issues": [
+    {"key": "RHOAIENG-100828", "url": "https://jira.example.test/browse/RHOAIENG-100828", "summary": "Sticky key"}
+  ]
+}
+JSON
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOA...\",\"url\":\"***/browse/RHOAIENG-100828\",\"status\":\"aligned\",\"aligned\":[\"Fixes the bug.\"]}]}}" > "${tmp}/pa-truncated.json"
+  render_jira_fixture pa-truncated
+  body=$(jq -r .body "${tmp}/pa-truncated-out.json")
+  if ! grep -qF '[RHOAIENG-100828](https://jira.example.test/browse/RHOAIENG-100828)' <<<"${body}"; then
+    echo "FAIL pa-truncated: snapshot key was not linked" >&2
+    fail=1
+  elif grep -qF -e 'RHOA...' -e '***' <<<"${body}"; then
+    echo "FAIL pa-truncated: truncated or masked key reached the body" >&2
+    fail=1
+  elif ! grep -qF '**Status:** `aligned` · [RHOAIENG-100828]' <<<"${body}"; then
+    echo "FAIL pa-truncated: status line lost the snapshot link" >&2
+    fail=1
+  else
+    echo "PASS pa-truncated: snapshot key replaces a truncated/masked key"
+  fi
+
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"***\",\"url\":\"***/browse/RHOAIENG-100828\",\"status\":\"aligned\",\"aligned\":[\"Fixes the bug.\"]}]}}" > "${tmp}/pa-masked.json"
+  render_jira_fixture pa-masked
+  body=$(jq -r .body "${tmp}/pa-masked-out.json")
+  if ! grep -qF '[RHOAIENG-100828](https://jira.example.test/browse/RHOAIENG-100828)' <<<"${body}"; then
+    echo "FAIL pa-masked: snapshot key was not linked" >&2
+    fail=1
+  elif grep -qF '***' <<<"${body}"; then
+    echo "FAIL pa-masked: masked key reached the body" >&2
+    fail=1
+  else
+    echo "PASS pa-masked: snapshot key replaces a masked key"
+  fi
+
+  # A well-formed key that contradicts the snapshot must not borrow the
+  # snapshot key. Only masked or truncated metadata may use the fallback.
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-999999\",\"status\":\"aligned\",\"aligned\":[\"Fixes the bug.\"]}]}}" > "${tmp}/pa-conflict.json"
+  render_jira_fixture pa-conflict
+  body=$(jq -r .body "${tmp}/pa-conflict-out.json")
+  if grep -qF 'RHOAIENG-100828' <<<"${body}"; then
+    echo "FAIL pa-conflict: conflicting key was relabeled as the snapshot key" >&2
+    fail=1
+  elif grep -qF 'RHOAIENG-999999' <<<"${body}"; then
+    echo "FAIL pa-conflict: unknown well-formed key reached the body" >&2
+    fail=1
+  elif ! grep -qF '**Status:** `aligned`' <<<"${body}"; then
+    echo "FAIL pa-conflict: status line missing" >&2
+    fail=1
+  else
+    echo "PASS pa-conflict: well-formed key never borrows the snapshot key"
+  fi
+
+  # The same conflict carrying the snapshot issue's URL must not be recovered
+  # through URL matching: a well-formed key that cannot be claimed is final.
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-999999\",\"url\":\"https://jira.example.test/browse/RHOAIENG-100828\",\"status\":\"aligned\",\"aligned\":[\"Fixes the bug.\"]}]}}" > "${tmp}/pa-conflict-url.json"
+  render_jira_fixture pa-conflict-url
+  body=$(jq -r .body "${tmp}/pa-conflict-url-out.json")
+  if grep -qF 'RHOAIENG-100828' <<<"${body}"; then
+    echo "FAIL pa-conflict-url: conflicting key was relabeled via URL recovery" >&2
+    fail=1
+  elif grep -qF 'RHOAIENG-999999' <<<"${body}"; then
+    echo "FAIL pa-conflict-url: unknown well-formed key reached the body" >&2
+    fail=1
+  elif ! grep -qF '**Status:** `aligned`' <<<"${body}"; then
+    echo "FAIL pa-conflict-url: status line missing" >&2
+    fail=1
+  else
+    echo "PASS pa-conflict-url: URL recovery cannot relabel a claimed-key conflict"
+  fi
+
+  # In a multi-issue snapshot, an exact match claims one key; a later
+  # malformed entry without a matching URL must stay unlabeled rather than
+  # inherit the snapshot's remaining key.
+  cat > "${jira_config}/.run/jira.json" <<'JSON'
+{
+  "issues": [
+    {"key": "RHOAIENG-100828", "url": "https://jira.example.test/browse/RHOAIENG-100828", "summary": "First"},
+    {"key": "RHOAIENG-100829", "url": "https://jira.example.test/browse/RHOAIENG-100829", "summary": "Second"}
+  ]
+}
+JSON
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-100828\",\"url\":\"https://jira.example.test/browse/RHOAIENG-100828\",\"status\":\"aligned\",\"aligned\":[\"First matches.\"]},{\"key\":\"***\",\"status\":\"aligned\",\"aligned\":[\"Second matches.\"]}]}}" > "${tmp}/pa-multi-orphan.json"
+  render_jira_fixture pa-multi-orphan
+  body=$(jq -r .body "${tmp}/pa-multi-orphan-out.json")
+  if ! grep -qF '[RHOAIENG-100828](https://jira.example.test/browse/RHOAIENG-100828)' <<<"${body}"; then
+    echo "FAIL pa-multi-orphan: exact-match key lost its link" >&2
+    fail=1
+  elif grep -qF 'RHOAIENG-100829' <<<"${body}"; then
+    echo "FAIL pa-multi-orphan: malformed entry inherited the remaining snapshot key" >&2
+    fail=1
+  elif ! grep -qF '### Linked Jira issue' <<<"${body}"; then
+    echo "FAIL pa-multi-orphan: unresolved heading missing" >&2
+    fail=1
+  else
+    echo "PASS pa-multi-orphan: multi-issue snapshot does not exhaust into a malformed entry"
+  fi
+
+  # A key-only snapshot exists: a well-formed producer key that is absent from
+  # it must not be published as the evaluated ticket.
+  cat > "${jira_config}/.run/jira.json" <<'JSON'
+{
+  "issues": [
+    {"key": "RHOAIENG-100828", "summary": "Key-only host snapshot"}
+  ]
+}
+JSON
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"RHOAIENG-999999\",\"status\":\"aligned\",\"aligned\":[\"Fixes the bug.\"]}]}}" > "${tmp}/pa-keyonly.json"
+  render_jira_fixture pa-keyonly
+  body=$(jq -r .body "${tmp}/pa-keyonly-out.json")
+  if grep -qF 'RHOAIENG-999999' <<<"${body}"; then
+    echo "FAIL pa-keyonly: producer key outside a key-only snapshot reached the body" >&2
+    fail=1
+  elif ! grep -qF '**Status:** `aligned`' <<<"${body}"; then
+    echo "FAIL pa-keyonly: status line missing" >&2
+    fail=1
+  else
+    echo "PASS pa-keyonly: key-only snapshot still rejects keys it does not contain"
+  fi
+
+  # Mixed fetch success/failure: the snapshot holds two distinct keys, so an
+  # unusable producer key must stay unlabeled instead of taking the one key
+  # that happened to fetch.
+  cat > "${jira_config}/.run/jira.json" <<'JSON'
+{
+  "issues": [
+    {"key": "RHOAIENG-100580", "url": "https://jira.example.test/browse/RHOAIENG-100580", "summary": "Export"},
+    {"key": "RHOAIENG-100583", "status": "error", "reason": "http-404"}
+  ]
+}
+JSON
+  printf '%s' "{${common},\"product_ask\":{\"status\":\"aligned\",\"issues\":[{\"key\":\"***\",\"status\":\"aligned\",\"aligned\":[\"Fixes the bug.\"]}]}}" > "${tmp}/pa-mixed-unresolved.json"
+  render_jira_fixture pa-mixed-unresolved
+  body=$(jq -r .body "${tmp}/pa-mixed-unresolved-out.json")
+  if grep -qF '](https://jira.example.test/browse/RHOAIENG-100580)' <<<"${body}"; then
+    echo "FAIL pa-mixed-unresolved: unusable key inherited the only fetched snapshot key" >&2
+    fail=1
+  elif grep -qF '***' <<<"${body}"; then
+    echo "FAIL pa-mixed-unresolved: unusable key reached the body" >&2
+    fail=1
+  elif ! grep -qF '**Status:** `aligned`' <<<"${body}"; then
+    echo "FAIL pa-mixed-unresolved: status line missing" >&2
+    fail=1
+  else
+    echo "PASS pa-mixed-unresolved: mixed-success snapshot does not absorb an unusable key"
+  fi
+
+  # Restore the shared jira fixture for later tests that reuse render_jira_fixture.
+  write_default_jira_snapshot
+
+  # Gate matrix: below-bar findings defer to a human instead of blocking.
+  render_fixture judgment-findings comment "{${common},\"findings\":[{\"severity\":\"medium\",\"category\":\"style-conventions\",\"file\":\"a.ts\",\"line\":1,\"description\":\"Naming drift.\",\"why\":\"Public export renamed without alias.\",\"remediation\":\"Rename the export or add an alias.\"}],\"todo\":[{\"category\":\"findings\",\"text\":\"Rename the export or add an alias.\"}],\"product_ask\":{\"status\":\"none\"}}"
+  body=$(jq -r .body "${tmp}/judgment-findings-out.json")
+  if ! grep -Fq '**Needs human judgment** — 1 non-blocking finding.' <<<"${body}" ||
+     ! grep -q '### Medium (1)' <<<"${body}" ||
+     ! grep -q '## TODO' <<<"${body}" ||
+     ! grep -Fxq 'Findings' <<<"${body}"; then
+    echo "FAIL judgment-findings: status, severity group, or TODO missing" >&2
+    fail=1
+  else
+    echo "PASS below-bar review yields comment/needs-human and keeps the finding visible"
+  fi
+
+  # A blocking-severity finding still blocks when a judgment finding is present.
+  render_fixture blocking-plus-judgment request-changes "{${common},\"findings\":[{\"severity\":\"medium\",\"category\":\"style-conventions\",\"file\":\"a.ts\",\"description\":\"Naming drift.\",\"why\":\"Export renamed.\"},{\"severity\":\"high\",\"category\":\"logic-error\",\"file\":\"b.ts\",\"line\":4,\"description\":\"Crash.\",\"why\":\"Null dereference.\",\"remediation\":\"Guard the value.\"}],\"product_ask\":{\"status\":\"none\"}}"
+
+  # A failed readiness check still blocks when a judgment finding is present.
+  render_fixture judgment-plus-check request-changes "{${common},\"findings\":[{\"severity\":\"medium\",\"category\":\"style-conventions\",\"file\":\"a.ts\",\"description\":\"Naming drift.\",\"why\":\"Export renamed.\"}],\"checks\":[{\"id\":\"pr-description-review\",\"status\":\"fail\",\"summary\":\"Problem missing.\"}],\"producers\":{\"dispatched\":[\"pr-description-review\"],\"adapters\":[],\"skipped\":[],\"returned\":[\"pr-description-review\"],\"raised\":{},\"challenger\":{\"status\":\"skipped\",\"reason\":\"no findings to adjudicate\"}},\"product_ask\":{\"status\":\"none\"}}"
 
   # low/info may ride with approve.
   render_fixture low-rides-approve approve "{${common},\"findings\":[{\"severity\":\"low\",\"category\":\"style-conventions\",\"file\":\"a.ts\",\"description\":\"Minor naming nit.\",\"actionable\":true}],\"product_ask\":{\"status\":\"none\"}}"
@@ -1555,13 +2977,49 @@ run_self_test() {
     echo "PASS sticky Signal table includes risk and confidence"
   fi
 
+  # Compute the expected GitHub diff anchor rather than hardcoding a digest:
+  # a literal sha256 in a fixture reads like a live link and can drift from the
+  # path it is supposed to describe.
+  diff_anchor() {
+    python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "$1"
+  }
+  local a_anchor b_anchor
+  a_anchor="$(diff_anchor a.ts)"
+  b_anchor="$(diff_anchor b.ts)"
+
   body=$(jq -r .body "${tmp}/request-changes-out.json")
   if ! grep -Fq '**Waiting on author** — 1 blocking finding' <<<"${body}" ||
-     ! grep -Fq '[a.ts:12](https://github.com/o/r/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/a.ts#L12)' <<<"${body}"; then
-    echo "FAIL request-changes: status count or commit-pinned link missing" >&2
+     ! grep -Fq "[a.ts:12](https://github.com/o/r/pull/1/changes#diff-${a_anchor}R12)" <<<"${body}" ||
+     grep -Fq '/blob/' <<<"${body}"; then
+    echo "FAIL request-changes: status count or PR Files-changed link missing" >&2
     fail=1
   else
-    echo "PASS request-changes status and linked location"
+    echo "PASS request-changes status and PR Files-changed link"
+  fi
+
+  # A finding without a line anchors the file only; a result with no PR number
+  # falls back to the commit-pinned blob URL instead of dropping the link.
+  jq -n --argjson common "$(printf '{%s}' "${common}")" \
+    '$common * {findings: [{severity: "medium", category: "style-conventions", file: "b.ts", description: "Nit."}]}' \
+    > "${tmp}/loc-noline.json"
+  body=$(transform_review_result "${tmp}/loc-noline.json" | jq -r .body)
+  if ! grep -Fq "changes#diff-${b_anchor})" <<<"${body}" ||
+     grep -Eq 'diff-[0-9a-f]{64}R' <<<"${body}"; then
+    echo "FAIL loc-noline: line-less finding should anchor the file without a line suffix" >&2
+    fail=1
+  else
+    echo "PASS line-less finding anchors the file without a line suffix"
+  fi
+
+  jq -n --argjson common "$(printf '{%s}' "${common}")" \
+    '$common * {findings: [{severity: "medium", category: "style-conventions", file: "b.ts", line: 7, description: "Nit."}]} | del(.pr_number)' \
+    > "${tmp}/loc-no-pr.json"
+  body=$(transform_review_result "${tmp}/loc-no-pr.json" | jq -r .body)
+  if ! grep -Fq 'blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/b.ts#L7' <<<"${body}"; then
+    echo "FAIL loc-no-pr: missing pr_number should fall back to the commit-pinned blob URL" >&2
+    fail=1
+  else
+    echo "PASS missing pr_number falls back to the commit-pinned blob URL"
   fi
   body=$(jq -r .body "${tmp}/needs-human-out.json")
   if ! grep -Fq '**Needs human judgment.**' <<<"${body}" ||
@@ -1662,8 +3120,8 @@ run_self_test() {
   fi
 
   prepare_summary_only_result "${tmp}/request-changes-out.json" "${tmp}/summary-only.json"
-  if ! jq -e '(.findings[0] | has("line") | not) and (.body | contains("a.ts#L12"))' "${tmp}/summary-only.json" >/dev/null; then
-    echo "FAIL summary-only: expected linked body location without structured line" >&2
+  if ! jq -e --arg anchor "${a_anchor}R12" '(.findings[0] | has("line") | not) and (.body | contains($anchor))' "${tmp}/summary-only.json" >/dev/null; then
+    echo "FAIL summary-only: expected linked PR-diff body location without structured line" >&2
     fail=1
   else
     echo "PASS summary-only suppresses inline comments"
@@ -1676,6 +3134,14 @@ run_self_test() {
     fail=1
   else
     echo "PASS failure variant"
+  fi
+  # fullsend post-review adds the review-agent marker and escapes any copy in
+  # the body, so the rendered header must not carry one.
+  if grep -q '<!-- fullsend:review-agent' <<<"${body}"; then
+    echo "FAIL header: rendered body carries its own review-agent marker" >&2
+    fail=1
+  else
+    echo "PASS header leaves the review-agent marker to fullsend post-review"
   fi
 
   local pp_finding
@@ -1911,6 +3377,7 @@ run_self_test() {
   fi
 
   # Adapter status comes from result.producers.adapters, not collected.json.
+  # ok + empty findings must still approve.
   printf '%s' "{${common},\"findings\":[],\"producers\":{\"dispatched\":[\"correctness\"],\"adapters\":[{\"id\":\"jira-snapshot\",\"status\":\"none\",\"reason\":\"no-issue-key\"},{\"id\":\"coderabbit\",\"status\":\"ok\"}],\"skipped\":[],\"returned\":[\"correctness\"],\"raised\":{\"correctness\":[],\"coderabbit\":[]},\"challenger\":{\"status\":\"skipped\",\"reason\":\"no findings to adjudicate\"}}}" > "${tmp}/adapter-status.json"
   transform_review_result "${tmp}/adapter-status.json" > "${tmp}/adapter-status-out.json"
   body=$(jq -r .body "${tmp}/adapter-status-out.json")
@@ -1923,18 +3390,123 @@ run_self_test() {
   elif ! grep -q '2 producer(s) ran, 1 unavailable' <<<"${body}"; then
     echo "FAIL adapter-status: review-details blurb should separate ran from unavailable" >&2
     fail=1
+  elif ! jq -e '.action == "approve"' "${tmp}/adapter-status-out.json" >/dev/null; then
+    echo "FAIL adapter-status: ok + empty findings must approve" >&2
+    fail=1
   else
-    echo "PASS adapter status on result.producers distinguishes unavailable from ran-clean"
+    echo "PASS adapter status on result.producers distinguishes unavailable from ran-clean and approves"
   fi
 
+  # Adapter error must refuse approve and surface error on Status.
   printf '%s' "{${common},\"findings\":[],\"producers\":{\"dispatched\":[],\"adapters\":[{\"id\":\"coderabbit\",\"status\":\"error\",\"reason\":\"cli-unavailable\"}],\"skipped\":[],\"returned\":[],\"raised\":{},\"challenger\":{\"status\":\"skipped\",\"reason\":\"no findings to adjudicate\"}}}" > "${tmp}/adapter-error.json"
   transform_review_result "${tmp}/adapter-error.json" > "${tmp}/adapter-error-out.json"
   body=$(jq -r .body "${tmp}/adapter-error-out.json")
   if ! grep -qE '^\| CodeRabbit \| findings \| ❌ \| cli unavailable' <<<"${body}"; then
     echo "FAIL adapter-error: status=error adapter was not marked errored" >&2
     fail=1
+  elif ! jq -e '.action == "comment"' "${tmp}/adapter-error-out.json" >/dev/null; then
+    echo "FAIL adapter-error: status=error must refuse approve (comment action)" >&2
+    fail=1
+  elif ! grep -q 'Review incomplete' <<<"${body}"; then
+    echo "FAIL adapter-error: status=error must show Review incomplete on Status" >&2
+    fail=1
+  elif ! grep -qi 'CodeRabbit' <<<"$(grep 'Review incomplete' <<<"${body}")"; then
+    echo "FAIL adapter-error: Status must name the failed producer" >&2
+    fail=1
+  elif jq -e '.confidence.level == "high"' "${tmp}/adapter-error-out.json" >/dev/null; then
+    echo "FAIL adapter-error: confidence must not be left high with an errored adapter" >&2
+    fail=1
+  elif ! jq -e '(.inspected.could_not_verify // []) | any(.[]; . == "CodeRabbit (cli unavailable)")' "${tmp}/adapter-error-out.json" >/dev/null; then
+    echo "FAIL adapter-error: inspected.could_not_verify must use label (reason) for errored adapter" >&2
+    fail=1
   else
-    echo "PASS adapter error status on result renders as errored, not ran-clean"
+    echo "PASS adapter error refuses approve, surfaces incomplete Status, caps confidence"
+  fi
+
+  # A below-bar finding no longer blocks, but the Status must still report
+  # the incomplete review and name the failed producer.
+  printf '%s' "{${common},\"findings\":[{\"severity\":\"medium\",\"category\":\"logic-error\",\"file\":\"a.ts\",\"description\":\"Off by one.\"}],\"producers\":{\"dispatched\":[],\"adapters\":[{\"id\":\"coderabbit\",\"status\":\"error\",\"reason\":\"review-failed\"}],\"skipped\":[],\"returned\":[],\"raised\":{},\"challenger\":{\"status\":\"skipped\",\"reason\":\"no findings to adjudicate\"}}}" > "${tmp}/adapter-error-blocking.json"
+  transform_review_result "${tmp}/adapter-error-blocking.json" > "${tmp}/adapter-error-blocking-out.json"
+  body=$(jq -r .body "${tmp}/adapter-error-blocking-out.json")
+  if ! jq -e '.action == "comment"' "${tmp}/adapter-error-blocking-out.json" >/dev/null; then
+    echo "FAIL adapter-error-blocking: expected comment" >&2
+    fail=1
+  elif ! grep -qE '\*\*Review incomplete\*\*.*CodeRabbit \(review failed\)' <<<"${body}"; then
+    echo "FAIL adapter-error-blocking: Status must report the incomplete review" >&2
+    fail=1
+  else
+    echo "PASS adapter error with judgment findings defers to a human and reports incompleteness"
+  fi
+
+  # An approach-rejected action keeps its headline, but must still report an
+  # incomplete review when an adapter errored.
+  printf '%s' "{${common},\"findings\":[{\"severity\":\"medium\",\"category\":\"approach-rejected\",\"file\":\"a.ts\",\"description\":\"Approach rejected.\"}],\"producers\":{\"dispatched\":[],\"adapters\":[{\"id\":\"coderabbit\",\"status\":\"error\",\"reason\":\"review-failed\"}],\"skipped\":[],\"returned\":[],\"raised\":{},\"challenger\":{\"status\":\"skipped\",\"reason\":\"no findings to adjudicate\"}}}" > "${tmp}/adapter-error-reject.json"
+  transform_review_result "${tmp}/adapter-error-reject.json" > "${tmp}/adapter-error-reject-out.json"
+  body=$(jq -r .body "${tmp}/adapter-error-reject-out.json")
+  if ! jq -e '.action == "reject"' "${tmp}/adapter-error-reject-out.json" >/dev/null; then
+    echo "FAIL adapter-error-reject: expected reject" >&2
+    fail=1
+  elif ! grep -qE '\*\*Approach rejected\.\*\*.*Review incomplete — CodeRabbit \(review failed\)' <<<"${body}"; then
+    echo "FAIL adapter-error-reject: Status must keep Approach rejected and report the incomplete review" >&2
+    fail=1
+  else
+    echo "PASS adapter error with approach-rejected findings reports incompleteness"
+  fi
+
+  # Adapter ids come from the result, not the registry: a forged id must not
+  # inject headings, HTML, mentions, carriage-return blocks, or links into
+  # host-authored Status / Evidence.
+  printf '%s' "{${common},\"producers\":{\"dispatched\":[],\"adapters\":[{\"id\":\"evil\\n## FAKE <b>x</b> @octocat\",\"status\":\"error\",\"reason\":\"review-failed\"},{\"id\":\"evil\\r## CRFAKE [CodeRabbit](https://example.com/)\",\"status\":\"error\",\"reason\":\"review-failed\"}],\"skipped\":[],\"returned\":[],\"raised\":{},\"challenger\":{\"status\":\"skipped\",\"reason\":\"no findings to adjudicate\"}}}" > "${tmp}/adapter-inject.json"
+  transform_review_result "${tmp}/adapter-inject.json" > "${tmp}/adapter-inject-out.json"
+  body=$(jq -r .body "${tmp}/adapter-inject-out.json")
+  if grep -qE '^## (FAKE|CRFAKE)' <<<"${body}"; then
+    echo "FAIL adapter-inject: adapter id injected a heading" >&2
+    fail=1
+  elif grep -qF '<b>' <<<"${body}"; then
+    echo "FAIL adapter-inject: adapter id injected raw HTML" >&2
+    fail=1
+  elif grep -qF '@octocat' <<<"${body}"; then
+    echo "FAIL adapter-inject: adapter id injected a mention" >&2
+    fail=1
+  elif grep -qF $'\r' <<<"${body}"; then
+    echo "FAIL adapter-inject: standalone carriage return survived" >&2
+    fail=1
+  elif grep -qE '(^|[^\\])\]\(https://example\.com/' <<<"${body}"; then
+    echo "FAIL adapter-inject: adapter id rendered as a Markdown link" >&2
+    fail=1
+  elif ! grep -qF '\[CodeRabbit\]' <<<"${body}"; then
+    echo "FAIL adapter-inject: link-shaped adapter id was not escaped" >&2
+    fail=1
+  else
+    echo "PASS adapter id cannot inject headings, HTML, mentions, carriage returns, or links"
+  fi
+
+  # Finding text is result data too: CR blocks and HTML must not escape the
+  # main Findings list.
+  printf '%s' "{${common},\"findings\":[{\"severity\":\"medium\",\"category\":\"logic\",\"file\":\"a.ts\",\"description\":\"body\\r## FAKE2 <b>y</b>\"}]}" > "${tmp}/finding-inject.json"
+  transform_review_result "${tmp}/finding-inject.json" > "${tmp}/finding-inject-out.json"
+  body=$(jq -r .body "${tmp}/finding-inject-out.json")
+  if grep -qE '^## FAKE2' <<<"${body}"; then
+    echo "FAIL finding-inject: finding description injected a heading" >&2
+    fail=1
+  elif grep -qF '<b>' <<<"${body}"; then
+    echo "FAIL finding-inject: finding description injected raw HTML" >&2
+    fail=1
+  elif grep -qF $'\r' <<<"${body}"; then
+    echo "FAIL finding-inject: finding description kept a standalone carriage return" >&2
+    fail=1
+  else
+    echo "PASS finding text cannot inject headings, HTML, or carriage returns"
+  fi
+
+  # Adapter skipped must still allow approve when otherwise clean.
+  printf '%s' "{${common},\"findings\":[],\"producers\":{\"dispatched\":[\"correctness\"],\"adapters\":[{\"id\":\"coderabbit\",\"status\":\"skipped\",\"reason\":\"all-files-ignored\"}],\"skipped\":[],\"returned\":[\"correctness\"],\"raised\":{\"correctness\":[]},\"challenger\":{\"status\":\"skipped\",\"reason\":\"no findings to adjudicate\"}}}" > "${tmp}/adapter-skipped.json"
+  transform_review_result "${tmp}/adapter-skipped.json" > "${tmp}/adapter-skipped-out.json"
+  if ! jq -e '.action == "approve"' "${tmp}/adapter-skipped-out.json" >/dev/null; then
+    echo "FAIL adapter-skipped: skipped adapter must still allow approve" >&2
+    fail=1
+  else
+    echo "PASS adapter skipped still allows approve"
   fi
 
   # Free-form reasons fall back to the status default; Result cells must not
@@ -2225,6 +3797,9 @@ run_self_test() {
   printf '%s' "{${common},\"findings\":[],\"producers\":{\"dispatched\":[\"correctness\"],\"adapters\":[],\"skipped\":[],\"returned\":[\"correctness\"],\"raised\":{\"correctness\":[{\"severity\":\"high\",\"category\":\"architecture\",\"dimension\":\"correctness\",\"file\":\"a.ts\",\"description\":\"Norm departure.\",\"why\":\"New pattern.\",\"remediation\":\"Follow existing.\"}]},\"challenger\":{\"status\":\"ran\",\"input\":1,\"kept\":0,\"removed\":1,\"merged\":0,\"downgraded\":0,\"removed_findings\":[{\"severity\":\"high\",\"category\":\"architecture\",\"dimension\":\"correctness\",\"file\":\"a.ts\",\"description\":\"Norm departure.\",\"why\":\"New pattern.\",\"removal_reason\":\"PR Justifications explain the architectural choice; diff confirms the new pattern is consistent.\",\"challenger_action\":\"justified\"}]}}}" > "${tmp}/justified.json"
   transform_review_result "${tmp}/justified.json" > "${tmp}/justified-out.json"
   body=$(jq -r .body "${tmp}/justified-out.json")
+  # Same boundaries the author helper parses by: ## Findings up to the next
+  # ## heading or the <details> review block.
+  findings_section=$(awk '/^## Findings$/{f=1; next} f && (/^## / || /^<details>/){exit} f' <<<"${body}")
   if [[ "$(jq -r .action "${tmp}/justified-out.json")" != "approve" ]]; then
     echo "FAIL justified: justified-only findings must not block disposition" >&2
     fail=1
@@ -2234,8 +3809,11 @@ run_self_test() {
   elif ! grep -q '### Justified (1)' <<<"${body}"; then
     echo "FAIL justified: ### Justified subheading missing or wrong count" >&2
     fail=1
-  elif ! grep -q 'fullsend:justified-findings' <<<"${body}"; then
-    echo "FAIL justified: HTML omit markers missing" >&2
+  elif grep -qE '^<!--' <<<"${findings_section}"; then
+    echo "FAIL justified: an HTML marker leaked into ## Findings" >&2
+    fail=1
+  elif grep -qiE '<(!--[[:space:]]*fullsend[[:space:]]*:)' <<<"${body}"; then
+    echo "FAIL justified: body carries a fullsend: marker upstream would escape as text" >&2
     fail=1
   elif ! grep -q 'Justification:' <<<"${body}"; then
     echo "FAIL justified: challenger reason not rendered under Justified" >&2
@@ -2260,8 +3838,8 @@ run_self_test() {
   printf '%s' "{${common},\"findings\":[{\"severity\":\"medium\",\"category\":\"bounds\",\"dimension\":\"correctness\",\"file\":\"b.ts\",\"description\":\"Off by one.\",\"why\":\"Index.\"}],\"producers\":{\"dispatched\":[\"correctness\"],\"adapters\":[],\"skipped\":[],\"returned\":[\"correctness\"],\"raised\":{\"correctness\":[{\"severity\":\"high\",\"category\":\"architecture\",\"dimension\":\"correctness\",\"file\":\"a.ts\",\"description\":\"Norm departure.\",\"why\":\"New pattern.\",\"remediation\":\"Follow existing.\"},{\"severity\":\"medium\",\"category\":\"bounds\",\"dimension\":\"correctness\",\"file\":\"b.ts\",\"description\":\"Off by one.\",\"why\":\"Index.\"}]},\"challenger\":{\"status\":\"ran\",\"input\":2,\"kept\":1,\"removed\":1,\"merged\":0,\"downgraded\":0,\"removed_findings\":[{\"severity\":\"high\",\"category\":\"architecture\",\"dimension\":\"correctness\",\"file\":\"a.ts\",\"description\":\"Norm departure.\",\"why\":\"New pattern.\",\"removal_reason\":\"Architecture justified per PR body.\",\"challenger_action\":\"justified\"}]}}}" > "${tmp}/justified-mixed.json"
   transform_review_result "${tmp}/justified-mixed.json" > "${tmp}/justified-mixed-out.json"
   body=$(jq -r .body "${tmp}/justified-mixed-out.json")
-  if [[ "$(jq -r .action "${tmp}/justified-mixed-out.json")" != "request-changes" ]]; then
-    echo "FAIL justified-mixed: surviving medium finding must still block" >&2
+  if [[ "$(jq -r .action "${tmp}/justified-mixed-out.json")" != "comment" ]]; then
+    echo "FAIL justified-mixed: surviving judgment finding must yield comment/needs-human" >&2
     fail=1
   elif ! grep -q '### Medium (1)' <<<"${body}"; then
     echo "FAIL justified-mixed: severity group missing for surviving finding" >&2
@@ -2383,7 +3961,7 @@ from jsonschema import Draft202012Validator
 schema = json.load(open(sys.argv[1], encoding='utf-8'))
 instance = json.load(open(sys.argv[2], encoding='utf-8'))
 Draft202012Validator(schema).validate(instance)
-" "${FULLSEND_CONFIG_DIR}/schemas/review-result.schema.json" "${tmp}/justified-pp-out.json"; then
+" "${FULLSEND_CONFIG_DIR}/schemas/sticky-input.schema.json" "${tmp}/justified-pp-out.json"; then
     echo "FAIL justified-pp: transformed recovery result must be schema-valid" >&2
     fail=1
   elif grep -q '### Justified' <<<"${body}"; then
@@ -2408,7 +3986,7 @@ from jsonschema import Draft202012Validator
 schema = json.load(open(sys.argv[1], encoding='utf-8'))
 instance = json.load(open(sys.argv[2], encoding='utf-8'))
 Draft202012Validator(schema).validate(instance)
-" "${FULLSEND_CONFIG_DIR}/schemas/review-result.schema.json" "${tmp}/justified-reject-out.json"; then
+" "${FULLSEND_CONFIG_DIR}/schemas/sticky-input.schema.json" "${tmp}/justified-reject-out.json"; then
     echo "FAIL justified-reject: transformed recovery result must be schema-valid" >&2
     fail=1
   elif grep -q '### Justified' <<<"$(jq -r .body "${tmp}/justified-reject-out.json")"; then
@@ -2460,7 +4038,7 @@ if bad:
   }
   printf '%s' '{"action":"request-changes","body":"## Review\n\n<!-- fullsend:review-findings-v2:AAAA -->\nreal text <!-- sticky:history-start -->","findings":[{"severity":"high","category":"off-by-one","file":"a.ts","line":3,"description":"d"},{"severity":"medium","category":"scope-creep","file":"N/A","description":"d"},{"severity":"low","category":"sub-agent-failure","file":"N/A","description":"challenger"},{"severity":"medium","category":"protected-path","file":".github/x.yml","description":"d"},{"severity":"medium","category":"scope-exceeded","dimension":"orchestrator","file":"N/A","description":"d"}]}' > "${tmp}/proj.json"
   append_prior_findings_projection "${tmp}/proj.json" "${tmp}/proj.json" > "${tmp}/proj-out.json"
-  if [[ "$(_projection_of "${tmp}/proj-out.json")" != '{"version":2,"findings":[{"severity":"high","category":"off-by-one","file":"a.ts","line":3},{"severity":"medium","category":"scope-creep","file":null}]}' ]]; then
+  if [[ "$(_projection_of "${tmp}/proj-out.json")" != '{"version":2,"action":"request-changes","findings":[{"severity":"high","category":"off-by-one","file":"a.ts","line":3},{"severity":"medium","category":"scope-creep","file":null}]}' ]]; then
     echo "FAIL projection: dimension findings were not projected as structured v2 records" >&2
     fail=1
   elif [[ "$(jq -r '.body' "${tmp}/proj-out.json" | grep -c -E 'review-findings-v[12]:|sticky:history')" -ne 1 ]]; then
@@ -2531,16 +4109,379 @@ if bad:
     echo "PASS approve gate treats a cut-off or uncounted file list as incomplete"
   fi
 
-  # Round trip: what this script writes is what pre-review.sh accepts, also
-  # after the Jira integration has appended link definitions to the comment.
-  printf '%s\n\n[RHOAIENG-1]: https://example.atlassian.net/browse/RHOAIENG-1\n' "$(jq -r '.body' "${tmp}/proj-out.json")" > "${tmp}/prior-review.txt"
-  if ! ( source "${FULLSEND_CONFIG_DIR}/scripts/pre-review.sh" && validate_prior_review_projection "${tmp}/prior-review.txt" ) >/dev/null 2>&1 \
-    || ! jq -e '.version == 2 and (.findings | length == 2) and .findings[1].file == null' "${tmp}/prior-review.txt" >/dev/null; then
-    echo "FAIL projection: pre-review.sh rejected the marker post-review.sh wrote" >&2
+  # Round trip: the stock pre-script accepts what this script writes, ids
+  # included. Its validator needs bash 4 and the forge environment, so run only
+  # the jq program it validates a decoded marker with.
+  local stock_pre="${FULLSEND_CONFIG_DIR}/scripts/stock/pre-review.sh" stock_filter
+  stock_filter="$(awk '
+    /jq -ce --argjson marker_version "\$\{marker_version\}" \x27$/ && !started {started = 1; next}
+    started && /^  \x27 > "\$\{tmp_file\}"; then$/ {exit}
+    started {print}' "${stock_pre}" 2>/dev/null || true)"
+  jq -cn '{action:"request-changes",body:"b",findings:[
+    {severity:"high",category:"off-by-one",file:"a.ts",line:3,description:"d",id:"f_1db6e46ed513e263",actionable:true,dimension:"correctness"},
+    {severity:"medium",category:"scope-creep",file:"N/A",description:"d",dimension:"intent-coherence,correctness",id:"f_1db6e46ed513e263"},
+    {severity:"medium",category:"coderabbit",file:"b.ts",line:"9",description:"d",dimension:"coderabbit"}]}' > "${tmp}/proj-stock.json"
+  append_prior_findings_projection "${tmp}/proj-stock.json" "${tmp}/proj-stock.json" > "${tmp}/proj-stock-out.json"
+  if [[ -z "${stock_filter}" ]]; then
+    echo "FAIL projection: no marker validator found in scripts/stock/pre-review.sh" >&2
+    fail=1
+  elif [[ "$(_projection_of "${tmp}/proj-stock-out.json")" != '{"version":2,"action":"request-changes","findings":[{"severity":"high","category":"off-by-one","file":"a.ts","id":"f_1db6e46ed513e263","line":3,"actionable":true,"dimension":"correctness"},{"severity":"medium","category":"scope-creep","file":null}]}' ]]; then
+    echo "FAIL projection: ids were not carried, or a host adapter finding reached the marker" >&2
+    fail=1
+  elif ! _projection_of "${tmp}/proj-stock-out.json" | jq -ce --argjson marker_version 2 "${stock_filter}" \
+      | jq -e '(.findings | length == 2) and .findings[0].id == "f_1db6e46ed513e263" and .action == "request-changes"' >/dev/null \
+    || ! _projection_of "${tmp}/proj-out.json" | jq -ce --argjson marker_version 2 "${stock_filter}" >/dev/null; then
+    echo "FAIL projection: the stock pre-review validator rejected the marker post-review.sh wrote" >&2
+    fail=1
+  elif _projection_of "${tmp}/proj-stock-out.json" | jq -c '.findings += [{severity:"low",category:"coderabbit",file:"b.ts"}]' \
+      | jq -ce --argjson marker_version 2 "${stock_filter}" >/dev/null 2>&1; then
+    echo "FAIL projection: the stock validator accepted a coderabbit category, so the exclusion is untested" >&2
+    fail=1
+  elif printf '%s' "${withheld}" | jq -ce --argjson marker_version 2 "${stock_filter}" >/dev/null 2>&1; then
+    echo "FAIL projection: the stock validator accepted the withheld sentinel, so a lossy review would not force a first review" >&2
     fail=1
   else
-    echo "PASS projection round-trips through pre-review.sh"
+    echo "PASS projection carries ids, leaves out host adapter findings and passes the stock pre-review validator"
   fi
+
+  # ---------------------------------------------------------------------------
+  # normalize_stock_result: stock result + side files + host files -> sticky
+  # input. Each case gets its own run directory and config directory.
+  # ---------------------------------------------------------------------------
+  local sha="85e0a624c3102f71836b6c3c117557a78cda5700" case_dir norm out
+  # Usage: norm_setup <name> — a clean run: no findings, every side file valid,
+  # both adapters ok. Cases edit the files before norm_run.
+  norm_setup() {
+    case_dir="${tmp}/norm-$1"
+    mkdir -p "${case_dir}/config/.run" "${case_dir}/output/odh"
+    cp "${FULLSEND_CONFIG_DIR}/dimensions.json" "${FULLSEND_CONFIG_DIR}/rating-policy.json" "${case_dir}/config/"
+    jq '{version: 1, personas: ([.dimensions[] | select(.kind != "cli-adapter")
+          | {name: .id, role: "dimension"}
+            + (if (.id | IN("security", "rbac-review", "style-review", "docs-currency", "cross-repo-contracts", "intent-coherence")) then {} else {always: true} end)]
+          + [{name: "challenger", role: "synthesis"}])}' \
+      "${FULLSEND_CONFIG_DIR}/dimensions.json" > "${case_dir}/personas.json"
+    jq -n --arg sha "${sha}" '{action: "request-changes", pr_number: 117, repo: "o/r", head_sha: $sha,
+      body: "AGENT BODY", findings: [], risk_assessment: {score: 2, level: "moderate"}}' > "${case_dir}/output/agent-result.json"
+    printf '%s' '[{"id":"jira-snapshot","dimension":"jira-snapshot","kind":"cli-adapter","output":"context","status":"none","reason":"no-issue-key"},{"id":"coderabbit","dimension":"coderabbit","kind":"cli-adapter","output":"findings","status":"ok","findings":[]}]' > "${case_dir}/config/.run/collected.json"
+    printf '%s' '{"risk":{"level":"low","why":"One internal helper changes."},"confidence":{"level":"high","why":"The diff matches the stated intent."},"change_summary":"The diff adds a getPageItems helper and getLastPage."}' > "${case_dir}/output/odh/rating.json"
+    printf '%s' '{"product_ask":{"status":"aligned","aligned":["The PR does what the issue asks."],"mismatched":[],"needs_human":false}}' > "${case_dir}/output/odh/product-ask-review.json"
+    printf '%s' '{"check":{"id":"test-impact","status":"pass","summary":"Unit tests cover the helper.","details":["Automation: pass.","Could not verify image evidence: the screenshot was not available."]}}' > "${case_dir}/output/odh/test-impact-review.json"
+    printf '%s' '{"check":{"id":"pr-description","status":"pass","summary":"Problem, Solution and Evidence are present."}}' > "${case_dir}/output/odh/pr-description-review.json"
+  }
+  # Usage: norm_run — writes ${norm} (sticky input) and ${out} (transformed).
+  norm_run() {
+    norm="${case_dir}/normalized.json"
+    out="${case_dir}/out.json"
+    (
+      export FULLSEND_CONFIG_DIR="${case_dir}/config"
+      unset FULLSEND_PERSONAS_FILE
+      cd "${case_dir}"
+      normalize_stock_result output/agent-result.json output/odh "$(find_personas_file output/agent-result.json)" output/../transcripts > "${norm}"
+      transform_review_result "${norm}" > "${out}"
+    )
+    body=$(jq -r '.body // ""' "${out}")
+  }
+  sticky_input_valid() {
+    python3 -c "
+import json, sys
+from jsonschema import Draft202012Validator
+Draft202012Validator(json.load(open(sys.argv[1], encoding='utf-8'))).validate(json.load(open(sys.argv[2], encoding='utf-8')))
+" "${FULLSEND_CONFIG_DIR}/schemas/sticky-input.schema.json" "$1"
+  }
+  # Usage: norm_expect <label> <jq filter on the transformed result> [body regex...]
+  norm_expect() {
+    local label="$1" filter="$2" pattern
+    shift 2
+    if ! jq -e "${filter}" "${out}" >/dev/null; then
+      echo "FAIL normalize ${label}: ${filter}" >&2
+      fail=1
+      return
+    fi
+    for pattern in "$@"; do
+      if ! grep -qE -- "${pattern}" <<<"${body}"; then
+        echo "FAIL normalize ${label}: body lacks ${pattern}" >&2
+        fail=1
+        return
+      fi
+    done
+    echo "PASS normalize ${label}"
+  }
+
+  # Clean run: the agent's action and body are ignored, the challenger was
+  # skipped, the host approves.
+  norm_setup clean
+  norm_run
+  if ! sticky_input_valid "${norm}"; then
+    echo "FAIL normalize clean: sticky input is not schema-valid" >&2
+    fail=1
+  elif grep -q 'AGENT BODY' <<<"${body}" || jq -e 'has("risk_assessment")' "${norm}" >/dev/null; then
+    echo "FAIL normalize clean: the agent body or a stock-only field reached the sticky" >&2
+    fail=1
+  else
+    norm_expect "clean run approves from side files" \
+      '.action == "approve" and .change_summary == "The diff adds a getPageItems helper and getLastPage."
+       and .risk.level == "low" and .confidence.level == "high" and .product_ask.status == "aligned"
+       and ([.checks[].id] == ["test-impact-review", "pr-description-review"])
+       and .producers.challenger == {"status": "skipped", "reason": "no findings to adjudicate"}
+       and (.producers.dispatched | index("correctness") and index("rating") and index("product-ask-review") and index("test-impact-review"))
+       and ([.producers.skipped[] | select(.id == "rbac-review")][0].reason == "no findings or not selected")
+       and (.inspected.could_not_verify | index("Could not verify image evidence: the screenshot was not available."))' \
+      '^Skipped — no findings to adjudicate\.$' \
+      '^\| Test impact \| ✅ pass \|' \
+      '^\| RBAC \| findings \| ➖ \| no findings or not selected \|' \
+      '^\| Jira \| context \| ⚪ \| no issue key \|' \
+      '^\| CodeRabbit \| findings \| ✅ \| No findings\. \|'
+  fi
+
+  # Full run: findings with ids, challenger audit, CodeRabbit finding.
+  norm_setup full
+  jq '.findings = [
+      {severity: "medium", category: "off-by-one", file: "frontend/src/utilities/pageRange.ts", line: 5, description: "The slice bounds skip the first page.", remediation: "Use (page - 1) * perPage.", actionable: true, dimension: "correctness", id: "f_1db6e46ed513e263"},
+      {severity: "low", category: "naming-convention", file: "frontend/src/utilities/pageRange.ts", line: 13, description: "Merged naming note.", actionable: false, dimension: "style-conventions", id: "f_7aff804f420b4abd"}]' \
+    "${case_dir}/output/agent-result.json" > "${case_dir}/r.json" && mv "${case_dir}/r.json" "${case_dir}/output/agent-result.json"
+  jq -n '
+    {severity: "medium", category: "off-by-one", file: "frontend/src/utilities/pageRange.ts", line: 5, description: "The slice bounds skip the first page.", actionable: true, dimension: "correctness"} as $kept
+    | {severity: "low", category: "naming-convention", file: "frontend/src/utilities/pageRange.ts", line: 13, description: "Merged naming note.", dimension: "style-conventions"} as $survivor
+    | {severity: "low", category: "naming-convention", file: "frontend/src/utilities/pageRange.ts", line: 14, description: "Same naming note again.", dimension: "style-conventions"} as $absorbed
+    | {severity: "high", category: "xss", file: "a.tsx", line: 2, description: "Unescaped <b>html</b> @someone.", dimension: "security"} as $removed
+    | {severity: "medium", category: "missing-test", file: "b.ts", description: "No test for the helper.", dimension: "correctness"} as $justified
+    | {as_raised: [$kept, $survivor, $absorbed, $removed, $justified],
+       adjudicated: [
+         $kept + {challenger_action: "kept", challenger_reason: "Reproduced."},
+         $survivor + {challenger_action: "merged", challenger_reason: "Same note twice."},
+         $absorbed + {challenger_action: "merged", challenger_reason: "Same note twice.", merged_into: {category: "naming-convention", file: "frontend/src/utilities/pageRange.ts", line: 13}},
+         $removed + {challenger_action: "removed", challenger_reason: "The value is escaped by React."},
+         $justified + {challenger_action: "justified", challenger_reason: "The PR Justifications explain the follow-up test PR."},
+         {challenger_action: "removed"}, "junk"]}' > "${case_dir}/output/odh/challenger.json"
+  printf '%s' '[{"id":"jira-snapshot","kind":"cli-adapter","output":"context","status":"ok"},{"id":"coderabbit","kind":"cli-adapter","output":"findings","status":"ok","findings":[{"severity":"low","category":"coderabbit","file":"frontend/src/x.ts","line":"8","description":"Handle the rejected promise.","actionable":true},{"severity":"bogus","file":"y.ts","description":"dropped"}]}]' > "${case_dir}/config/.run/collected.json"
+  norm_run
+  if ! sticky_input_valid "${norm}"; then
+    echo "FAIL normalize full: sticky input is not schema-valid" >&2
+    fail=1
+  elif grep -q '  - Why:' <<<"${body}" || grep -q '<b>html' <<<"${body}" || grep -q '@someone' <<<"${body}"; then
+    echo "FAIL normalize full: a Why line was rendered without a why, or side-file text was not escaped" >&2
+    fail=1
+  else
+    norm_expect "full run folds side files, audit and CodeRabbit into the sticky" \
+      '.action == "comment" and (.findings | length == 3)
+       and (.findings[2] | .dimension == "coderabbit" and .category == "coderabbit" and .line == 8 and (has("id") | not))
+       and .findings[0].id == "f_1db6e46ed513e263"
+       and (.producers.challenger | .status == "ran" and .input == 5 and .kept == 2 and .removed == 2 and .merged == 1 and .downgraded == 0
+            and ([.removed_findings[].challenger_action] == ["removed", "justified"]))
+       and (.producers.raised | (.correctness | length == 2) and (.security | length == 1) and (."style-conventions" | length == 2) and (.coderabbit | length == 1))
+       and (.producers.dispatched | index("security"))
+       and ([.producers.adapters[].status] == ["ok", "ok"])' \
+      '^### Justified \(1\)$' \
+      '  - Justification: The PR Justifications explain the follow-up test PR\.' \
+      '^Adjudicated 5 findings; kept 2 \(removed 1, justified 1, merged 1\)\.$' \
+      '  - Removal reason: The value is escaped by React\.' \
+      '^\| CodeRabbit \| findings \| ✅ \| 1 finding: coderabbit \|' \
+      '^\| Security \| findings \| ✅ \| 1 finding: xss \|' \
+      'Needs human judgment'
+  fi
+  # The marker for the next run: ids carried, CodeRabbit left out, inline
+  # comments still suppressed in the copy handed to the CLI.
+  append_prior_findings_projection "${out}" "${norm}" > "${case_dir}/projected.json"
+  prepare_summary_only_result "${case_dir}/projected.json" "${case_dir}/posted.json"
+  if [[ "$(_projection_of "${case_dir}/projected.json")" != '{"version":2,"action":"comment","findings":[{"severity":"medium","category":"off-by-one","file":"frontend/src/utilities/pageRange.ts","id":"f_1db6e46ed513e263","line":5,"actionable":true,"dimension":"correctness"},{"severity":"low","category":"naming-convention","file":"frontend/src/utilities/pageRange.ts","id":"f_7aff804f420b4abd","line":13,"actionable":false,"dimension":"style-conventions"}]}' ]]; then
+    echo "FAIL normalize marker: expected the two reviewer findings with ids and no CodeRabbit finding" >&2
+    fail=1
+  elif ! _projection_of "${case_dir}/projected.json" | jq -ce --argjson marker_version 2 "${stock_filter}" >/dev/null; then
+    echo "FAIL normalize marker: the stock pre-review validator rejected it" >&2
+    fail=1
+  elif jq -e '[.findings[] | select(has("line"))] | length > 0' "${case_dir}/posted.json" >/dev/null; then
+    echo "FAIL normalize marker: a line number reached the CLI payload" >&2
+    fail=1
+  else
+    echo "PASS normalize marker carries ids, leaves CodeRabbit out, and the CLI payload has no line numbers"
+  fi
+
+  # Each side file missing, then malformed.
+  local variant
+  for variant in missing malformed; do
+    norm_break() {
+      if [[ "${variant}" == "missing" ]]; then rm -f "${case_dir}/output/odh/$1.json"; else printf '%s' "$2" > "${case_dir}/output/odh/$1.json"; fi
+    }
+    norm_setup "${variant}-rating"
+    norm_break rating '{"risk":"low","confidence":{"level":"certain","why":"x"},"change_summary":7}'
+    norm_run
+    norm_expect "${variant} rating.json refuses approve" \
+      '.action == "comment" and .risk.level == "medium" and .confidence.level == "low"
+       and .change_summary == "No change summary was recorded for this run."
+       and ([.producers.skipped[] | select(.id == "rating")][0].reason == "did not report")' \
+      'Cannot approve.*low confidence' '^\| Rating \| signal \| ➖ \| did not report \|'
+
+    norm_setup "${variant}-test-impact"
+    norm_break test-impact-review '{"check":{"status":"passed","summary":["x"]}}'
+    norm_run
+    norm_expect "${variant} test-impact-review.json is could-not-verify and refuses approve" \
+      '.action == "comment" and ([.checks[] | select(.id == "test-impact-review")][0].status == "could-not-verify") and .confidence.level == "medium"' \
+      '^\| Test impact \| ❔ could-not-verify \| Test impact (did not report a result for this run|wrote a result the host could not read)\.'
+
+    norm_setup "${variant}-pr-description"
+    norm_break pr-description-review '[]'
+    norm_run
+    norm_expect "${variant} pr-description-review.json is could-not-verify and refuses approve" \
+      '.action == "comment" and ([.checks[] | select(.id == "pr-description-review")][0].status == "could-not-verify")' \
+      '^\| PR description \| ❔ could-not-verify \|'
+
+    norm_setup "${variant}-product-ask"
+    norm_break product-ask-review '{"product_ask":{"status":"fine","needs_human":"no"}}'
+    norm_run
+    if grep -q '^## Product ask' <<<"${body}"; then
+      echo "FAIL normalize ${variant} product-ask-review.json: a product-ask section was rendered" >&2
+      fail=1
+    else
+      norm_expect "${variant} product-ask-review.json renders no section and does not change the verdict" \
+        '.action == "approve" and (has("product_ask") | not) and (.inspected.could_not_verify | any(startswith("Product ask ")))' \
+        '^\| Product ask \| section \| ➖ \| did not report \|'
+    fi
+
+    norm_setup "${variant}-challenger"
+    jq '.findings = [{severity: "low", category: "naming-convention", file: "a.ts", line: 3, description: "Name it better.", actionable: false, dimension: "style-conventions"}]' \
+      "${case_dir}/output/agent-result.json" > "${case_dir}/r.json" && mv "${case_dir}/r.json" "${case_dir}/output/agent-result.json"
+    norm_break challenger '{"as_raised":"none","adjudicated":{}}'
+    norm_run
+    if [[ "${variant}" == "missing" ]]; then
+      norm_expect "missing challenger.json with findings is a skipped challenger and raised falls back to the findings" \
+        '.action == "approve" and .producers.challenger.status == "skipped" and (.producers.raised."style-conventions" | length == 1)' \
+        '^Skipped — no challenger audit was recorded' '^\| Style conventions \| findings \| ✅ \| 1 finding: naming-convention \|'
+    else
+      norm_expect "malformed challenger.json is a challenger without counts" \
+        '.action == "approve" and .producers.challenger == {"status": "ran"} and (.producers.raised."style-conventions" | length == 1)' \
+        '^Challenger ran, but adjudication counts were not recorded\.$'
+    fi
+  done
+
+  # A mismatch the product-ask reviewer reports floors confidence on the host.
+  norm_setup product-ask-floor
+  printf '%s' '{"product_ask":{"status":"mismatch-unjustified","mismatched":["The issue asks for a different page."]}}' > "${case_dir}/output/odh/product-ask-review.json"
+  norm_run
+  norm_expect "unjustified product-ask mismatch floors confidence and refuses approve" \
+    '.action == "comment" and .confidence.level == "low" and .product_ask.needs_human == true' '^## Product ask$'
+
+  # CodeRabbit adapter error refuses approve; no collected.json is not an error.
+  norm_setup adapter-error
+  printf '%s' '[{"id":"coderabbit","kind":"cli-adapter","output":"findings","status":"error","reason":"cli-unavailable","findings":[]}]' > "${case_dir}/config/.run/collected.json"
+  norm_run
+  norm_expect "CodeRabbit adapter error refuses approve" \
+    '.action == "comment" and .confidence.level == "medium"' \
+    'Review incomplete' '^\| CodeRabbit \| findings \| ❌ \| cli unavailable \|' '^\| Jira \| context \| ⚪ \| not run \|'
+  norm_setup no-collected
+  rm -f "${case_dir}/config/.run/collected.json"
+  norm_run
+  norm_expect "absent collected.json means no adapter ran, not an adapter error" \
+    '.action == "approve" and ([.producers.adapters[].status] == ["skipped", "skipped"])' \
+    '^\| CodeRabbit \| findings \| ⚪ \| not run \|'
+
+  # CodeRabbit findings with no reviewer findings: the challenger skip is not
+  # read as a contradiction.
+  norm_setup coderabbit-only
+  printf '%s' '[{"id":"coderabbit","kind":"cli-adapter","output":"findings","status":"ok","findings":[{"severity":"high","category":"coderabbit","file":"x.ts","description":"Guard the empty list.","remediation":"if (!items.length) {\n  return null;\n}"}]}]' > "${case_dir}/config/.run/collected.json"
+  norm_run
+  norm_expect "CodeRabbit finding alone counts toward the verdict without a challenger contradiction" \
+    '.action == "request-changes" and .confidence.level == "high"' \
+    '^Skipped — no reviewer findings to adjudicate \(host adapter findings are not challenged\)\.$'
+
+  # A side-file persona reported as failed although its side file is valid ran;
+  # without the side file the failure stands.
+  norm_setup side-file-failure
+  jq '.findings = [{severity: "info", category: "sub-agent-failure", file: "N/A", description: "rating returned no findings.", dimension: "rating"},
+                   {severity: "info", category: "sub-agent-failure", file: "N/A", description: "pr-description-review returned no findings.", dimension: "pr-description-review"},
+                   {severity: "info", category: "sub-agent-failure", file: "N/A", description: "docs-currency timed out.", dimension: "docs-currency"}]' \
+    "${case_dir}/output/agent-result.json" > "${case_dir}/r.json" && mv "${case_dir}/r.json" "${case_dir}/output/agent-result.json"
+  rm -f "${case_dir}/output/odh/pr-description-review.json"
+  norm_run
+  norm_expect "a failure finding for a side-file persona is dropped only when its side file is valid" \
+    '([.findings[].dimension] == ["pr-description-review", "docs-currency"]) and (.producers.dispatched | index("rating"))
+     and ([.producers.skipped[] | select(.id == "docs-currency" or .id == "pr-description-review") | .reason] | unique == ["did not return a result (sub-agent failure)"])' \
+    '^\| Docs currency \| findings \| ➖ \| did not return a result \(sub-agent failure\) \|'
+
+  # Challenger failure recorded by the stock orchestrator.
+  norm_setup challenger-failed
+  jq '.findings = [{severity: "low", category: "sub-agent-failure", file: "N/A", description: "The challenger sub-agent did not return findings: timeout. Using pre-challenger finding set.", actionable: false}]' \
+    "${case_dir}/output/agent-result.json" > "${case_dir}/r.json" && mv "${case_dir}/r.json" "${case_dir}/output/agent-result.json"
+  norm_run
+  norm_expect "stock challenger-failure finding is a failed challenger" \
+    '.producers.challenger == {"status": "failed"}' '^Challenger failed; using the pre-challenger finding set\.$'
+
+  # Change summary longer than the contract allows is cut to 500 characters.
+  norm_setup long-summary
+  jq --arg s "$(printf 'word %.0s' $(seq 1 200))" '.change_summary = $s' "${case_dir}/output/odh/rating.json" > "${case_dir}/r.json" && mv "${case_dir}/r.json" "${case_dir}/output/odh/rating.json"
+  norm_run
+  norm_expect "change summary is cut to 500 characters" '(.change_summary | length) == 500 and (.change_summary | endswith("…"))'
+
+  # No manifest: nothing is claimed to have run without evidence.
+  norm_setup no-manifest
+  rm -f "${case_dir}/personas.json"
+  norm_run
+  norm_expect "without a persona manifest a reviewer with no evidence is not shown as ran" \
+    '.action == "approve" and (.producers.dispatched | index("correctness") | not)' \
+    '^\| Correctness \| findings \| ➖ \| no findings or not selected \|'
+
+  # action: failure keeps the failure path; an unreadable result becomes one.
+  norm_setup failure
+  printf '%s' '{"action":"failure","reason":"time-budget","pr_number":117,"repo":"o/r"}' > "${case_dir}/output/agent-result.json"
+  norm_run
+  norm_expect "action failure takes the failure path" \
+    '.action == "failure" and .reason == "time-budget" and (has("findings") | not)' \
+    'This review did not complete \(`time-budget`\)'
+  norm_setup unreadable
+  printf '%s' '[not json' > "${case_dir}/output/agent-result.json"
+  norm_run
+  norm_expect "unreadable agent result becomes a failure notice" '.action == "failure" and .reason == "tool-failure"'
+
+  # TODO buckets come from the normalized data; a clean run has no TODO.
+  norm_setup todo
+  jq '.findings = [
+      {severity: "high", category: "logic-error", file: "a.ts", line: 4, description: "Empty list throws.", remediation: "Guard the\nempty list.", actionable: true, dimension: "correctness"},
+      {severity: "medium", category: "edge-case", file: "N/A", description: "No handling for <b>zero</b> pages.", dimension: "correctness"},
+      {severity: "low", category: "naming-convention", file: "b.ts", description: "Rename tmp.", actionable: true, dimension: "style-conventions"},
+      {severity: "low", category: "doc-style", file: "c.md", description: "Not actionable.", actionable: false, dimension: "style-conventions"}]' \
+    "${case_dir}/output/agent-result.json" > "${case_dir}/r.json" && mv "${case_dir}/r.json" "${case_dir}/output/agent-result.json"
+  printf '%s' '{"check":{"id":"test-impact","status":"fail","summary":"No test covers the new helper."}}' > "${case_dir}/output/odh/test-impact-review.json"
+  rm -f "${case_dir}/output/odh/pr-description-review.json"
+  printf '%s' '{"risk":{"level":"high","why":"Shared pagination helper."},"confidence":{"level":"low","why":"No proof."},"change_summary":"s"}' > "${case_dir}/output/odh/rating.json"
+  printf '%s' '{"product_ask":{"status":"mismatch-justified","needs_human":true}}' > "${case_dir}/output/odh/product-ask-review.json"
+  printf '%s' '[{"id":"coderabbit","kind":"cli-adapter","output":"findings","status":"ok","findings":[{"severity":"info","category":"coderabbit","file":"d.ts","line":"2","description":"Drop the unused import.","actionable":true}]}]' > "${case_dir}/config/.run/collected.json"
+  norm_run
+  if grep -q '<b>zero' <<<"${body}"; then
+    echo "FAIL normalize todo: TODO text was not escaped" >&2
+    fail=1
+  else
+    norm_expect "TODO buckets are built on the host" \
+      '([.todo[] | select(.category == "findings") | .text] == ["a.ts:4: Guard the empty list.", "No handling for <b>zero</b> pages."])
+       and ([.todo[] | select(.category == "checks") | .text] == ["No test covers the new helper."])
+       and ([.todo[] | select(.category == "judgement")] | length == 4)
+       and ([.todo[] | select(.category == "nits") | .text] == ["b.ts: Rename tmp.", "d.ts:2: Drop the unused import."])' \
+      '^## TODO$' '^- a\.ts:4: Guard the empty list\.$' '^- No test covers the new helper\.$' \
+      '^- Verify PR description by hand: ' '^- A human must decide whether to approve: risk is high\.' \
+      '^- A human must decide whether to approve: confidence is low\.' '^- Decide whether the PR can go ahead' \
+      '^- d\.ts:2: Drop the unused import\.$'
+  fi
+  norm_setup todo-empty
+  norm_run
+  if grep -q '^## TODO' <<<"${body}"; then
+    echo "FAIL normalize todo-empty: a clean run rendered a TODO section" >&2
+    fail=1
+  else
+    norm_expect "a clean run has no TODO" '.action == "approve" and (has("todo") | not)'
+  fi
+
+  # Transcripts are the dispatch evidence when the directory is there.
+  norm_setup transcripts
+  mkdir -p "${case_dir}/transcripts"
+  : > "${case_dir}/transcripts/review-2026-11-24T20-12-50-827Z_01a2.jsonl"
+  : > "${case_dir}/transcripts/review-sub1-security-2026-11-24T20-19-17-256Z_01a2.jsonl"
+  : > "${case_dir}/transcripts/review-sub2-style-conventions-2026-11-24T20-19-17-350Z_01a2.jsonl"
+  : > "${case_dir}/transcripts/review-sub3-pr-description-review-2026-11-24T20-19-18-350Z_01a2.jsonl"
+  rm -f "${case_dir}/output/odh/pr-description-review.json"
+  norm_run
+  norm_expect "transcripts decide which reviewers were dispatched" \
+    '(.producers.dispatched | index("security") and index("style-conventions") and (index("correctness") | not))
+     and ([.producers.skipped[] | select(.id == "correctness" or .id == "rbac-review") | .reason] == ["not selected", "not selected"])' \
+    '^\| Security \| findings \| ✅ \| No findings\. \|' '^\| Correctness \| findings \| ➖ \| not selected \|' \
+    '^\| PR description \| check \| ➖ \| ran but did not report \|'
 
   if [[ "${fail}" -ne 0 ]]; then
     exit 1
@@ -2623,13 +4564,16 @@ if [ -z "${RESULT_FILE}" ] || [ ! -f "${RESULT_FILE}" ]; then
 fi
 
 echo "Using result: ${RESULT_FILE}"
+# Fold the stock result, the personas' side files and the host adapter output
+# into the sticky input. Everything below works on that object.
+NORMALIZED_RESULT=$(mktemp)
+CLEANUP_FILES+=("${NORMALIZED_RESULT}")
+normalize_stock_result "${RESULT_FILE}" "$(dirname "${RESULT_FILE}")/odh" \
+  "$(find_personas_file "${RESULT_FILE}")" "$(dirname "${RESULT_FILE}")/../transcripts" > "${NORMALIZED_RESULT}"
+RESULT_FILE="${NORMALIZED_RESULT}"
 # The severity filter below can drop an info-level sub-agent-failure. Keep the
 # unfiltered result so the projection still sees every failed dimension.
 UNFILTERED_RESULT_FILE="${RESULT_FILE}"
-
-# Sticky Ran/Result/Challenger audit come from result.producers only.
-# producers.json is the orchestrator's working store; post-review does not
-# read it or collected.json for the comment.
 
 # ---------------------------------------------------------------------------
 # Severity filtering: drop findings below the configured threshold.

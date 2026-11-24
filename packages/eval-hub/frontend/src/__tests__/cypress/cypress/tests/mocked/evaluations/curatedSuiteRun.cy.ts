@@ -44,6 +44,7 @@ const setupIntercepts = () => {
   cy.intercept('GET', '/_bff/mlflow/api/v1/experiments*', {
     body: { data: { experiments: [] } },
   });
+  cy.interceptApi('GET /api/:apiVersion/info', { path: API_VERSION }, { hardware_profiles: [] });
   cy.interceptApi(
     'POST /api/:apiVersion/evaluations/verify-connection',
     { path: API_VERSION },
@@ -65,10 +66,8 @@ const reusableCollection: Collection = {
   ...sourceCollection,
   resource: { ...sourceCollection.resource, id: 'curated-suite-existing-copy' },
   curation_order: undefined,
-  state: {
-    derived_from: sourceCollection.resource.id,
-    run_count: 2,
-  },
+  derived_from: sourceCollection.resource.id,
+  status: { run_count: 2 },
 };
 
 const interceptTenantCollections = (collections: Collection[]) => {

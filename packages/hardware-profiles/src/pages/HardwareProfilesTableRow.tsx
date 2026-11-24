@@ -31,8 +31,6 @@ import TolerationTable from './toleration/TolerationTable';
 import {
   createHardwareProfileWarningTitle,
   filterRecognizedVisibility,
-  getHardwareProfileDescription,
-  getHardwareProfileDisplayName,
   isDefaultHardwareProfile,
   validateProfileWarning,
 } from './utils';
@@ -41,7 +39,11 @@ import {
   DRA_HARDWARE_PROFILE_DUPLICATE_DISABLED_MESSAGE,
   DRA_HARDWARE_PROFILE_EDIT_DISABLED_MESSAGE,
 } from './const';
-import { isDRAHardwareProfile } from '../../shared/utils';
+import {
+  getHardwareProfileDescription,
+  getHardwareProfileDisplayName,
+  isDRAHardwareProfile,
+} from '../../shared/utils';
 
 type HardwareProfilesTableRowProps = {
   rowIndex: number;
@@ -178,6 +180,20 @@ const HardwareProfilesTableRow: React.FC<HardwareProfilesTableRowProps> = ({
             resource={hardwareProfile}
             truncateDescriptionLines={2}
             wrapResourceTitle={false}
+            label={
+              isDRAHardwareProfile(hardwareProfile) ? (
+                <div>
+                  <Label
+                    color="orange"
+                    variant="outline"
+                    isCompact
+                    data-testid="hardware-profile-tech-preview-label"
+                  >
+                    Tech Preview
+                  </Label>
+                </div>
+              ) : undefined
+            }
             titleIcon={
               hardwareProfileWarnings.length > 0 && (
                 <Popover

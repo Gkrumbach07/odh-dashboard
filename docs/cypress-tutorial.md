@@ -205,9 +205,8 @@ deleteOpenShiftProject('test-project');
 User credentials are defined in `test-variables.yml` (not stored upstream - injected during CI):
 
 ```yaml
-# Exported as LDAP_ADMIN_USER from utils/e2eUsers
-TEST_USER:
-  AUTH_TYPE: ldap-auth
+HTPASSWD_CLUSTER_ADMIN_USER:
+  AUTH_TYPE: htpasswd-auth
   USERNAME: admin-user
   PASSWORD: admin-password
 ```
@@ -215,9 +214,9 @@ TEST_USER:
 Then imported and used in tests:
 
 ```typescript
-import { LDAP_ADMIN_USER } from '../../../utils/e2eUsers';
+import { HTPASSWD_CLUSTER_ADMIN_USER } from '../../../utils/e2eUsers';
 
-cy.visitWithLogin('/projects', LDAP_ADMIN_USER);
+cy.visitWithLogin('/projects', HTPASSWD_CLUSTER_ADMIN_USER);
 ```
 
 **Available utilities:**
@@ -266,7 +265,7 @@ it(
     tags: [
       '@Smoke', // Critical test
       '@ODS-1875', // Jira ticket
-      '@SmokeSet1', // set report
+      '@ci-dashboard-set-1', // CI group
     ],
   },
   () => {
@@ -334,7 +333,7 @@ cy.step('Verify project was created');
 ### Tags and Test Options
 
 ```typescript
-it('should create project', { tags: ['@Smoke', '@SmokeSet1', '@Dashboard'], timeout: 30000 }, () => {
+it('should create project', { tags: ['@Smoke', '@Dashboard'], timeout: 30000 }, () => {
   // test code
 });
 ```
@@ -400,11 +399,11 @@ after(() => {
 it(
   'Create and delete a project',
   {
-    tags: ['@Smoke', '@SmokeSet1', '@ODS-1234', '@Dashboard', '@Workbenches'],
+    tags: ['@Smoke', '@ODS-1234', '@Dashboard', '@Workbenches'],
   },
   () => {
     cy.step('Log into the application');
-    cy.visitWithLogin('/', LDAP_ADMIN_USER);
+    cy.visitWithLogin('/', HTPASSWD_CLUSTER_ADMIN_USER);
     projectListPage.navigate();
 
     cy.step('Create a new project');
@@ -444,10 +443,10 @@ Organize tests into groups using tags for parallel execution:
 
 ```typescript
 // Group 1
-it('test 1', { tags: ['@SmokeSet1'] }, () => { ... });
+it('test 1', { tags: ['@SmokeSet1'] }, () => undefined);
 
 // Group 2
-it('test 2', { tags: ['@SmokeSet2'] }, () => { ... });
+it('test 2', { tags: ['@SmokeSet2'] }, () => undefined);
 ```
 
 Define parallel stages from Test Tags list (e.g., "SmokeSet1,SmokeSet2")
@@ -522,7 +521,7 @@ The `packages/cypress/cypress/support/e2e.ts` file is automatically loaded befor
 
 - **Global Setup**: Configures plugins (`@cypress/grep`, `@cypress/code-coverage`, `cypress-mochawesome-reporter`, `cypress-plugin-steps`), custom commands, and global test behavior
 - **Test Tagging**: Extends `it()` to support tags: `it('test name', { tags: ['@Smoke'] }, () => { ... })`
-- **Test Filtering**: Filters tests based on `grepTags` and `skipTags`, skips entire suites when all tests are filtered
+- **Test Filtering**: Filters test registration based on inherited suite tags, `grepTags`, and `skipTags`
 - **Global Hooks**:
   - `before()`: Sets up intercepts and timeouts
   - `beforeEach()`: Applies filtering, sets up mocks (`CY_MOCK=1`), configures module federation, logs test info
@@ -533,13 +532,13 @@ The `packages/cypress/cypress/support/e2e.ts` file is automatically loaded befor
 
 #### Skipped Tests in JUnit Results
 
-Tests filtered by tags use Mocha's `this.skip()` in `beforeEach()`, marking them as **pending** (skipped) rather than failed. The `mocha-junit-reporter` converts these to JUnit XML with `skipped="true"`, allowing CI/CD systems to distinguish:
+Tag-filtered tests and static `it.skip()` / `describe.skip()` tests are omitted before registration. They do not appear in JUnit reports and are excluded from the planner's expected counts.
 
-- ✅ **Passed**: Test executed and passed
-- ❌ **Failed**: Test executed and failed
-- ⏸️ **Skipped**: Test was intentionally skipped (not executed)
+A selected test that calls `this.skip()` at runtime is registered and appears as a pending (skipped) JUnit testcase. Runtime skips count toward the planned total but not the executed total. CI rejects an all-skipped run, missing reports, and totals that differ from the plan; assertion failures are also reported.
 
-**Benefits**: Skipped tests don't count as failures, remain visible in reports, and CI/CD can distinguish skipped vs failed tests.
+### Deprecated E2E workflow dispatch input
+
+`skip_auto_detect` remains accepted for existing REST and `gh workflow run` callers, but is deprecated and ignored. Path-impact selection always runs in addition to requested tags. Remove `skip_auto_detect` from dispatch payloads; `additional_tags` adds coverage and `skip_default` controls only the default regression tag.
 
 ---
 
@@ -793,9 +792,11 @@ pnpm run cypress:open
 
 ```tsx
 // Change this:
-<Button data-testid="create-project" ...>
-// To this:
-<Button data-testid="create-new-project" ...>
+<>
+  <Button data-testid="create-project">Save</Button>
+  {/* To this: */}
+  <Button data-testid="create-new-project">Save</Button>
+</>
 ```
 
 2. Dev server hot reloads → rerun test in Cypress → **test fails** (can't find element)

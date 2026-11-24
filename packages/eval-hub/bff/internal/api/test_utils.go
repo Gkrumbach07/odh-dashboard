@@ -12,8 +12,6 @@ import (
 
 	"github.com/opendatahub-io/eval-hub/bff/internal/config"
 	"github.com/opendatahub-io/eval-hub/bff/internal/constants"
-	"github.com/opendatahub-io/eval-hub/bff/internal/integrations/bffclient"
-	"github.com/opendatahub-io/eval-hub/bff/internal/integrations/bffclient/bffmocks"
 	"github.com/opendatahub-io/eval-hub/bff/internal/integrations/evalhub"
 	ehmocks "github.com/opendatahub-io/eval-hub/bff/internal/integrations/evalhub/ehmocks"
 	"github.com/opendatahub-io/eval-hub/bff/internal/integrations/kubernetes"
@@ -182,22 +180,6 @@ func (c *testK8sClient) GetEvalHubCRStatus(_ context.Context, _ *kubernetes.Requ
 	}, nil
 }
 
-func (c *testK8sClient) GetKueueAvailability(_ context.Context, _ *kubernetes.RequestIdentity, _ string) (*models.KueueAvailability, error) {
-	return &models.KueueAvailability{}, nil
-}
-
-func (c *testK8sClient) GetKueueWorkloadStatuses(_ context.Context, _ *kubernetes.RequestIdentity, _ string, _ []string) (*models.KueueWorkloadStatusesResponse, error) {
-	return &models.KueueWorkloadStatusesResponse{}, nil
-}
-
-func (c *testK8sClient) ListHardwareProfiles(_ context.Context, _ *kubernetes.RequestIdentity, _, _ string) (*models.HardwareProfilesResponse, error) {
-	return &models.HardwareProfilesResponse{}, nil
-}
-
-func (c *testK8sClient) GetMissingHardwareProfileLocalQueueName(_ context.Context, _ *kubernetes.RequestIdentity, _, _, _ string) (string, bool, error) {
-	return "", false, nil
-}
-
 // erroringEHClient is a minimal EvalHub client whose HealthCheck always returns an error.
 // Used in health handler tests to simulate "service-unreachable".
 type erroringEHClient struct{}
@@ -205,8 +187,8 @@ type erroringEHClient struct{}
 func (e *erroringEHClient) HealthCheck(_ context.Context, _ string) (*evalhub.HealthResponse, error) {
 	return nil, fmt.Errorf("connection refused")
 }
-func (e *erroringEHClient) ListEvaluationJobs(_ context.Context, _ evalhub.ListEvaluationJobsParams) ([]evalhub.EvaluationJob, error) {
-	return nil, nil
+func (e *erroringEHClient) ListEvaluationJobs(_ context.Context, _ evalhub.ListEvaluationJobsParams) (evalhub.EvaluationJobsResult, error) {
+	return evalhub.EvaluationJobsResult{}, nil
 }
 func (e *erroringEHClient) GetEvaluationJob(_ context.Context, _ string, _ string) (*evalhub.EvaluationJob, error) {
 	return nil, nil
@@ -217,8 +199,8 @@ func (e *erroringEHClient) CreateEvaluationJob(_ context.Context, _ string, _ ev
 func (e *erroringEHClient) CancelEvaluationJob(_ context.Context, _ string, _ string, _ bool) error {
 	return nil
 }
-func (e *erroringEHClient) GetCollection(_ context.Context, _ string, _ string) (*evalhub.Collection, error) {
-	return nil, fmt.Errorf("erroring client")
+func (e *erroringEHClient) GetCollection(_ context.Context, _ string, _ string) (*evalhub.Collection, json.RawMessage, error) {
+	return nil, nil, fmt.Errorf("erroring client")
 }
 func (e *erroringEHClient) PatchCollection(_ context.Context, _ string, _ string, _ []evalhub.CollectionPatchOperation) (*evalhub.Collection, error) {
 	return nil, fmt.Errorf("erroring client")
@@ -243,6 +225,9 @@ func (e *erroringEHClient) GetEvaluationJobLogs(_ context.Context, _ string, _ s
 }
 func (e *erroringEHClient) GetEvaluationJobBenchmarkLogs(_ context.Context, _ string, _ int, _ string, _ evalhub.GetJobLogsParams) (evalhub.EvaluationJobLogsResponse, error) {
 	return evalhub.EvaluationJobLogsResponse{}, fmt.Errorf("connection refused")
+}
+func (e *erroringEHClient) GetInfo(_ context.Context, _ string) (*evalhub.InfoResponse, error) {
+	return nil, fmt.Errorf("connection refused")
 }
 
 // setupApiTestWithEvalHubRaw exercises handlers that return plain text (not JSON).
@@ -327,90 +312,6 @@ func setupApiTestForHealth[T any](
 		evalHubClientFactory:    mockFactory,
 		repositories:            repositories.NewRepositories(),
 		dashboardNamespace:      "test-dashboard-ns",
-	}
-
-	ctx := context.WithValue(req.Context(), constants.RequestIdentityKey, identity)
-	req = req.WithContext(ctx)
-
-	rr := httptest.NewRecorder()
-	app.Routes().ServeHTTP(rr, req)
-	res := rr.Result()
-	defer res.Body.Close()
-	data, err := io.ReadAll(res.Body)
-	if err != nil {
-		return empty, nil, err
-	}
-	if len(data) == 0 {
-		return empty, res, nil
-	}
-	var out T
-	if err := json.Unmarshal(data, &out); err != nil && err != io.EOF {
-		return empty, nil, err
-	}
-	return out, res, nil
-}
-
-// setupApiTestWithBFFClient exercises handlers that require a BFF client in context (inter-BFF calls).
-func setupApiTestWithBFFClient[T any](method, url string, identity *kubernetes.RequestIdentity) (T, *http.Response, error) {
-	var empty T
-	req, err := http.NewRequest(method, url, http.NoBody)
-	if err != nil {
-		return empty, nil, err
-	}
-
-	if identity != nil && identity.UserID != "" {
-		req.Header.Set(constants.KubeflowUserIDHeader, identity.UserID)
-	}
-
-	app := &App{
-		config:                  config.EnvConfig{AllowedOrigins: []string{"*"}, AuthMethod: config.AuthMethodInternal, MockBFFClients: true},
-		logger:                  testLogger,
-		kubernetesClientFactory: &testK8sFactory{},
-		evalHubClientFactory:    ehmocks.NewMockClientFactory(),
-		bffClientFactory:        bffmocks.NewMockClientFactory(testLogger),
-		repositories:            repositories.NewRepositories(),
-	}
-
-	ctx := context.WithValue(req.Context(), constants.RequestIdentityKey, identity)
-	req = req.WithContext(ctx)
-
-	rr := httptest.NewRecorder()
-	app.Routes().ServeHTTP(rr, req)
-	res := rr.Result()
-	defer res.Body.Close()
-	data, err := io.ReadAll(res.Body)
-	if err != nil {
-		return empty, nil, err
-	}
-	if len(data) == 0 {
-		return empty, res, nil
-	}
-	var out T
-	if err := json.Unmarshal(data, &out); err != nil && err != io.EOF {
-		return empty, nil, err
-	}
-	return out, res, nil
-}
-
-// setupApiTestWithBFFClientFactory exercises BFF client handlers with a custom factory for error injection.
-func setupApiTestWithBFFClientFactory[T any](method, url string, identity *kubernetes.RequestIdentity, factory bffclient.BFFClientFactory) (T, *http.Response, error) {
-	var empty T
-	req, err := http.NewRequest(method, url, http.NoBody)
-	if err != nil {
-		return empty, nil, err
-	}
-
-	if identity != nil && identity.UserID != "" {
-		req.Header.Set(constants.KubeflowUserIDHeader, identity.UserID)
-	}
-
-	app := &App{
-		config:                  config.EnvConfig{AllowedOrigins: []string{"*"}, AuthMethod: config.AuthMethodInternal},
-		logger:                  testLogger,
-		kubernetesClientFactory: &testK8sFactory{},
-		evalHubClientFactory:    ehmocks.NewMockClientFactory(),
-		bffClientFactory:        factory,
-		repositories:            repositories.NewRepositories(),
 	}
 
 	ctx := context.WithValue(req.Context(), constants.RequestIdentityKey, identity)

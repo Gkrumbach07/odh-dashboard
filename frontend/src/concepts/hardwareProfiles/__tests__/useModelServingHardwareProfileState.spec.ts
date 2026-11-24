@@ -54,7 +54,6 @@ describe('useModelServingHardwareProfileState', () => {
       reliantAreas: {},
       requiredComponents: {},
       requiredCapabilities: {},
-      customCondition: () => false,
     });
 
     mockUseAppContext.mockReturnValue({
@@ -73,6 +72,8 @@ describe('useModelServingHardwareProfileState', () => {
         resources: { requests: {}, limits: {} },
       },
       initialHardwareProfile: undefined,
+      excludeDRAProfiles: false,
+      existingBinding: {},
       isFormDataValid: true,
       setFormData: jest.fn(),
       resetFormData: jest.fn(),
@@ -123,6 +124,8 @@ describe('useModelServingHardwareProfileState', () => {
     };
     mockUseHardwareProfileConfig.mockReturnValue({
       formData: hwpFormData,
+      excludeDRAProfiles: false,
+      existingBinding: {},
       isFormDataValid: true,
       setFormData: jest.fn(),
       resetFormData: jest.fn(),
@@ -168,6 +171,8 @@ describe('useModelServingHardwareProfileState', () => {
         },
       },
       initialHardwareProfile: undefined,
+      excludeDRAProfiles: false,
+      existingBinding: {},
       isFormDataValid: true,
       setFormData: jest.fn(),
       resetFormData: jest.fn(),

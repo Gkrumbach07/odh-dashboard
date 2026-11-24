@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {
-  Breadcrumb,
+  Alert,
   BreadcrumbItem,
   Button,
   EmptyStateVariant,
@@ -14,15 +14,17 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 import { ApplicationsPage, DashboardEmptyTableView } from '@odh-dashboard/ui-core';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
-import { fireMiscTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
 import CompareBenchmarksTable from '~/app/components/compare/CompareBenchmarksTable';
+import ContextBreadcrumb from '~/app/components/ContextBreadcrumb';
 import { useCollectionNameMap } from '~/app/hooks/useCollectionNameMap';
 import { useEvaluationJobs } from '~/app/hooks/useEvaluationJobs';
+import { useProjectDisplayName } from '~/app/hooks/useProjectDisplayName';
 import { EvaluationJob } from '~/app/types';
 import { getBenchmarkDisplayName, getEvaluationName } from '~/app/utilities/evaluationUtils';
 import { EVAL_HUB_EVENTS } from '~/app/tracking/evalhubTrackingConstants';
+import { useEvalHubTracking } from '~/app/tracking/useEvalHubTracking';
 import {
   COMPARE_RUNS_PAGE_TITLE,
   buildMlflowCompareSearchParams,
@@ -36,19 +38,23 @@ import {
   DEFAULT_TABLE_PER_PAGE,
   TABLE_PER_PAGE_OPTIONS,
 } from '~/app/utilities/tablePaginationConstants';
-import { evaluationCompareRoute, evaluationsBaseRoute } from '~/app/routes';
+import { evaluationCompareRoute, evaluationsBaseRoute, projectHomeRoute } from '~/app/routes';
 
 const ChooseCompareBenchmarksPage: React.FC = () => {
+  const { trackEvalHubEvent } = useEvalHubTracking();
+
   const { namespace } = useParams<{ namespace: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const projectDisplayName = useProjectDisplayName(namespace);
   const { collectionNameMap, loaded: collectionsLoaded } = useCollectionNameMap();
 
   const selectedJobIds = React.useMemo(
     () => parseCsvParam(searchParams.get('jobIds') ?? ''),
     [searchParams],
   );
-  const [allJobs, jobsLoaded, loadError] = useEvaluationJobs({ namespace });
+  const [jobsResult, jobsLoaded, loadError] = useEvaluationJobs({ namespace });
+  const allJobs = jobsResult.jobs;
   const loaded = jobsLoaded && collectionsLoaded;
 
   const selectedJobs = React.useMemo(() => {
@@ -101,7 +107,7 @@ const ChooseCompareBenchmarksPage: React.FC = () => {
       ...new Set(selections.map((s) => getBenchmarkDisplayName(s.benchmarkId))),
     ];
 
-    fireMiscTrackingEvent(EVAL_HUB_EVENTS.COMPARE_BENCHMARK_CHOSEN, {
+    trackEvalHubEvent(EVAL_HUB_EVENTS.COMPARE_BENCHMARK_CHOSEN, {
       countOfBenchmarks: selections.length,
       totalAvailable,
       benchmarkNames: JSON.stringify(benchmarkNames),
@@ -114,7 +120,7 @@ const ChooseCompareBenchmarksPage: React.FC = () => {
         return selectedJob ? getEvaluationName(selectedJob) : run.jobId;
       }),
     });
-  }, [canCompare, namespace, navigate, selectedBenchmarkKeys, selectedJobs]);
+  }, [trackEvalHubEvent, canCompare, namespace, navigate, selectedBenchmarkKeys, selectedJobs]);
 
   const handleSelectionChange = React.useCallback((selectionKeys: string[], checked: boolean) => {
     setSelectedBenchmarkKeys((prev) => {
@@ -157,12 +163,14 @@ const ChooseCompareBenchmarksPage: React.FC = () => {
     <ApplicationsPage
       title={COMPARE_RUNS_PAGE_TITLE}
       breadcrumb={
-        <Breadcrumb>
-          <BreadcrumbItem
-            render={() => <Link to={evaluationsBaseRoute(namespace)}>Evaluations</Link>}
-          />
+        <ContextBreadcrumb
+          pageName="Evaluations"
+          projectDisplayName={projectDisplayName}
+          homePath={evaluationsBaseRoute(namespace)}
+          projectHomePath={projectHomeRoute(namespace)}
+        >
           <BreadcrumbItem isActive>Compare evaluation runs</BreadcrumbItem>
-        </Breadcrumb>
+        </ContextBreadcrumb>
       }
       loaded={loaded}
       loadError={loadError}
@@ -171,6 +179,19 @@ const ChooseCompareBenchmarksPage: React.FC = () => {
       provideChildrenPadding
     >
       <Flex direction={{ default: 'column' }} spaceItems={{ default: 'spaceItemsMd' }}>
+        {jobsResult.truncated && (
+          <FlexItem>
+            <Alert
+              variant="warning"
+              isInline
+              title="Evaluation runs list is incomplete"
+              data-testid="compare-benchmarks-truncated-alert"
+            >
+              Showing {allJobs.length} of {jobsResult.totalCount} evaluation runs. Runs beyond this
+              limit are not available for comparison.
+            </Alert>
+          </FlexItem>
+        )}
         <FlexItem>
           <Toolbar
             inset={{ default: 'insetNone' }}

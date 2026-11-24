@@ -1,13 +1,16 @@
+import { queryByTestId } from '@testing-library/dom';
 import { appChrome } from './appChrome';
 import { Modal } from './components/Modal';
 import { TableRow } from './components/table';
 import { K8sNameDescriptionField } from './components/subComponents/K8sNameDescriptionField';
 import { NIMWizardFields } from './modelServing/NIMWizardFields';
+import { DeploymentWizardYaml } from './modelServing/DeploymentWizardYaml';
 import { Contextual } from './components/Contextual';
 import { Wizard } from './components/Wizard';
 import { DeleteModal } from './components/DeleteModal';
-import { DashboardCodeEditor } from './components/DashboardCodeEditor';
 import { mixin } from '../utils/mixin';
+import { ModelLocationSelectOption } from '../utils/modelServingConstants';
+import { OOTBConnectionTypes } from '../types';
 
 type DeploymentMethodKey =
   | 'legacy'
@@ -68,6 +71,10 @@ class ModelServingGlobal {
 
   findSelectAProjectButton() {
     return cy.findByRole('button', { name: 'Select a project' });
+  }
+
+  findNoPlatformsMessage() {
+    return cy.findByTestId('empty-state-no-platforms-message');
   }
 
   findDeployModelButton() {
@@ -762,6 +769,14 @@ class KServeRow extends ModelServingRow {
     return this.find().next('tr').find(`dt:contains("${itemName}")`);
   }
 
+  findHardwareProfileDRADetails() {
+    return this.findExpansion().findByTestId('hardware-profile-dra-details');
+  }
+
+  findHardwareProfileDRATemplate() {
+    return this.findHardwareProfileDRADetails().findByTestId('hardware-profile-dra-template');
+  }
+
   findProjectScopedLabel() {
     return this.find().findByTestId('project-scoped-label');
   }
@@ -973,6 +988,8 @@ class ModelServingSection {
 class ModelServingWizard extends Wizard {
   nim = new NIMWizardFields();
 
+  yaml = new DeploymentWizardYaml();
+
   constructor(private edit = false) {
     super('Deploy a model', edit ? 'Update deployment' : 'Deploy model');
   }
@@ -1087,6 +1104,11 @@ class ModelServingWizard extends Wizard {
     });
   }
 
+  selectModelTypeOption(name: string) {
+    // Cypress misidentifies the clickable menu above the wizard footer as clipped.
+    return this.findModelTypeSelectOption(name).click({ force: true });
+  }
+
   findModelDeploymentProjectSelector() {
     return cy.findByTestId('project-selector-toggle');
   }
@@ -1188,7 +1210,7 @@ class ModelServingWizard extends Wizard {
     });
   }
 
-  selectServingRuntimeOption(name: string) {
+  selectServingRuntimeOption(name: string, scope: 'global' | 'project' = 'global') {
     this.findModelServerAutoSelectRadio().then(($radio) => {
       if ($radio.is(':checked')) {
         // Auto-select the best runtime for my model based on model type, model format, and hardware profile
@@ -1198,7 +1220,7 @@ class ModelServingWizard extends Wizard {
         this.findServingRuntimeTemplateSearchSelector().click();
         // Duplicate display names can match multiple menu items; pick the first for E2E stability
         this.findServingRuntimeTemplateSelectionSearchInputBox().type(name);
-        cy.findByTestId('global-scoped-serving-runtimes')
+        cy.findByTestId(`${scope}-scoped-serving-runtimes`)
           .find('[data-testid^="servingRuntime"]')
           .first()
           .click();
@@ -1264,6 +1286,23 @@ class ModelServingWizard extends Wizard {
 
   findModelLocationSelectOption(name: string) {
     return this.findModelLocationSelect().findSelectOption(name);
+  }
+
+  /** Select a location and its built-in connection type when a configuration choice is needed. */
+  selectModelLocationOption(name: string) {
+    const builtInTypes: Partial<Record<string, OOTBConnectionTypes>> = {
+      [ModelLocationSelectOption.URI]: OOTBConnectionTypes.uri,
+      [ModelLocationSelectOption.S3]: OOTBConnectionTypes.s3,
+      [ModelLocationSelectOption.OCI]: OOTBConnectionTypes.oci,
+    };
+
+    this.findModelLocationSelectOption(name).click();
+    return cy.document().then((document) => {
+      const connectionType = builtInTypes[name];
+      if (connectionType && queryByTestId(document.body, 'custom-type-select')) {
+        this.findCustomModelLocationSelectOption(connectionType).click();
+      }
+    });
   }
 
   findCustomModelLocationSelect() {
@@ -1715,26 +1754,6 @@ class ModelServingWizard extends Wizard {
     return cy.findByTestId('review-item-huggingFaceApiKey-value');
   }
 
-  findYAMLViewerToggle(toggle: string) {
-    return cy.findByRole('button', { name: toggle });
-  }
-
-  findYAMLCodeEditor() {
-    return new DashboardCodeEditor(() => cy.findByTestId('yaml-editor'));
-  }
-
-  findYAMLEditorEmptyState() {
-    return cy.findByTestId('yaml-editor-empty-state');
-  }
-
-  findManualEditModeButton() {
-    return cy.findByTestId('manual-edit-mode-button');
-  }
-
-  findSwitchToYAMLEditorConfirmButton() {
-    return cy.findByTestId('switch-to-manual-yaml-editor');
-  }
-
   findDeploymentMethodRadio(key: DeploymentMethodKey) {
     return cy.findByTestId(`deployment-method-${key}`);
   }
@@ -1784,10 +1803,6 @@ class ModelServingWizard extends Wizard {
         cy.wrap(radios.first()).click();
       }
     });
-  }
-
-  findYAMLEditFallbackAlert() {
-    return cy.findByTestId('yaml-fallback-alert');
   }
 
   navigateToAdvancedSettings() {

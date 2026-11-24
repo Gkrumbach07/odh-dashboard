@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { Alert, Button, Modal, ModalBody, ModalFooter, ModalHeader } from '@patternfly/react-core';
-import { fireMiscTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
 import { EvaluationJob } from '~/app/types';
 import { EVAL_HUB_EVENTS } from '~/app/tracking/evalhubTrackingConstants';
+import { useEvalHubTracking } from '~/app/tracking/useEvalHubTracking';
 import { getEvaluationName } from '~/app/utilities/evaluationUtils';
 import { cancelEvaluationJob } from '~/app/api/k8s';
 
@@ -19,6 +19,8 @@ const StopEvaluationModal: React.FC<StopEvaluationModalProps> = ({
   onClose,
   onComplete,
 }) => {
+  const { trackEvalHubEvent } = useEvalHubTracking();
+
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const evaluationName = getEvaluationName(job);
@@ -32,7 +34,7 @@ const StopEvaluationModal: React.FC<StopEvaluationModalProps> = ({
     setActionError(null);
     try {
       await cancelEvaluationJob('', namespace, job.resource.id)({});
-      fireMiscTrackingEvent(EVAL_HUB_EVENTS.EVALUATION_STOPPED, {
+      trackEvalHubEvent(EVAL_HUB_EVENTS.EVALUATION_STOPPED, {
         evaluationName,
         previousState: job.status.state,
       });

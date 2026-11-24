@@ -46,54 +46,44 @@ export type EvalHubHealthResponse = {
   available: boolean;
 };
 
-export type KueueAvailability = {
-  enabled: boolean;
-  scheduling_ready: boolean;
-  cluster_enabled: boolean;
-  namespace_managed: boolean;
-  local_queues_available: boolean;
-  local_queue_names: string[];
-};
-
-export type KueueWorkloadState = 'queued' | 'admitted' | 'finished' | 'preempted' | 'inadmissible';
-
-export type KueueWorkloadStatus = {
-  evaluation_id: string;
-  queue_name: string;
-  state: KueueWorkloadState;
+export type QueueAvailability = {
+  status: 'active' | 'inactive' | 'unknown';
+  reason?: string;
   message?: string;
-  queue_position?: number;
 };
 
-export type KueueWorkloadStatusesResponse = {
-  items: KueueWorkloadStatus[];
-};
-
-export type HardwareProfileResource = {
-  display_name?: string;
+export type HardwareProfileIdentifier = {
   identifier: string;
+  display_name?: string;
   resource_type?: string;
-  default?: string;
-  minimum?: string;
-  maximum?: string;
+  min_count?: string;
+  default_count?: string;
+  max_count?: string;
 };
 
-export type HardwareProfile = {
+export type HardwareProfileInfo = {
   name: string;
-  display_name: string;
+  display_name?: string;
   description?: string;
-  enabled: boolean;
-  scheduling_type?: string;
-  local_queue_name?: string;
-  cluster_queue_name?: string;
-  priority_class?: string;
-  resources?: HardwareProfileResource[];
+  scheduling_type?: 'node' | 'queue';
+  identifiers: HardwareProfileIdentifier[];
+  queue_name?: string;
+  priority_class_name?: string;
+  queue_availability?: QueueAvailability;
   compatibility?: HardwareProfileValidationResult;
 };
 
-export type HardwareProfilesResponse = {
-  items: HardwareProfile[];
-  warning?: string;
+export type InfoResponse = {
+  version?: string;
+  build?: string;
+  build_date?: string;
+  git_hash?: string;
+  hardware_profiles: HardwareProfileInfo[];
+};
+
+export type KueueAvailability = {
+  enabled: boolean;
+  scheduling_ready: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -151,18 +141,15 @@ type JobResource = {
   read_only?: boolean;
   owner?: string;
   mlflow_experiment_id?: string;
-  message?: JobMessage;
-  queue?: string;
 };
 
 type JobStatus = {
   state: EvaluationJobState;
   message?: JobMessage;
   benchmarks?: BenchmarkState[];
-  queue?: string;
 };
 
-type BenchmarkState = {
+export type BenchmarkState = {
   provider_id?: string;
   id: string;
   benchmark_index?: number;
@@ -197,7 +184,6 @@ type JobTestResult = {
 };
 
 type JobResults = {
-  total_evaluations?: number;
   benchmarks?: BenchmarkResult[];
   mlflow_experiment_url?: string;
   test?: JobTestResult;
@@ -223,14 +209,39 @@ export type JobPassCriteria = {
   threshold: number;
 };
 
-type S3DataRef = {
+export type TestDataRefType = 'data_set' | 'pre_recorded_data';
+
+export type S3DataRef = {
   bucket?: string;
   key?: string;
   secret_ref?: string;
 };
 
-type TestDataRef = {
+export type TestDataRefPVC = {
+  claim_name?: string;
+  sub_path?: string;
+};
+
+export type TestDataRefGit = {
+  url?: string;
+  ref?: string;
+  sub_path?: string;
+  secret_ref?: string;
+};
+
+export type TestDataRefHF = {
+  repo_id?: string;
+  revision?: string;
+  sub_path?: string;
+  secret_ref?: string;
+};
+
+export type TestDataRef = {
+  type?: TestDataRefType;
   s3?: S3DataRef;
+  pvc?: TestDataRefPVC;
+  git?: TestDataRefGit;
+  hf?: TestDataRefHF;
 };
 
 export type HardwareResourceConfig = {
@@ -340,6 +351,12 @@ export type ListEvaluationJobsParams = {
   tags?: string;
 };
 
+export type EvaluationJobsResult = {
+  jobs: EvaluationJob[];
+  totalCount: number;
+  truncated: boolean;
+};
+
 // ---------------------------------------------------------------------------
 // Collection / Benchmark Suite types
 // ---------------------------------------------------------------------------
@@ -354,10 +371,8 @@ export type CollectionResource = {
   version_counter?: number;
 };
 
-export type CollectionState = {
-  derived_from?: string;
+export type CollectionStatus = {
   run_count?: number;
-  pinned_order?: number;
 };
 
 export type CollectionPrimaryScore = {
@@ -377,6 +392,7 @@ export type CollectionBenchmark = {
   primary_score?: CollectionPrimaryScore;
   pass_criteria?: CollectionPassCriteria;
   parameters?: Record<string, unknown>;
+  test_data_ref?: TestDataRef;
 };
 
 export type Collection = {
@@ -393,7 +409,8 @@ export type Collection = {
   industries?: string[];
   evaluation_targets?: string[];
   curation_order?: number;
-  state?: CollectionState;
+  pinned_order?: number;
+  status?: CollectionStatus;
   custom?: Record<string, unknown>;
   pass_criteria?: CollectionPassCriteria;
   benchmarks?: CollectionBenchmark[];

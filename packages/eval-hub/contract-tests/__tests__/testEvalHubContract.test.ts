@@ -20,7 +20,7 @@ describe('EvalHub API Contract Tests', () => {
     it('should return API health and version status', async () => {
       const result = await apiClient.get('/eval-hub/api/v1/health');
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/HealthResponse/content/application/json/schema',
+        ref: '#/components/responses/HealthResponse/content/application~1json/schema',
         status: 200,
       });
     });
@@ -30,35 +30,24 @@ describe('EvalHub API Contract Tests', () => {
     it('should successfully retrieve namespaces list', async () => {
       const result = await apiClient.get('/eval-hub/api/v1/namespaces');
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/NamespacesResponse/content/application/json/schema',
+        ref: '#/components/responses/NamespacesResponse/content/application~1json/schema',
         status: 200,
       });
     });
   });
 
-  describe('Kueue and HardwareProfile endpoints', () => {
-    it('should return the documented Kueue availability response', async () => {
-      const result = await apiClient.get('/eval-hub/api/v1/kueue/availability?namespace=default');
+  describe('Queue and HardwareProfile endpoints', () => {
+    it('should return the documented info response with tenant hardware profiles', async () => {
+      const result = await apiClient.get('/eval-hub/api/v1/info?namespace=default');
 
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/paths/~1eval-hub~1api~1v1~1kueue~1availability/get/responses/200/content/application~1json/schema',
+        ref: '#/paths/~1eval-hub~1api~1v1~1info/get/responses/200/content/application~1json/schema',
         status: 200,
       });
     });
 
-    it('should return the documented Kueue Workload statuses response', async () => {
-      const result = await apiClient.get(
-        '/eval-hub/api/v1/kueue/workloads?namespace=default&evaluation_ids=evaluation-001',
-      );
-
-      expect(result).toMatchContract(apiSchema, {
-        ref: '#/paths/~1eval-hub~1api~1v1~1kueue~1workloads/get/responses/200/content/application~1json/schema',
-        status: 200,
-      });
-    });
-
-    it('should return a BadRequest error when evaluation_ids are missing', async () => {
-      const result = await apiClient.get('/eval-hub/api/v1/kueue/workloads?namespace=default');
+    it('should return a BadRequest error when the namespace is missing', async () => {
+      const result = await apiClient.get('/eval-hub/api/v1/info');
 
       expect(result.success).toBe(false);
       if (!result.success) {
@@ -70,15 +59,6 @@ describe('EvalHub API Contract Tests', () => {
           },
         );
       }
-    });
-
-    it('should return the documented compatible HardwareProfiles response', async () => {
-      const result = await apiClient.get('/eval-hub/api/v1/hardwareprofiles?namespace=default');
-
-      expect(result).toMatchContract(apiSchema, {
-        ref: '#/paths/~1eval-hub~1api~1v1~1hardwareprofiles/get/responses/200/content/application~1json/schema',
-        status: 200,
-      });
     });
 
     it('should return the documented HardwareProfile validation response', async () => {
@@ -126,7 +106,7 @@ describe('EvalHub API Contract Tests', () => {
     it('should list evaluation jobs from EvalHub', async () => {
       const result = await apiClient.get('/eval-hub/api/v1/evaluations/jobs?namespace=default');
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/EvaluationJobsResponse/content/application/json/schema',
+        ref: '#/components/responses/EvaluationJobsResponse/content/application~1json/schema',
         status: 200,
       });
     });
@@ -138,7 +118,7 @@ describe('EvalHub API Contract Tests', () => {
         '/eval-hub/api/v1/evaluations/collections?namespace=default&scope=system&sort_by=curation_order',
       );
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/CollectionsResponse/content/application/json/schema',
+        ref: '#/components/responses/CollectionsResponse/content/application~1json/schema',
         status: 200,
       });
     });
@@ -150,7 +130,7 @@ describe('EvalHub API Contract Tests', () => {
         '/eval-hub/api/v1/evaluations/collections/collection-001?namespace=default',
       );
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/CollectionResponse/content/application/json/schema',
+        ref: '#/components/responses/CollectionResponse/content/application~1json/schema',
         status: 200,
       });
     });
@@ -161,7 +141,7 @@ describe('EvalHub API Contract Tests', () => {
         [{ op: 'replace', path: '/name', value: 'Updated collection' }],
       );
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/CollectionResponse/content/application/json/schema',
+        ref: '#/components/responses/CollectionResponse/content/application~1json/schema',
         status: 200,
       });
     });
@@ -182,7 +162,7 @@ describe('EvalHub API Contract Tests', () => {
       const createRequest = {
         name: 'New Collection',
         description: 'A collection created from the suite form',
-        domains: ['safety'],
+        domains: ['trustworthiness'],
         tasks: ['reasoning'],
         modalities: ['text'],
         industries: ['health'],
@@ -204,7 +184,7 @@ describe('EvalHub API Contract Tests', () => {
       );
 
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/CollectionResponse/content/application/json/schema',
+        ref: '#/components/responses/CollectionResponse/content/application~1json/schema',
         status: 201,
       });
       if (result.success) {
@@ -234,7 +214,7 @@ describe('EvalHub API Contract Tests', () => {
         description: 'A collection configured for agent evaluation',
         category: 'Safety',
         tags: ['custom', 'agent'],
-        domains: ['safety', 'reasoning'],
+        domains: ['trustworthiness', 'knowledge_and_reasoning'],
         tasks: ['classification'],
         modalities: ['text'],
         industries: ['technology'],
@@ -253,6 +233,32 @@ describe('EvalHub API Contract Tests', () => {
             weight: 0.8,
             // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
             parameters: { num_few_shot: 5 },
+            // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+            test_data_ref: {
+              type: 'data_set',
+              s3: {
+                bucket: 'evalhub-test',
+                key: 'datasets/arc-challenge',
+                // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+                secret_ref: 's3-credentials',
+              },
+            },
+          },
+          {
+            id: 'helm',
+            // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+            provider_id: 'lm_evaluation_harness',
+            weight: 0.2,
+            // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+            test_data_ref: {
+              type: 'data_set',
+              pvc: {
+                // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+                claim_name: 'eval-datasets-pvc',
+                // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+                sub_path: 'datasets/helm',
+              },
+            },
           },
         ],
       };
@@ -261,7 +267,7 @@ describe('EvalHub API Contract Tests', () => {
         cloneRequest,
       );
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/CollectionResponse/content/application/json/schema',
+        ref: '#/components/responses/CollectionResponse/content/application~1json/schema',
         status: 201,
       });
       if (result.success) {
@@ -286,6 +292,49 @@ describe('EvalHub API Contract Tests', () => {
       }
     });
 
+    it('should return a BadRequest error when a benchmark sets both s3 and pvc in test_data_ref', async () => {
+      const result = await apiClient.post(
+        '/eval-hub/api/v1/evaluations/collections/collection-001/clones?namespace=default',
+        {
+          name: 'Invalid Cloned Collection',
+          benchmarks: [
+            {
+              id: 'arc_challenge',
+              // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+              provider_id: 'lm_evaluation_harness',
+              // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+              test_data_ref: {
+                type: 'data_set',
+                s3: {
+                  bucket: 'evalhub-test',
+                  key: 'datasets/arc-challenge',
+                  // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+                  secret_ref: 's3-credentials',
+                },
+                pvc: {
+                  // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+                  claim_name: 'eval-datasets-pvc',
+                  // eslint-disable-next-line camelcase -- Eval Hub API contract field name.
+                  sub_path: 'datasets/arc-challenge',
+                },
+              },
+            },
+          ],
+        },
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect({ status: result.error.status, data: result.error.data }).toMatchContract(
+          apiSchema,
+          {
+            ref: '#/components/responses/BadRequest/content/application~1json/schema',
+            status: 400,
+          },
+        );
+      }
+    });
+
     it('should return the documented not-found response for an unknown collection', async () => {
       const result = await apiClient.post(
         '/eval-hub/api/v1/evaluations/collections/unknown/clones?namespace=default',
@@ -297,7 +346,7 @@ describe('EvalHub API Contract Tests', () => {
         expect({ status: result.error.status, data: result.error.data }).toMatchContract(
           apiSchema,
           {
-            ref: '#/components/responses/NotFound/content/application/json/schema',
+            ref: '#/components/responses/NotFound/content/application~1json/schema',
             status: 404,
           },
         );
@@ -329,7 +378,7 @@ describe('EvalHub API Contract Tests', () => {
       });
 
       expect(result).toMatchContract(apiSchema, {
-        ref: '#/components/responses/CreateEvaluationJobResponse/content/application/json/schema',
+        ref: '#/components/responses/CreateEvaluationJobResponse/content/application~1json/schema',
         status: 201,
       });
       if (result.success) {
@@ -353,7 +402,7 @@ describe('EvalHub API Contract Tests', () => {
         expect({ status: result.error.status, data: result.error.data }).toMatchContract(
           apiSchema,
           {
-            ref: '#/components/responses/BadRequest/content/application/json/schema',
+            ref: '#/components/responses/BadRequest/content/application~1json/schema',
             status: 400,
           },
         );

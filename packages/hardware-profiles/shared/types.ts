@@ -1,17 +1,33 @@
 import type { AlertProps } from '@patternfly/react-core';
 import type { K8sResourceCommon } from '@openshift/dynamic-plugin-sdk-utils';
-import {
+import type {
   HardwareProfileFeatureVisibility,
-  type HardwareProfileKind,
-  type AcceleratorProfileKind,
-  type ModelServingSize,
+  HardwareProfileKind,
+  AcceleratorProfileKind,
+  ModelServingSize,
   ContainerResources,
   Toleration,
   NodeSelector,
 } from '@odh-dashboard/k8s-core';
 import type { PodSpecOptionsAcceleratorState } from '@odh-dashboard/internal/concepts/hardwareProfiles/types';
-import { HardwareProfileBindingState } from './const';
+import type { HardwareProfileBindingState } from './const';
 import type { useHardwareProfileConfig } from './useHardwareProfileConfig';
+
+export type WarningNotification = {
+  title: string;
+  message: string;
+};
+
+export enum HardwareProfileWarningType {
+  HARDWARE_PROFILES_MISSING_CPU_MEMORY = 'hardware_profiles_missing_cpu_memory',
+  CANNOT_BE_NEGATIVE = 'cannot_be_negative',
+  CANNOT_BE_DECIMAL = 'cannot_be_decimal',
+  INVALID_UNIT = 'invalid_unit',
+  INVALID_NO = 'invalid_no',
+  MISSING_VALUE = 'missing_value',
+  OUT_OF_RANGE = 'out_of_range',
+  OTHER = 'other',
+}
 
 export type PodSpecOptions = {
   resources?: ContainerResources;
@@ -69,6 +85,7 @@ export type CrPathConfig = {
   containerResourcesPath: string;
   tolerationsPath: string;
   nodeSelectorPath: string;
+  podSpecPath?: string;
 };
 
 export type DRAHardwareProfileDetails = {
@@ -76,9 +93,16 @@ export type DRAHardwareProfileDetails = {
   description?: string;
 };
 
+export type HardwareProfileBinding = {
+  name?: string;
+  namespace?: string;
+};
+
 export type HardwareProfileOptions = {
   visibleIn: HardwareProfileFeatureVisibility[];
   paths?: CrPathConfig;
+  allowDRAProfiles?: boolean;
+  project?: string;
 };
 
 export type ModelServingPodSpecOptions = PodSpecOptions & {

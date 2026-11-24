@@ -13,8 +13,7 @@ import { LazyCodeRefComponent } from '@odh-dashboard/plugin-core';
 
 // eslint-disable-next-line @odh-dashboard/no-restricted-imports
 import PipelineCoreProjectSelector from '@odh-dashboard/internal/pages/pipelines/global/PipelineCoreProjectSelector';
-// eslint-disable-next-line @odh-dashboard/no-restricted-imports
-import { fireLinkTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
+import { useTrackEvent } from '@odh-dashboard/analytics/react';
 // eslint-disable-next-line @odh-dashboard/no-restricted-imports
 import { MlflowTrackingEvents } from '@odh-dashboard/internal/concepts/mlflow/const';
 // eslint-disable-next-line @odh-dashboard/no-restricted-imports
@@ -52,6 +51,7 @@ export type MlflowExperimentWrapperProps = {
 
 type MlflowExperimentsPageProps = {
   pageTitle?: string;
+  setupFeatureName?: string;
   objectType?: ProjectObjectType;
   basePath?: string;
   getRedirectPath?: (namespace: string) => string;
@@ -61,12 +61,14 @@ type MlflowExperimentsPageProps = {
 
 const MlflowExperimentsPage: React.FC<MlflowExperimentsPageProps> = ({
   pageTitle = EXPERIMENTS_PAGE_TITLE,
+  setupFeatureName = pageTitle.toLowerCase(),
   objectType = ProjectObjectType.pipelineExperiment,
   basePath = mlflowExperimentsPath,
   getRedirectPath = mlflowExperimentsBaseRoute,
   workflowType = WorkflowType.MACHINE_LEARNING,
   launchSection = 'experiments-page',
 }) => {
+  const trackEvent = useTrackEvent();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const workspace = searchParams.get(WORKSPACE_QUERY_PARAM) ?? '';
@@ -123,7 +125,11 @@ const MlflowExperimentsPage: React.FC<MlflowExperimentsPageProps> = ({
       empty={mlflowLoaded && !mlflowAvailable}
       emptyStatePage={
         <PageSection hasBodyWrapper={false} isFilled>
-          {mlflowStatusError ? <MLflowUnavailable /> : <MLflowNotConfigured />}
+          {mlflowStatusError ? (
+            <MLflowUnavailable />
+          ) : (
+            <MLflowNotConfigured featureName={setupFeatureName} />
+          )}
         </PageSection>
       }
       noHeader={!isTopLevel}
@@ -143,19 +149,21 @@ const MlflowExperimentsPage: React.FC<MlflowExperimentsPageProps> = ({
               getRedirectPath={getRedirectPath}
               queryParamNamespace={WORKSPACE_QUERY_PARAM}
               onProjectChange={(projectName) =>
-                fireLinkTrackingEvent(MlflowTrackingEvents.PROJECT_SWITCHED, {
+                trackEvent(MlflowTrackingEvents.PROJECT_SWITCHED, {
                   projectName,
                 })
               }
             />
           </FlexItem>
-          <FlexItem>
-            <LaunchMlflowButton
-              testId="mlflow-embedded-jump-link"
-              section={launchSection}
-              workspace={workspace}
-            />
-          </FlexItem>
+          {mlflowAvailable && (
+            <FlexItem>
+              <LaunchMlflowButton
+                testId="mlflow-embedded-jump-link"
+                section={launchSection}
+                workspace={workspace}
+              />
+            </FlexItem>
+          )}
         </Flex>
       }
       keepBodyWrapper={false}

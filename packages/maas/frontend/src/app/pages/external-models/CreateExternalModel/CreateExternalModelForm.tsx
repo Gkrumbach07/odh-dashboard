@@ -25,7 +25,7 @@ import K8sNameDescriptionField, {
 } from '@odh-dashboard/ui-core/components/K8sNameDescriptionField';
 import { useZodFormValidation } from '@odh-dashboard/ui-core/hooks/useZodFormValidation';
 import { APIOptions } from 'mod-arch-core';
-import { TrackingOutcome } from '@odh-dashboard/ui-core/contexts/AnalyticsContext';
+import { TrackingOutcome } from '@odh-dashboard/analytics/types';
 import {
   fireFormTrackingEvent,
   fireMiscTrackingEvent,
@@ -418,8 +418,9 @@ const CreateExternalModelForm: React.FC<CreateExternalModelFormProps> = ({
           isInline
         >
           To make the endpoint accessible to users, an admin must configure subscriptions and
-          authorization policies on the <strong>MaaS governance</strong> page. Users can view their
-          subscriptions, accessible models, and API keys on the <strong>API keys</strong> page.
+          authorization policies under <strong>Settings &gt; MaaS governance</strong>. To view their
+          API keys, subscriptions, and accessible models, users can go to{' '}
+          <strong>Gen AI studio &gt; API keys</strong>.
         </Alert>
 
         {submitError && (

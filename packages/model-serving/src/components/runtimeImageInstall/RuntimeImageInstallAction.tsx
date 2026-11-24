@@ -1,7 +1,7 @@
 import React from 'react';
 import { Button, Tooltip } from '@patternfly/react-core';
 import { useExtensions } from '@odh-dashboard/plugin-core';
-import { useTrackEvent } from '@odh-dashboard/plugin-core/host-api';
+import { useTrackEvent } from '@odh-dashboard/analytics/react';
 import { Link, type LinkProps } from 'react-router-dom';
 import type { RuntimeImageInstallActionProps } from '@mf/modelRegistry/extension-points';
 import { fireCreateStarted } from './tracking/runtimeImageInstallTracking';
@@ -24,8 +24,8 @@ const RuntimeImageInstallAction: React.FC<RuntimeImageInstallActionProps> = ({ a
   if (!canInstall) {
     return (
       <Tooltip content="No supported installation targets are enabled for this runtime image.">
-        <Button variant="secondary" data-testid="runtime-image-install" isAriaDisabled>
-          Install
+        <Button variant="primary" data-testid="runtime-image-install" isAriaDisabled>
+          Create
         </Button>
       </Tooltip>
     );
@@ -33,7 +33,7 @@ const RuntimeImageInstallAction: React.FC<RuntimeImageInstallActionProps> = ({ a
 
   return (
     <Button
-      variant="secondary"
+      variant="primary"
       data-testid="runtime-image-install"
       onClick={handleCreateStarted}
       component={(props: LinkProps) => (
@@ -44,7 +44,7 @@ const RuntimeImageInstallAction: React.FC<RuntimeImageInstallActionProps> = ({ a
         />
       )}
     >
-      Install
+      Create
     </Button>
   );
 };

@@ -94,9 +94,9 @@ func main() {
 		metricsOpts.CertDir = "/tmp/k8s-metrics-server/serving-certs"
 		metricsOpts.TLSOpts = tlsOpts
 	}
-
 	mgrOpts := ctrl.Options{
 		Scheme:                 scheme,
+		NewCache:               controller.NewManagerCache(applicationsNamespace),
 		Metrics:                metricsOpts,
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         leaderElect,
@@ -119,7 +119,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	platform, err := cluster.DetectPlatform(context.Background(), mgr.GetClient(), os.Getenv("ODH_PLATFORM_TYPE"), operatorNamespace)
+	platform, err := cluster.DetectPlatform(context.Background(), mgr.GetAPIReader(), os.Getenv("ODH_PLATFORM_TYPE"), operatorNamespace)
 	if err != nil {
 		setupLog.Error(err, "unable to detect platform")
 		os.Exit(1)

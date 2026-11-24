@@ -1,3 +1,4 @@
+import type { PodSpec } from '@odh-dashboard/k8s-core';
 import { ServingRuntimeModelType } from '@odh-dashboard/model-serving/shared';
 import { genUID } from '@odh-dashboard/foundation';
 import { ModelAnnotation } from '@odh-dashboard/internal/pages/projects/screens/spawner/storage/types';
@@ -18,6 +19,7 @@ type MockLLMInferenceServiceConfigType = {
   addresses?: { name?: string; url?: string }[];
   additionalLabels?: Record<string, string>;
   isNonDashboardItem?: boolean;
+  isExistingResource?: boolean;
   modelType?: ServingRuntimeModelType;
   isStopped?: boolean;
   baseRefs?: { name?: string }[];
@@ -27,6 +29,7 @@ type MockLLMInferenceServiceConfigType = {
   gatewayRefs?: { name: string; namespace: string }[];
   isLLMd?: boolean;
   additionalAnnotations?: Record<string, string>;
+  resourceClaims?: PodSpec['resourceClaims'];
 };
 
 export const mockLLMInferenceServiceK8sResource = ({
@@ -49,7 +52,9 @@ export const mockLLMInferenceServiceK8sResource = ({
   secretName,
   gatewayRefs,
   isLLMd = true,
+  isExistingResource = true,
   additionalAnnotations,
+  resourceClaims,
 }: MockLLMInferenceServiceConfigType): LLMInferenceServiceKind => ({
   apiVersion: 'serving.kserve.io/v1alpha2',
   kind: 'LLMInferenceService',
@@ -64,16 +69,20 @@ export const mockLLMInferenceServiceK8sResource = ({
       ...(secretName && { 'opendatahub.io/connections': secretName }),
       ...additionalAnnotations,
     },
-    creationTimestamp,
+    ...(isExistingResource
+      ? {
+          creationTimestamp,
+          generation: 1,
+          resourceVersion: '5188930',
+          uid: genUID('llm-service'),
+        }
+      : {}),
     ...(deleted ? { deletionTimestamp: new Date().toUTCString() } : {}),
-    generation: 1,
     labels: {
       name,
     },
     name,
     namespace,
-    resourceVersion: '5188930',
-    uid: genUID('llm-service'),
   },
   spec: {
     ...(baseRefs && { baseRefs }),
@@ -135,6 +144,7 @@ export const mockLLMInferenceServiceK8sResource = ({
           },
         },
       ],
+      ...(resourceClaims && { resourceClaims }),
     },
   },
   status: {

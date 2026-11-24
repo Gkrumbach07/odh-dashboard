@@ -8,7 +8,7 @@ import type { FeatureStoreTestData } from '../../../types';
 import {
   applyFeastPermissionViaSdk,
   createFeatureStoreCR,
-  createRouteAndGetUrl,
+  resolveRegistryTarget,
   createSavedDatasetViaSdk,
 } from '../../../utils/oc_commands/featureStoreResources';
 import { retryableBefore } from '../../../utils/retryableHooks';
@@ -19,8 +19,8 @@ import {
 } from '../../../utils/api/featureStoreRest';
 import { featureMetricsOverview } from '../../../pages/featureStore/featureMetrics';
 import { ensureAdminOcSession } from '../../../utils/oc_commands/baseCommands';
+import { getFeastS3Config } from '../../../utils/oc_commands/feastS3';
 import { createRegistryStep, deleteFeastRegistryFiles } from '../../../utils/oc_commands/s3Cleanup';
-import { AWS_BUCKETS } from '../../../utils/s3Buckets';
 
 describe('Feature Store Page Validation', () => {
   let testData: FeatureStoreTestData;
@@ -62,15 +62,8 @@ describe('Feature Store Page Validation', () => {
         createFeatureStoreCR(projectName, testData.feastInstanceName);
       })
       .then(() => {
-        return createRouteAndGetUrl(projectName, testData.feastInstanceName).then((routeUrl) => {
-          const buckets =
-            (Cypress.env('AWS_PIPELINES') as typeof AWS_BUCKETS | undefined) ?? AWS_BUCKETS;
-          const { NAME: awsBucketName } = buckets.BUCKET_1;
-          if (!awsBucketName) {
-            throw new Error(
-              'AWS_PIPELINES.BUCKET_1.NAME is empty. Export CY_TEST_CONFIG to packages/cypress/test-variables.yml before running E2E.',
-            );
-          }
+        return resolveRegistryTarget(projectName, testData.feastInstanceName).then((target) => {
+          const { bucket: registryBucket } = getFeastS3Config();
 
           return applyFeastPermissionViaSdk(projectName, testData.feastInstanceName, {
             namespaces: [projectName],
@@ -78,10 +71,10 @@ describe('Feature Store Page Validation', () => {
             return createSavedDatasetViaSdk(projectName, testData.feastInstanceName, {
               name: testData.datasetName,
               project: testData.feastCreditScoringProject,
-              storagePath: `s3://${awsBucketName}/feast-test/${projectName}/credit_scoring_local/datasets/${testData.datasetName}.parquet`,
+              storagePath: `s3://${registryBucket}/feast-test/${projectName}/credit_scoring_local/datasets/${testData.datasetName}.parquet`,
               featureServiceName: testData.featureServiceName,
             }).then(() => {
-              return getMetricsResourceCounts(routeUrl, testData.feastCreditScoringProject).then(
+              return getMetricsResourceCounts(target, testData.feastCreditScoringProject).then(
                 (metricsCounts) => {
                   metricsFeatureCount = metricsCounts.featureCount;
                   metricsEntityCount = metricsCounts.entityCount;
@@ -90,21 +83,20 @@ describe('Feature Store Page Validation', () => {
                   metricsFeatureViewCount = metricsCounts.featureViewCount;
                   metricsFeatureServiceCount = metricsCounts.featureServiceCount;
 
-                  return getAllFeatureStoreCounts(
-                    routeUrl,
-                    testData.feastCreditScoringProject,
-                  ).then((listCounts) => {
-                    featureCount = listCounts.featureCount;
-                    entityCount = listCounts.entityCount;
-                    datasetCount = listCounts.datasetCount;
-                    dataSourceCount = listCounts.dataSourceCount;
-                    featureViewCount = listCounts.featureViewCount;
-                    featureServiceCount = listCounts.featureServiceCount;
+                  return getAllFeatureStoreCounts(target, testData.feastCreditScoringProject).then(
+                    (listCounts) => {
+                      featureCount = listCounts.featureCount;
+                      entityCount = listCounts.entityCount;
+                      datasetCount = listCounts.datasetCount;
+                      dataSourceCount = listCounts.dataSourceCount;
+                      featureViewCount = listCounts.featureViewCount;
+                      featureServiceCount = listCounts.featureServiceCount;
 
-                    cy.log(`Metrics counts: ${JSON.stringify(metricsCounts)}`);
-                    cy.log(`List counts: ${JSON.stringify(listCounts)}`);
-                    return cy.wrap({ metricsCounts, listCounts });
-                  });
+                      cy.log(`Metrics counts: ${JSON.stringify(metricsCounts)}`);
+                      cy.log(`List counts: ${JSON.stringify(listCounts)}`);
+                      return cy.wrap({ metricsCounts, listCounts });
+                    },
+                  );
                 },
               );
             });

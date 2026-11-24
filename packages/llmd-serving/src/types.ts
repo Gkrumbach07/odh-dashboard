@@ -4,6 +4,7 @@ import type {
   DisplayNameAnnotations,
   ImagePullSecret,
   PodContainer,
+  PodSpec,
 } from '@odh-dashboard/k8s-core';
 import type { Deployment } from '@odh-dashboard/model-serving/extension-points';
 
@@ -42,6 +43,15 @@ export enum TopologyType {
   SINGLE_NODE_DISAGGREGATED = 'workload-single-node-pd',
   MULTI_NODE_DISAGGREGATED = 'workload-multi-node-data-parallel-pd',
 }
+
+export type TopologyTypeFieldData = { topologyType: TopologyType };
+
+export const isTopologyTypeFieldData = (data: unknown): data is TopologyTypeFieldData => {
+  if (data === null || typeof data !== 'object' || !('topologyType' in data)) {
+    return false;
+  }
+  return Object.values(TopologyType).some((type) => type === data.topologyType);
+};
 
 export const TopologyTypeDescriptions: Record<TopologyType, string> = {
   [TopologyType.SINGLE_NODE]:
@@ -100,6 +110,7 @@ type LLMInferenceServiceSpec = {
     serviceAccountName?: string;
     containers?: LLMdContainer[];
     imagePullSecrets?: ImagePullSecret[];
+    resourceClaims?: PodSpec['resourceClaims'];
   };
 };
 

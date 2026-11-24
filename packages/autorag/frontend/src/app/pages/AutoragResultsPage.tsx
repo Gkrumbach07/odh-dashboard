@@ -1,3 +1,4 @@
+import { useTrackEvent } from '@odh-dashboard/analytics/react';
 import {
   Alert,
   AlertActionCloseButton,
@@ -25,7 +26,6 @@ import { InvalidPipelineRun, StopRunModal } from '@odh-dashboard/autox-core/ui/c
 import { ContextBreadcrumb } from '@odh-dashboard/autox-core/ui/components/primitive';
 import { useFetchS3File, useS3ListFilesQuery } from '@odh-dashboard/autox-core/ui/hooks';
 import { parseErrorStatus } from '@odh-dashboard/autox-core/ui/utils';
-import { fireFormTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
 import { ApplicationsPage } from 'mod-arch-shared';
 import React from 'react';
 import { Link, useLocation, useParams } from 'react-router';
@@ -48,6 +48,7 @@ import { isRunInTerminalState } from '~/app/types/pipeline';
 import { autoragExperimentsPathname, autoragReconfigurePathname } from '~/app/utilities/routes';
 import {
   downloadBlob,
+  formatPatternName,
   isRunCompleted,
   isRunRetryable,
   isRunTerminatable,
@@ -69,6 +70,7 @@ import {
   canUseResponsesForPattern,
   getPatternCollectionName,
   getPatternEmbeddingModel,
+  getPatternStoreProvider,
 } from '~/app/utilities/responses';
 
 type DrawerContentType =
@@ -84,6 +86,33 @@ const ARTIFACT_AVAILABLE_TOOLTIP = 'Available after the run completes successful
 const ARTIFACT_CHECKING_TOOLTIP = 'Checking artifact availability...';
 const ARTIFACT_UNSUCCESSFUL_TOOLTIP = 'Unavailable because the run did not complete successfully';
 const ARTIFACT_UNAVAILABLE_TOOLTIP = 'Artifact unavailable';
+const MAX_MILVUS_RRF_K = 16384;
+
+const isValidMilvusRRFK = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 && value < MAX_MILVUS_RRF_K;
+
+const isValidRankingAlpha = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+
+const getRankingAlpha = (value: unknown, errorMessage: string): number => {
+  if (value === undefined) {
+    return 0.5;
+  }
+  if (!isValidRankingAlpha(value)) {
+    throw new Error(errorMessage);
+  }
+  return value;
+};
+
+const validatePersistedMilvusRRFK = (
+  value: unknown,
+  field: 'ranker_k' | 'impact_factor',
+): number => {
+  if (!isValidMilvusRRFK(value)) {
+    throw new Error(`Invalid persisted Milvus RRF ${field}`);
+  }
+  return value;
+};
 
 const isAbortError = (error: unknown): boolean =>
   error instanceof Error && error.name === 'AbortError';
@@ -96,10 +125,46 @@ export const buildResponsesTemplate = (
   const { generation, retrieval } = pattern.settings;
   const collectionName = getPatternCollectionName(pattern);
   const embeddingModel = getPatternEmbeddingModel(pattern);
-  const isHybrid = retrieval.search_mode === 'hybrid';
+  const provider = getPatternStoreProvider(pattern);
+  // Neo4j collections use graph retrieval and do not support hybrid ranking.
+  const isHybrid = retrieval.search_mode === 'hybrid' && provider !== 'neo4j';
+  /* eslint-disable camelcase */
+  let rankingOptions:
+    | { ranker: 'rrf'; alpha: number }
+    | { ranker: 'rrf'; ranker_k: number }
+    | { ranker: 'weighted'; alpha: number }
+    | undefined;
+  if (isHybrid) {
+    if (provider === 'pgvector') {
+      if (retrieval.ranker_strategy === 'weighted') {
+        throw new Error('Weighted ranking is not supported for pgvector');
+      }
+      if (retrieval.ranker_strategy !== undefined && retrieval.ranker_strategy !== 'rrf') {
+        throw new Error(`Unsupported retrieval ranker: ${retrieval.ranker_strategy}`);
+      }
+      rankingOptions = {
+        ranker: 'rrf',
+        alpha: getRankingAlpha(retrieval.ranker_alpha, 'Ranking alpha must be between 0 and 1'),
+      };
+    } else if (retrieval.ranker_strategy === undefined || retrieval.ranker_strategy === 'rrf') {
+      const rankerK = retrieval.ranker_k === undefined ? 60 : retrieval.ranker_k;
+      if (!isValidMilvusRRFK(rankerK)) {
+        throw new Error(
+          `Milvus RRF ranker_k must be greater than 0 and less than ${MAX_MILVUS_RRF_K}`,
+        );
+      }
+      rankingOptions = { ranker: 'rrf', ranker_k: rankerK };
+    } else if (retrieval.ranker_strategy === 'weighted') {
+      rankingOptions = {
+        ranker: 'weighted',
+        alpha: getRankingAlpha(retrieval.ranker_alpha, 'Ranking alpha must be between 0 and 1'),
+      };
+    } else {
+      throw new Error(`Unsupported retrieval ranker: ${retrieval.ranker_strategy}`);
+    }
+  }
 
   return {
-    /* eslint-disable camelcase */
     model: generation.model_id,
     stream: true,
     store: false,
@@ -121,14 +186,7 @@ export const buildResponsesTemplate = (
         type: 'file_search',
         vector_store_ids: collectionName ? [collectionName] : [],
         max_num_results: retrieval.number_of_chunks,
-        ...(isHybrid
-          ? {
-              ranking_options: {
-                ranker: 'rrf',
-                alpha: retrieval.ranker_alpha ?? 0.5,
-              },
-            }
-          : {}),
+        ...(rankingOptions ? { ranking_options: rankingOptions } : {}),
       },
     ],
     tool_choice: { type: 'file_search' },
@@ -140,6 +198,7 @@ export const buildResponsesTemplate = (
 /* eslint-disable camelcase */
 export const normalizeResponsesTemplate = (
   template: AutoRAGResponsesTemplate,
+  provider: 'milvus' | 'pgvector' | 'neo4j',
 ): AutoRAGResponsesTemplate => {
   const { autorag_run_id: runId, ...metadata } = template.metadata;
   return {
@@ -149,15 +208,42 @@ export const normalizeResponsesTemplate = (
       ...(runId?.trim() ? { autorag_run_id: runId.trim() } : {}),
     },
     tools: template.tools.map((tool) => {
+      if (provider === 'neo4j') {
+        return { ...tool, ranking_options: undefined };
+      }
       if (!tool.ranking_options) {
         return tool;
       }
+      const ranking = tool.ranking_options;
+      const ranker = ranking.ranker_strategy ?? ranking.ranker;
+      if (ranker !== 'rrf' && ranker !== 'weighted') {
+        throw new Error(`Unsupported persisted retrieval ranker: ${ranker}`);
+      }
+      if (provider === 'pgvector' && ranker === 'weighted') {
+        throw new Error('Weighted ranking is not supported for pgvector');
+      }
+      const weighted = provider !== 'pgvector' && ranker === 'weighted';
+      const rankerK =
+        provider === 'milvus' && ranker === 'rrf'
+          ? ranking.ranker_k !== undefined
+            ? validatePersistedMilvusRRFK(ranking.ranker_k, 'ranker_k')
+            : ranking.impact_factor !== undefined
+              ? validatePersistedMilvusRRFK(ranking.impact_factor, 'impact_factor')
+              : 60
+          : 60;
       return {
         ...tool,
-        ranking_options: {
-          ranker: 'rrf',
-          alpha: Number.isFinite(tool.ranking_options.alpha) ? tool.ranking_options.alpha : 0.5,
-        },
+        ranking_options: weighted
+          ? {
+              ranker: 'weighted',
+              alpha: getRankingAlpha(ranking.alpha, 'Invalid persisted ranking alpha'),
+            }
+          : provider === 'pgvector'
+            ? {
+                ranker: 'rrf',
+                alpha: getRankingAlpha(ranking.alpha, 'Invalid persisted ranking alpha'),
+              }
+            : { ranker: 'rrf', ranker_k: rankerK },
       };
     }),
   };
@@ -219,7 +305,48 @@ const unavailableResponsesTemplate = (patternName: string): AutoRAGResponsesTemp
   include: ['file_search_call.results'],
 });
 /* eslint-enable camelcase */
+
+export const getResponsesTemplateForPattern = (
+  pattern: AutoragPattern,
+  provider: 'milvus' | 'pgvector' | 'neo4j',
+  runId: string | undefined,
+): AutoRAGResponsesTemplate | undefined => {
+  const persistedTemplate = pattern.inference?.responses_template;
+  if (persistedTemplate) {
+    try {
+      const embeddingModel = getPatternEmbeddingModel(pattern);
+      const candidate = {
+        ...persistedTemplate,
+        metadata: {
+          ...persistedTemplate.metadata,
+          ...(embeddingModel
+            ? {
+                // eslint-disable-next-line camelcase
+                embedding_model: embeddingModel,
+              }
+            : {}),
+        },
+      };
+      if (isUsableResponsesTemplate(candidate)) {
+        return normalizeResponsesTemplate(candidate, provider);
+      }
+    } catch {
+      // Build the generated fallback only after the persisted template is unusable.
+    }
+  }
+
+  try {
+    const fallback = buildResponsesTemplate(pattern, runId);
+    return isUsableResponsesTemplate(fallback)
+      ? normalizeResponsesTemplate(fallback, provider)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 function AutoragResultsPage(): React.JSX.Element {
+  const trackEvent = useTrackEvent();
   const { namespace, runId } = useParams();
   const location = useLocation();
   const { namespaces, namespacesLoaded, namespacesLoadError } =
@@ -343,7 +470,7 @@ function AutoragResultsPage(): React.JSX.Element {
         return;
       }
       downloadBlob(starterKit, STARTER_KIT_FILENAME);
-      fireAutoragStarterKitDownloaded();
+      fireAutoragStarterKitDownloaded(trackEvent);
     } catch (error) {
       if (
         isAbortError(error) ||
@@ -364,7 +491,7 @@ function AutoragResultsPage(): React.JSX.Element {
         starterKitDownloadController.current = null;
       }
     }
-  }, [fetchS3File, namespace, starterKitDisabled, starterKitKey]);
+  }, [trackEvent, fetchS3File, namespace, starterKitDisabled, starterKitKey]);
 
   const { handleRetry, handleConfirmStop, isRetrying, isTerminating } = useAutoragRunActions(
     namespace ?? '',
@@ -400,8 +527,8 @@ function AutoragResultsPage(): React.JSX.Element {
     resultsViewedTrackedRunId.current = pipelineRun.run_id;
 
     const navState = isAutoragResultsNavigationState(location.state) ? location.state : undefined;
-    fireAutoragResultsViewed(navState?.entrySource ?? 'other');
-  }, [pipelineRun?.run_id, location.state]);
+    fireAutoragResultsViewed(trackEvent, navState?.entrySource ?? 'other');
+  }, [trackEvent, pipelineRun?.run_id, location.state]);
 
   // Fetch and process AutoRAG results using custom hook
   const {
@@ -440,7 +567,7 @@ function AutoragResultsPage(): React.JSX.Element {
       const total = failedPatterns.length + Object.keys(patterns).length;
       notification.warning(
         `${failedPatterns.length} of ${total} patterns could not be loaded`,
-        `The following patterns failed to load: ${failedPatterns.join(', ')}`,
+        `The following patterns failed to load: ${failedPatterns.map(formatPatternName).join(', ')}`,
       );
     }
   }, [failedPatterns, patterns, notification, patternsLoading]);
@@ -475,7 +602,7 @@ function AutoragResultsPage(): React.JSX.Element {
           <SplitItem>
             {runTerminatable && (
               <Button
-                variant="secondary"
+                variant="link"
                 icon={<StopCircleIcon />}
                 onClick={() => setIsStopModalOpen(true)}
                 isDisabled={isTerminating || isStopModalOpen}
@@ -488,7 +615,7 @@ function AutoragResultsPage(): React.JSX.Element {
             )}
             {runRetryable && (
               <Button
-                variant="secondary"
+                variant="link"
                 icon={<RedoIcon />}
                 onClick={() => void handleRetry().catch(() => undefined)}
                 isDisabled={isRetrying}
@@ -503,7 +630,7 @@ function AutoragResultsPage(): React.JSX.Element {
         ) : null}
         <SplitItem>
           <Button
-            variant="secondary"
+            variant="link"
             icon={<CogIcon />}
             component={ReconfigureLink}
             data-testid="reconfigure-run-button"
@@ -517,7 +644,7 @@ function AutoragResultsPage(): React.JSX.Element {
             trigger={starterKitDisabled ? 'mouseenter focus' : ''}
           >
             <Button
-              variant="secondary"
+              variant="link"
               icon={<DownloadIcon />}
               onClick={() => void handleDownloadStarterKit()}
               isAriaDisabled={starterKitDisabled}
@@ -633,36 +760,13 @@ function AutoragResultsPage(): React.JSX.Element {
       if (!pattern) {
         return false;
       }
-      let responsesTemplate: AutoRAGResponsesTemplate;
-      try {
-        const persistedTemplate = pattern.inference?.responses_template;
-        const fallback = buildResponsesTemplate(pattern, pipelineRun?.run_id);
-        const candidate = persistedTemplate
-          ? {
-              ...persistedTemplate,
-              metadata: {
-                ...(persistedTemplate.metadata || {}),
-                ...(getPatternEmbeddingModel(pattern)
-                  ? {
-                      // eslint-disable-next-line camelcase
-                      embedding_model: getPatternEmbeddingModel(pattern),
-                    }
-                  : {}),
-              },
-            }
-          : fallback;
-        // The generated fallback is validated too — buildResponsesTemplate can
-        // emit an empty model or vector_store_ids, and the drawer state should
-        // carry the explicit unavailable marker rather than a half-valid
-        // template.
-        responsesTemplate = isUsableResponsesTemplate(candidate)
-          ? normalizeResponsesTemplate(candidate)
-          : isUsableResponsesTemplate(fallback)
-            ? normalizeResponsesTemplate(fallback)
-            : unavailableResponsesTemplate(patternName);
-      } catch {
-        responsesTemplate = unavailableResponsesTemplate(patternName);
+      const provider = getPatternStoreProvider(pattern);
+      if (!provider) {
+        return false;
       }
+      const responsesTemplate =
+        getResponsesTemplateForPattern(pattern, provider, pipelineRun?.run_id) ??
+        unavailableResponsesTemplate(patternName);
 
       const metricMean = getObjectiveMetric(pattern, contextValue.optimizationMetric)?.scores.mean;
       setDrawerContent({
@@ -686,10 +790,10 @@ function AutoragResultsPage(): React.JSX.Element {
   const handleTryPattern = React.useCallback(
     (patternName: string, source: PlaygroundOpenedSource) => {
       if (openPlaygroundForPattern(patternName)) {
-        fireAutoragPlaygroundOpened(source);
+        fireAutoragPlaygroundOpened(trackEvent, source);
       }
     },
-    [openPlaygroundForPattern],
+    [trackEvent, openPlaygroundForPattern],
   );
 
   const [viewCodePattern, setViewCodePattern] = React.useState<{
@@ -704,44 +808,22 @@ function AutoragResultsPage(): React.JSX.Element {
       if (!pattern || !canUseResponsesForPattern(contextValue.parameters, pattern)) {
         return;
       }
-      const persistedTemplate = pattern.inference?.responses_template;
-      let responsesTemplate: AutoRAGResponsesTemplate;
-      try {
-        const fallback = buildResponsesTemplate(pattern, pipelineRun?.run_id);
-        const candidate = persistedTemplate
-          ? {
-              ...persistedTemplate,
-              metadata: {
-                ...persistedTemplate.metadata,
-                ...(getPatternEmbeddingModel(pattern)
-                  ? {
-                      // eslint-disable-next-line camelcase
-                      embedding_model: getPatternEmbeddingModel(pattern),
-                    }
-                  : {}),
-              },
-            }
-          : fallback;
-        // The generated fallback is validated too — buildResponsesTemplate can
-        // emit an empty model, and the code snippets must not be built from a
-        // half-valid template. When neither template is usable, View code
-        // stays closed.
-        const usable = isUsableResponsesTemplate(candidate)
-          ? candidate
-          : isUsableResponsesTemplate(fallback)
-            ? fallback
-            : undefined;
-        if (!usable) {
-          return;
-        }
-        responsesTemplate = normalizeResponsesTemplate(usable);
-      } catch {
+      const provider = getPatternStoreProvider(pattern);
+      if (!provider) {
+        return;
+      }
+      const responsesTemplate = getResponsesTemplateForPattern(
+        pattern,
+        provider,
+        pipelineRun?.run_id,
+      );
+      if (!responsesTemplate) {
         return;
       }
       setViewCodePattern({ patternName, responsesTemplate });
-      fireAutoragCodeSnippetsExported('viewed', source);
+      fireAutoragCodeSnippetsExported(trackEvent, 'viewed', source);
     },
-    [contextValue.parameters, patterns, pipelineRun?.run_id],
+    [trackEvent, contextValue.parameters, patterns, pipelineRun?.run_id],
   );
 
   return (
@@ -762,7 +844,6 @@ function AutoragResultsPage(): React.JSX.Element {
                 patternInfo={drawerContent.patternInfo}
                 onClose={handleDrawerClose}
                 onSelectPattern={openPlaygroundForPattern}
-                onViewCode={(patternName) => handleViewCode(patternName, 'playground')}
               />
             ) : undefined
           }
@@ -844,7 +925,7 @@ function AutoragResultsPage(): React.JSX.Element {
         isTerminating={isTerminating}
         runName={pipelineRun?.display_name}
         onCancel={() =>
-          fireFormTrackingEvent(AUTORAG_EVENTS.RUN_STOPPED, {
+          trackEvent(AUTORAG_EVENTS.RUN_STOPPED, {
             outcome: TrackingOutcome.cancel,
             source: 'resultsPage',
           })

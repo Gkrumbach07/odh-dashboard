@@ -31,10 +31,11 @@ describe('API Keys Page', () => {
       }),
     );
 
+    cy.interceptOdh('GET /maas/api/v1/whoami', { data: { sub: 'test-user', isAdmin: true } });
+    cy.interceptOdh('GET /maas/api/v1/is-maas-admin', { data: { allowed: true } });
     cy.interceptOdh('GET /maas/api/v1/user', {
       data: { userId: 'test-user', clusterAdmin: false },
     });
-    cy.interceptOdh('GET /maas/api/v1/is-maas-admin', { data: { allowed: true } });
     cy.interceptOdh('GET /maas/api/v1/namespaces', { data: [] });
 
     cy.interceptOdh(
@@ -102,6 +103,7 @@ describe('API Keys Page', () => {
   it('should display empty table with toolbar and disable revoke all when user has no active keys', () => {
     const revokedKeys = mockAPIKeys().filter((k) => k.status === 'revoked');
     asProjectAdminUser();
+    cy.interceptOdh('GET /maas/api/v1/whoami', { data: { sub: 'test-user', isAdmin: false } });
     cy.interceptOdh('GET /maas/api/v1/is-maas-admin', { data: { allowed: false } });
 
     // Existence check (no status filter) returns the revoked key;
@@ -149,6 +151,7 @@ describe('API Keys Page', () => {
 
   it('should display empty state when no keys are present', () => {
     asProjectAdminUser();
+    cy.interceptOdh('GET /maas/api/v1/whoami', { data: { sub: 'test-user', isAdmin: false } });
     cy.interceptOdh('GET /maas/api/v1/is-maas-admin', { data: { allowed: false } });
     cy.interceptOdh('POST /maas/api/v1/api-keys/search', mockSearchResponse([])).as('emptySearch');
     apiKeysPage.visit();
@@ -369,6 +372,7 @@ describe('API Keys Page', () => {
 
   it('should not show View in MaaS governance for non-admin users', () => {
     asProjectAdminUser();
+    cy.interceptOdh('GET /maas/api/v1/whoami', { data: { sub: 'test-user', isAdmin: false } });
     cy.interceptOdh('GET /maas/api/v1/is-maas-admin', { data: { allowed: false } });
     cy.interceptOdh(
       'POST /maas/api/v1/api-keys/search',
@@ -431,7 +435,7 @@ describe('API Keys Page', () => {
       'searchByUsername',
     );
 
-    apiKeysPage.findFilterInput().find('input').type('alice');
+    apiKeysPage.findUsernameInput().type('alice');
     apiKeysPage.findUsernameFilterTooltip().should('be.visible');
     apiKeysPage.findFilterSearchButton().click();
 
@@ -448,15 +452,17 @@ describe('API Keys Page', () => {
 
   it('should not display the username filter for non-MaaS admins', () => {
     asProjectAdminUser();
+    cy.interceptOdh('GET /maas/api/v1/whoami', { data: { sub: 'test-user', isAdmin: false } });
     cy.interceptOdh('GET /maas/api/v1/is-maas-admin', { data: { allowed: false } });
     apiKeysPage.visit();
     cy.wait('@initialSearch');
-    apiKeysPage.findFilterInput().should('not.exist');
+    apiKeysPage.findOptionalFilterInput().should('not.exist');
     apiKeysPage.findUsernameFilterTooltip().should('not.exist');
   });
 
   it('should not display the username column for non-MaaS admins', () => {
     asProjectAdminUser();
+    cy.interceptOdh('GET /maas/api/v1/whoami', { data: { sub: 'test-user', isAdmin: false } });
     cy.interceptOdh('GET /maas/api/v1/is-maas-admin', { data: { allowed: false } });
     apiKeysPage.visit();
     cy.wait('@initialSearch');
@@ -611,6 +617,7 @@ describe('API Keys Page', () => {
   });
 
   it('should revoke all my API keys', () => {
+    cy.interceptOdh('GET /maas/api/v1/whoami', { data: { sub: 'test-user', isAdmin: false } });
     cy.interceptOdh('GET /maas/api/v1/is-maas-admin', { data: { allowed: false } });
     apiKeysPage.visit();
 
@@ -892,10 +899,16 @@ describe('API Keys Page', () => {
     copyApiKeyModal.findApiKeyName().should('contain.text', 'production-backend');
     copyApiKeyModal.findApiKeyExpirationDate().should('contain.text', '1 days');
 
-    copyApiKeyModal.findAccessDetails().should('exist');
-    copyApiKeyModal.expandAccessDetails();
+    copyApiKeyModal.findSubscriptionName().should('contain.text', 'Premium Team');
+    copyApiKeyModal.findSubscriptionInfoButton().click();
     copyApiKeyModal.findSubscriptionID().should('have.value', 'premium-team-sub');
-    copyApiKeyModal.findModelID().should('have.value', 'granite-3-8b-instruct');
+    copyApiKeyModal
+      .findSubscriptionInfoPopoverBody()
+      .should('contain.text', 'Premium Team Subscription');
+    copyApiKeyModal.expandAccessDetails();
+    copyApiKeyModal
+      .findModelID()
+      .should('have.value', 'publishers/maas-models/models/granite-3-8b-instruct');
     copyApiKeyModal.findAvailableModelsToggle().should('exist');
     copyApiKeyModal
       .findBaseURL()
@@ -916,13 +929,14 @@ describe('API Keys Page', () => {
     copyApiKeyModal.findAvailableModelsToggle().should('contain.text', 'Granite 3 8B Instruct');
     copyApiKeyModal.selectAvailableModel('flan-t5-small');
     copyApiKeyModal.findAvailableModelsToggle().should('contain.text', 'Flan T5 Small');
-    copyApiKeyModal.findModelID().should('have.value', 'flan-t5-small');
+    copyApiKeyModal
+      .findModelID()
+      .should('have.value', 'publishers/maas-models/models/flan-t5-small');
     copyApiKeyModal.findBaseURL().should('have.value', 'https://example.com/models/flan-t5-small');
     copyApiKeyModal
       .findUsageExample()
       .should('contain.text', '"model":"publishers/maas-models/models/flan-t5-small"')
-      .and('contain.text', 'https://example.com/models/flan-t5-small/v1/chat/completions')
-      .and('contain.text', 'X-MAAS-SUBSCRIPTION: premium-team-sub');
+      .and('contain.text', 'https://example.com/models/flan-t5-small/v1/chat/completions');
   });
 
   it('should show a validation error for an out-of-range after-days value', () => {

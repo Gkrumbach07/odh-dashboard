@@ -1,9 +1,11 @@
+/* eslint-disable camelcase */
 import * as React from 'react';
-import { fireEvent, render, renderHook, screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { useFetchState } from 'mod-arch-core';
+import { setupTrackingTest } from '~/__tests__/unit/testUtils/setupTrackingTest';
 import { getCollection } from '~/app/api/k8s';
 import { useProviders } from '~/app/hooks/useProviders';
 import { useCopySuiteForm, type CopySuiteBenchmark } from '~/app/pages/useCopySuiteForm';
@@ -15,7 +17,10 @@ import {
   evaluationGalleryNavigationState,
 } from '~/app/routes';
 import { copySuiteSchema, type CopySuiteFormValues } from '~/app/schemas/copySuite.schema';
+import { testDataRefDefaultValues } from '~/app/schemas/testDataRef.schema';
 import type { Collection, Provider } from '~/app/types';
+
+const { render, renderHook } = setupTrackingTest();
 
 jest.mock('mod-arch-core', () => ({
   ...jest.requireActual('mod-arch-core'),
@@ -29,6 +34,13 @@ jest.mock('~/app/api/k8s', () => ({
 
 jest.mock('~/app/hooks/useProviders', () => ({
   useProviders: jest.fn(),
+}));
+
+jest.mock('~/app/hooks/useNamespaceSelectorWithPersistence', () => ({
+  useNamespaceSelectorWithPersistence: () => ({
+    namespaces: [{ name: 'test-namespace', displayName: 'Test Project' }],
+    namespacesLoaded: true,
+  }),
 }));
 
 jest.mock('~/app/pages/useCopySuiteForm', () => ({
@@ -188,6 +200,7 @@ const benchmark: CopySuiteBenchmark = {
   parameters: [{ key: 'num_examples', type: 'number', value: 100 }],
   threshold: 70,
   availableMetrics: [],
+  testDataRef: { ...testDataRefDefaultValues },
 };
 
 type Form = ReturnType<typeof useCopySuiteForm>;
@@ -206,7 +219,7 @@ const createRhfForm = (values: CopySuiteFormValues): Form['form'] => {
 const defaultFormValues: CopySuiteFormValues = {
   suiteName: 'Curated suite copy',
   suiteDescription: 'Description',
-  suiteDomains: ['reasoning', 'safety'],
+  suiteDomains: ['reasoning', 'trustworthiness'],
   suiteTasks: ['text-generation'],
   suiteModalities: ['text'],
   suiteIndustries: ['technology'],
@@ -612,7 +625,9 @@ describe('CopySuitePage', () => {
     */
     expect(screen.queryByTestId('suite-evaluates-input')).not.toBeInTheDocument();
     expect(screen.getByTestId('suite-domains-tag-reasoning')).toHaveTextContent('Reasoning');
-    expect(screen.getByTestId('suite-domains-tag-safety')).toHaveTextContent('Safety');
+    expect(screen.getByTestId('suite-domains-tag-trustworthiness')).toHaveTextContent(
+      'Trustworthiness',
+    );
     /*
     expect(screen.getByTestId('suite-tasks-tag-text-generation')).toHaveTextContent(
       'Text generation',
@@ -632,12 +647,24 @@ describe('CopySuitePage', () => {
   });
 
   it.each([
-    ['trustworthiness-v1', 'Requires a judge model.'],
-    ['tool-use-v1', 'Requires a model that supports multiple tool/function calls.'],
-    ['multimodal-v1', 'Requires a vision-language model that supports image inputs.'],
+    ['trustworthiness-v1', 'Requires a judge model in addition to the model you are evaluating.'],
+    ['tool-use-v1', 'The model you are evaluating must support multiple tool/function calls.'],
+    [
+      'multimodal-v1',
+      'The model you are evaluating must be a vision-language model that supports image inputs.',
+    ],
   ])('should show the prerequisite warning for %s', (collectionId, prerequisite) => {
+    const requiresJudgeModel = collectionId === 'trustworthiness-v1';
     mockUseFetchState.mockReturnValue([
-      { ...sourceCollection, resource: { ...sourceCollection.resource, id: collectionId } },
+      {
+        ...sourceCollection,
+        resource: { ...sourceCollection.resource, id: collectionId },
+        benchmarks: sourceCollection.benchmarks?.map((sourceBenchmark, index) =>
+          requiresJudgeModel && index === 0
+            ? { ...sourceBenchmark, parameters: { ...sourceBenchmark.parameters, judge_model: '' } }
+            : sourceBenchmark,
+        ),
+      },
       true,
       undefined,
       jest.fn(),
@@ -905,6 +932,28 @@ describe('CopySuitePage', () => {
     */
   });
 
+  it('should only show categories supported by the category icons', () => {
+    mockUseFetchState.mockReturnValue([sourceCollection, true, undefined, jest.fn()]);
+
+    renderPage();
+    fireEvent.click(screen.getByTestId('suite-domains-input'));
+
+    expect(
+      screen.getByTestId('suite-domains-option-grounded_document_understanding'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('suite-domains-option-instruction_and_output_reliability'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('suite-domains-option-knowledge_and_reasoning')).toBeInTheDocument();
+    expect(screen.getByTestId('suite-domains-option-multilingual')).toBeInTheDocument();
+    expect(screen.getByTestId('suite-domains-option-multimodal')).toBeInTheDocument();
+    expect(screen.getByTestId('suite-domains-option-software')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('suite-domains-option-tool_use_and_function_calling'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('suite-domains-option-trustworthiness')).toBeInTheDocument();
+  });
+
   /*
   it('should filter metadata options from the search input', () => {
     mockUseFetchState.mockReturnValue([sourceCollection, true, undefined, jest.fn()]);
@@ -929,13 +978,13 @@ describe('CopySuitePage', () => {
     renderPage();
     fireEvent.click(screen.getByTestId('suite-domains-input'));
     fireEvent.click(
-      within(screen.getByTestId('suite-domains-option-safety')).getByRole('checkbox'),
+      within(screen.getByTestId('suite-domains-option-multimodal')).getByRole('checkbox'),
     );
 
-    expect(form.form.getValues('suiteDomains')).toEqual(['reasoning', 'safety']);
+    expect(form.form.getValues('suiteDomains')).toEqual(['reasoning', 'multimodal']);
 
     fireEvent.click(
-      within(screen.getByTestId('suite-domains-option-safety')).getByRole('checkbox'),
+      within(screen.getByTestId('suite-domains-option-multimodal')).getByRole('checkbox'),
     );
 
     expect(form.form.getValues('suiteDomains')).toEqual(['reasoning']);
@@ -985,7 +1034,9 @@ describe('CopySuitePage', () => {
       ),
     );
     fireEvent.click(screen.getByTestId('suite-domains-input'));
-    fireEvent.click(within(screen.getByTestId('suite-domains-tag-safety')).getByRole('button'));
+    fireEvent.click(
+      within(screen.getByTestId('suite-domains-tag-trustworthiness')).getByRole('button'),
+    );
 
     /*
     fireEvent.click(screen.getByTestId('suite-tasks-input'));

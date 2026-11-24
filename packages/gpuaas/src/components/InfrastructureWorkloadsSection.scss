@@ -1,50 +1,66 @@
-.gpuaas-infrastructure-workloads {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-  flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-}
-
 .gpuaas-infrastructure-workloads__header-section {
-  position: sticky;
-  top: 0;
-  flex: 0 0 auto;
-  height: auto;
-  min-height: 0;
-  width: 100%;
-  z-index: var(--pf-t--global--z-index--sm);
   background-color: var(--pf-t--global--background--color--primary--default);
-  border-bottom: var(--pf-t--global--border--width--regular) solid
-    var(--pf-t--global--border--color--default);
   padding-block-end: var(--pf-t--global--spacer--md);
 }
 
-.gpuaas-infrastructure-workloads__content-section {
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-  overflow-y: auto;
-}
-
 .gpuaas-workload-overview {
+  --pf-v6-c-button--m-link--Color: var(--pf-t--global--text--color--regular);
+  --pf-v6-c-button--m-link--hover--Color: var(--pf-t--global--text--color--regular);
+  --pf-v6-c-button--m-link--m-clicked--Color: var(--pf-t--global--text--color--regular);
+
+  .pf-v6-c-button,
+  .pf-v6-c-button__text,
+  .pf-v6-c-button__icon {
+    color: var(--pf-t--global--text--color--regular);
+  }
+
   --pf-v6-c-accordion--m-plain__item--m-expanded__toggle--BackgroundColor: var(
     --pf-t--global--background--color--action--plain--clicked
   );
 
   &__toggle {
     width: fit-content;
+    color: var(--pf-t--global--text--color--regular);
+    --pf-v6-c-button--m-link--Color: var(--pf-t--global--text--color--regular);
+    --pf-v6-c-button--m-link--hover--Color: var(--pf-t--global--text--color--regular);
+    --pf-v6-c-button--m-link--m-clicked--Color: var(--pf-t--global--text--color--regular);
     --pf-v6-c-accordion__toggle--BackgroundColor: var(
       --pf-t--global--background--color--action--plain--clicked
     );
     --pf-v6-c-accordion__toggle--hover--BackgroundColor: var(
       --pf-t--global--background--color--action--plain--clicked
     );
+
+    .pf-v6-c-button,
+    .pf-v6-c-button__text,
+    .pf-v6-c-button__icon {
+      color: var(--pf-t--global--text--color--regular);
+    }
+  }
+
+  &__detached-toggle {
+    --pf-v6-c-button--m-link--Color: var(--pf-t--global--text--color--regular);
+    --pf-v6-c-button--m-link--hover--Color: var(--pf-t--global--text--color--regular);
+    --pf-v6-c-button--m-link--m-clicked--Color: var(--pf-t--global--text--color--regular);
+
+    .pf-v6-c-button,
+    .pf-v6-c-button__text,
+    .pf-v6-c-button__icon {
+      color: var(--pf-t--global--text--color--regular);
+    }
   }
 
   &__status {
     padding-block-start: var(--pf-t--global--spacer--lg);
+  }
+
+  &__tabs-row {
+    border-block-end: var(--pf-t--global--border--width--regular) solid
+      var(--pf-t--global--border--color--default);
+
+    .pf-v6-c-tabs {
+      --pf-v6-c-tabs--before--BorderBlockEndWidth: 0;
+    }
   }
 
   &__admissions {
@@ -55,12 +71,6 @@
     margin-block-end: var(--pf-t--global--spacer--md);
   }
 
-  &__admissions-window {
-    display: flex;
-    justify-content: flex-end;
-    margin-block-end: var(--pf-t--global--spacer--md);
-  }
-
   &__admission-time-window-toggle {
     min-width: 11rem;
   }
@@ -68,8 +78,6 @@
   &__admission-metrics {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    border-block-start: var(--pf-t--global--border--width--regular) solid
-      var(--pf-t--global--border--color--default);
 
     &--two {
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -78,7 +86,7 @@
 
   &__admission-metric {
     min-width: 0;
-    padding: var(--pf-t--global--spacer--sm);
+    padding: var(--pf-t--global--spacer--md);
     border-inline-end: var(--pf-t--global--border--width--regular) solid
       var(--pf-t--global--border--color--default);
 
@@ -131,6 +139,10 @@
     text-align: center;
   }
 
+  &__total-label {
+    color: var(--pf-t--global--text--color--subtle);
+  }
+
   &__total {
     border-inline-end: var(--pf-t--global--border--width--regular) solid
       var(--pf-t--global--border--color--default);
@@ -176,5 +188,14 @@
     width: var(--pf-t--global--spacer--sm);
     height: var(--pf-t--global--spacer--sm);
     margin-inline-end: var(--pf-t--global--spacer--sm);
+  }
+}
+
+.gpuaas-workloads-table {
+  width: 100%;
+  color: var(--pf-t--global--text--color--regular);
+
+  &__toggle-content {
+    color: var(--pf-t--global--text--color--regular);
   }
 }

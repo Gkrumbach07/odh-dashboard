@@ -1,11 +1,14 @@
 import * as React from 'react';
-import { fireMiscTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
 import { verifyConnection } from '~/app/api/k8s';
 import {
   EVAL_HUB_EVENTS,
   type ExternalConnectionTestedProperties,
 } from '~/app/tracking/evalhubTrackingConstants';
-import { getUserFriendlyConnectionError } from '~/app/utils/validationUtils';
+import { useEvalHubTracking } from '~/app/tracking/useEvalHubTracking';
+import {
+  getUserFriendlyConnectionError,
+  RECOGNIZED_CONNECTION_ERROR_CODES,
+} from '~/app/utils/validationUtils';
 import type { ConnectionValidationState, SourceMode, VerifyConnectionRequest } from '~/app/types';
 
 type UseConnectionValidationParams = {
@@ -31,6 +34,8 @@ export const useConnectionValidation = ({
   modelName,
   agentName,
 }: UseConnectionValidationParams): UseConnectionValidationResult => {
+  const { trackEvalHubEvent } = useEvalHubTracking();
+
   const [connectionValidation, setConnectionValidation] = React.useState<ConnectionValidationState>(
     { status: 'idle' },
   );
@@ -82,7 +87,7 @@ export const useConnectionValidation = ({
           outcome: 'success',
           endpointType: sourceMode,
         };
-        fireMiscTrackingEvent(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, successProps);
+        trackEvalHubEvent(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, successProps);
       }
     } catch (err: unknown) {
       if (controller.signal.aborted) {
@@ -92,7 +97,10 @@ export const useConnectionValidation = ({
       if (err && typeof err === 'object' && 'error' in err) {
         const inner = (err as Record<string, unknown>).error; // eslint-disable-line @typescript-eslint/consistent-type-assertions
         if (inner && typeof inner === 'object' && 'code' in inner) {
-          errorCode = String((inner as Record<string, unknown>).code); // eslint-disable-line @typescript-eslint/consistent-type-assertions
+          const rawCode = String((inner as Record<string, unknown>).code); // eslint-disable-line @typescript-eslint/consistent-type-assertions
+          if (RECOGNIZED_CONNECTION_ERROR_CODES.has(rawCode)) {
+            errorCode = rawCode;
+          }
         }
       }
       const errorMessage = getUserFriendlyConnectionError(errorCode, sourceMode);
@@ -107,9 +115,17 @@ export const useConnectionValidation = ({
         endpointType: sourceMode,
         error: errorMessage,
       };
-      fireMiscTrackingEvent(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, errorProps);
+      trackEvalHubEvent(EVAL_HUB_EVENTS.EXTERNAL_CONNECTION_TESTED, errorProps);
     }
-  }, [namespace, sourceMode, endpointUrl, apiKeySecretRef, modelName, agentName]);
+  }, [
+    trackEvalHubEvent,
+    namespace,
+    sourceMode,
+    endpointUrl,
+    apiKeySecretRef,
+    modelName,
+    agentName,
+  ]);
 
   React.useEffect(
     () => () => {

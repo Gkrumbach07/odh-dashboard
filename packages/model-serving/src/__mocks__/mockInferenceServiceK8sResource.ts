@@ -1,5 +1,11 @@
 import { K8sStatus } from '@openshift/dynamic-plugin-sdk-utils';
-import { ContainerResources, KnownLabels, NodeSelector, Toleration } from '@odh-dashboard/k8s-core';
+import {
+  ContainerResources,
+  KnownLabels,
+  NodeSelector,
+  PodSpec,
+  Toleration,
+} from '@odh-dashboard/k8s-core';
 import { genUID } from '@odh-dashboard/foundation';
 import { DeploymentMode, InferenceServiceKind, ServingRuntimeModelType } from '../shared';
 
@@ -36,7 +42,9 @@ type MockResourceConfigType = {
   }>;
   tolerations?: Toleration[];
   nodeSelector?: NodeSelector;
+  resourceClaims?: PodSpec['resourceClaims'];
   isNonDashboardItem?: boolean;
+  isExistingResource?: boolean;
   hardwareProfileName?: string;
   hardwareProfileNamespace?: string;
   hardwareProfileResourceVersion?: string;
@@ -115,7 +123,9 @@ export const mockInferenceServiceK8sResource = ({
   env = [],
   tolerations,
   nodeSelector,
+  resourceClaims,
   isNonDashboardItem = false,
+  isExistingResource = true,
   hardwareProfileName = '',
   hardwareProfileNamespace = undefined,
   hardwareProfileResourceVersion = undefined,
@@ -148,9 +158,15 @@ export const mockInferenceServiceK8sResource = ({
       ...(path && { 'opendatahub.io/connection-path': path }),
       ...additionalAnnotations,
     },
-    creationTimestamp,
+    ...(isExistingResource
+      ? {
+          creationTimestamp,
+          generation: 1,
+          resourceVersion: '1309350',
+          uid: genUID('service'),
+        }
+      : {}),
     ...(deleted ? { deletionTimestamp: new Date().toUTCString() } : {}),
-    generation: 1,
     labels: {
       name,
       ...additionalLabels,
@@ -159,8 +175,6 @@ export const mockInferenceServiceK8sResource = ({
     },
     name,
     namespace,
-    resourceVersion: '1309350',
-    uid: genUID('service'),
   },
   spec: {
     predictor: {
@@ -171,6 +185,7 @@ export const mockInferenceServiceK8sResource = ({
       imagePullSecrets,
       ...(tolerations && { tolerations }),
       ...(nodeSelector && { nodeSelector }),
+      ...(resourceClaims && { resourceClaims }),
       model: {
         modelFormat: {
           name: 'onnx',

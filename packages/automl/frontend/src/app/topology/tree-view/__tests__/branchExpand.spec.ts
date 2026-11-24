@@ -21,12 +21,17 @@ import {
   resolveWinnerBranchIndex,
 } from '~/app/topology/tree-view/branchExpand';
 
-const makeNode = (id: string, label: string, runStatus?: RunStatus): PipelineNodeModelExpanded =>
+const makeNode = (
+  id: string,
+  label: string,
+  runStatus?: RunStatus,
+  modelKey?: string,
+): PipelineNodeModelExpanded =>
   ({
     id,
     label,
     type: 'DEFAULT_TASK_NODE',
-    data: runStatus ? { runStatus } : undefined,
+    data: runStatus || modelKey ? { runStatus, modelKey } : undefined,
   }) as PipelineNodeModelExpanded;
 
 describe('branchExpand', () => {
@@ -51,24 +56,24 @@ describe('branchExpand', () => {
     ).toBe(true);
   });
 
-  it('should match winner labels ignoring spacing', () => {
+  it('should match winner labels exactly', () => {
     const node = makeNode('training__model__branch-0', 'XG Boost');
     expect(
       matchesWinnerModel(node, {
         winnerModelLabel: 'XGBoost',
         winnerModelKey: 'xgboost',
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it('should match topology labels to longer leaderboard keys/names', () => {
+  it('should not match topology labels to a different leaderboard name', () => {
     const node = makeNode('training__model__branch-2', 'ExtraTreesMSE_BAG_L1');
     expect(
       matchesWinnerModel(node, {
         winnerModelLabel: 'ExtraTreesMSE_B AG_L1_FULL',
         winnerModelKey: 'ExtraTreesMSE_BAG_L1_FULL',
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('should not match a short shared prefix across different models', () => {
@@ -97,6 +102,33 @@ describe('branchExpand', () => {
     expect(
       resolveVisibleBranchIndices([0, 1], branches, { ...options, modelsExpanded: true }),
     ).toEqual([0, 1]);
+  });
+
+  it('should not choose the first branch when winner labels are ambiguous', () => {
+    const branches = new Map<number, PipelineNodeModelExpanded[]>([
+      [0, [makeNode('training__model__branch-0', 'shared-model')]],
+      [1, [makeNode('training__model__branch-1', 'shared-model')]],
+    ]);
+
+    expect(
+      resolveWinnerBranchIndex(branches, [0, 1], {
+        winnerModelLabel: 'shared-model',
+      }),
+    ).toBeUndefined();
+  });
+
+  it('should prefer the exact winner model key over label matches', () => {
+    const branches = new Map<number, PipelineNodeModelExpanded[]>([
+      [0, [makeNode('training__model__branch-0', 'Other', undefined, 'winner')]],
+      [1, [makeNode('training__model__branch-1', 'winner', undefined, 'other')]],
+    ]);
+
+    expect(
+      resolveWinnerBranchIndex(branches, [0, 1], {
+        winnerModelLabel: 'winner',
+        winnerModelKey: 'winner',
+      }),
+    ).toBe(0);
   });
 
   it('should resolve top-3 model ranks from the leaderboard map', () => {

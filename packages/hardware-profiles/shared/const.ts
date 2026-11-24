@@ -1,5 +1,8 @@
 import { HardwareProfileFeatureVisibility } from '@odh-dashboard/k8s-core';
-import { CrPathConfig, HardwareProfileBindingConfig } from './types';
+import type { CrPathConfig, HardwareProfileBindingConfig } from './types';
+
+export const HARDWARE_PROFILES_MISSING_CPU_MEMORY_MESSAGE =
+  'Omitting CPU or Memory resources is not recommended.';
 
 export enum HardwareProfileBindingState {
   DISABLED = 'Disabled',
@@ -16,6 +19,7 @@ export const INFERENCE_SERVICE_HARDWARE_PROFILE_PATHS: CrPathConfig = {
   containerResourcesPath: 'spec.predictor.model.resources',
   tolerationsPath: 'spec.predictor.tolerations',
   nodeSelectorPath: 'spec.predictor.nodeSelector',
+  podSpecPath: 'spec.predictor',
 };
 
 export const HARDWARE_PROFILE_BINDING_CONFIG: Record<
@@ -76,7 +80,7 @@ export const HARDWARE_PROFILE_BINDING_CONFIG: Record<
 };
 
 export const LOCAL_QUEUE_MISSING_BODY =
-  'The selected hardware profile references a local queue that does not exist in this project and may prevent the workbench from starting. Select a different hardware profile.';
+  "This hardware profile requires a local queue that isn't available in this project. Select a different hardware profile.";
 
 export const DRA_CLAIM_NAME = 'hwp-dra';
 

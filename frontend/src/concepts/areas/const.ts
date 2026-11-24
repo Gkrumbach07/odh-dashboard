@@ -2,8 +2,30 @@ import type { DashboardCommonConfig } from '@odh-dashboard/k8s-core';
 import {
   SupportedArea,
   type SupportedAreasState,
+  type CustomConditionFunction,
   DataScienceStackComponent,
 } from '@odh-dashboard/plugin-core/areas';
+
+// Set by the operator when an Argo Workflows install it does not manage blocks pipelines.
+// `CapabilityDSPv2Argo` is the v2 condition name, which is what the dashboard receives.
+const hasUnmanagedArgoWorkflows: CustomConditionFunction = ({ dscStatus }) => {
+  const conditions = dscStatus?.conditions;
+  return (
+    conditions?.some(
+      (condition) => condition.type === 'CapabilityDSPv2Argo' && condition.status === 'False',
+    ) ?? false
+  );
+};
+
+// Shared operator readiness does not establish per-child backend reachability.
+const isFeastOperatorReady: CustomConditionFunction = ({ dscStatus }) => {
+  const conditions = dscStatus?.conditions;
+  return (
+    conditions?.some(
+      (condition) => condition.type === 'FeastOperatorReady' && condition.status === 'True',
+    ) ?? false
+  );
+};
 
 export const techPreviewFlags = {
   genAiImageUpload: false,
@@ -11,6 +33,8 @@ export const techPreviewFlags = {
   genAiTracing: false,
   guardrails: false,
   modelAsService: true,
+  mySubscriptions: false,
+  inferencePriorityField: false,
   aiAssetCustomEndpoints: false,
   mcpCatalog: false,
   mcpRegistry: false,
@@ -24,17 +48,16 @@ export const techPreviewFlags = {
   genAiAgentDeployment: false,
   vLLMDeploymentOnMaaS: false,
   llmdTemplates: false,
-  llmGatewayField: false,
+  llmGatewayField: true,
   globalProjectPrompts: false,
   agentOps: false,
   dataRegistry: false,
   dataConnectHub: false,
+  aiSafety: false,
+  hardwareProfileDRA: false,
 } satisfies Partial<DashboardCommonConfig>;
 
 export const devTemporaryFeatureFlags = {
-  // Temporary Grid migration switch: enables MaaS Gateway API paths for the MaaS and Gen AI
-  // packages while grid-aware screens are migrated away from Kubernetes APIs.
-  grid: false,
   disableKueue: true,
   disableProjectScoped: true,
   nimServiceOperator: false,
@@ -62,6 +85,7 @@ export const projectManagementFlags = {
   disableClusterManager: false,
   disableBYONImageStream: false,
   disableAdminConnectionTypes: false,
+  hideCommunityPluginsSettingsPage: false,
   disableStorageClasses: false,
   projectRBAC: true,
   roleManagement: true,
@@ -115,6 +139,11 @@ const allFeatureFlagsConfig = {
 
 export const definedFeatureFlags: string[] = Object.keys(allFeatureFlagsConfig);
 
+// Defaults for dev-only area flags that are unset in flagState. Unlisted dev flags default to off.
+export const devFlagDefaults: Partial<Record<string, boolean>> = {
+  guidedTour: true,
+};
+
 export const SupportedAreasStateMap: SupportedAreasState = {
   [SupportedArea.BYON]: {
     featureFlags: ['disableBYONImageStream'],
@@ -132,6 +161,11 @@ export const SupportedAreasStateMap: SupportedAreasState = {
   [SupportedArea.DS_PIPELINES]: {
     featureFlags: ['disablePipelines'],
     requiredComponents: [DataScienceStackComponent.DS_PIPELINES],
+  },
+  // Intentionally not reliant on DS_PIPELINES: this reports a pipelines failure, so it must not be
+  // gated on pipelines looking healthy.
+  [SupportedArea.DS_PIPELINES_ARGO_INVALID]: {
+    customCondition: hasUnmanagedArgoWorkflows,
   },
   [SupportedArea.HOME]: {
     featureFlags: ['disableHome'],
@@ -222,6 +256,9 @@ export const SupportedAreasStateMap: SupportedAreasState = {
   [SupportedArea.ADMIN_CONNECTION_TYPES]: {
     featureFlags: ['disableAdminConnectionTypes'],
   },
+  [SupportedArea.COMMUNITY_PLUGINS_SETTINGS]: {
+    featureFlags: ['hideCommunityPluginsSettingsPage'],
+  },
   [SupportedArea.FINE_TUNING]: {
     featureFlags: ['disableFineTuning'],
     reliantAreas: [
@@ -236,11 +273,16 @@ export const SupportedAreasStateMap: SupportedAreasState = {
   },
   [SupportedArea.FEATURE_STORE]: {
     featureFlags: ['disableFeatureStore'],
-    requiredComponents: [DataScienceStackComponent.FEAST_OPERATOR],
+    requiredComponents: [DataScienceStackComponent.FEATURE_STORE],
+    customCondition: isFeastOperatorReady,
   },
   [SupportedArea.FEATURE_STORE_ADMIN]: {
     featureFlags: ['featureStoreAdmin'],
     reliantAreas: [SupportedArea.FEATURE_STORE],
+  },
+  [SupportedArea.DATA_REGISTRY]: {
+    requiredComponents: [DataScienceStackComponent.DATA_REGISTRY],
+    customCondition: isFeastOperatorReady,
   },
   [SupportedArea.MODEL_TRAINING]: {
     featureFlags: ['trainingJobs'],
@@ -311,6 +353,9 @@ export const SupportedAreasStateMap: SupportedAreasState = {
   [SupportedArea.GPUAAS_INFRASTRUCTURE]: {
     featureFlags: ['gpuaas'],
   },
+  [SupportedArea.HARDWARE_PROFILE_DRA]: {
+    featureFlags: ['hardwareProfileDRA'],
+  },
   [SupportedArea.MODEL_CAPABILITIES]: {
     featureFlags: ['modelCapabilities'],
     reliantAreas: [SupportedArea.MODEL_SERVING],
@@ -320,9 +365,11 @@ export const SupportedAreasStateMap: SupportedAreasState = {
   },
   [SupportedArea.PLUGIN_DATA_REGISTRY]: {
     featureFlags: ['dataRegistry'],
+    reliantAreas: [SupportedArea.DATA_REGISTRY],
   },
   [SupportedArea.GUIDED_TOUR]: {
-    // Dev-only flag — not in OdhDashboardConfig CRD. Off by default.
+    // Dev-only flag — not in OdhDashboardConfig CRD. On by default via devFlagDefaults;
+    // useIsGuidedTourAvailable additionally hides the tour on ODH regardless of this flag.
     devFlags: ['guidedTour'],
   },
   [SupportedArea.UNIFIED_PROJECT_SELECTOR]: {
@@ -331,5 +378,11 @@ export const SupportedAreasStateMap: SupportedAreasState = {
   },
   [SupportedArea.PLUGIN_DATA_CONNECT_HUB]: {
     featureFlags: ['dataConnectHub'],
+  },
+  [SupportedArea.PLUGIN_AI_SAFETY]: {
+    featureFlags: ['aiSafety'],
+  },
+  [SupportedArea.INFERENCE_PRIORITY_FIELD]: {
+    featureFlags: ['inferencePriorityField'],
   },
 };

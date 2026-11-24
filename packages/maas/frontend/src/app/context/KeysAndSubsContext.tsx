@@ -3,9 +3,11 @@ import React from 'react';
 import { UserSubscription } from '~/app/types/subscriptions';
 import { listUserSubscriptions } from '~/app/api/subscriptions';
 import { getIsMaasAdmin } from '~/app/api/k8s';
-import { searchApiKeys } from '~/app/api/api-keys';
+import { searchApiKeysForCurrentHost } from '~/app/api/api-keys';
+import { useAppContext } from '~/app/context/AppContext';
 import { useApiKeyConfig } from '~/app/hooks/useApiKeyConfig';
 import { useMaaSGatewayUrl } from '~/app/hooks/useMaaSGatewayUrl';
+import { isMaaSPortalHost } from '~/app/utilities/maasGovernanceNavigation';
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
 export const KeysAndSubsContext = React.createContext({} as KeysAndSubsContextType);
@@ -34,19 +36,26 @@ type KeysAndSubsProviderProps = {
 };
 
 export const KeysAndSubsProvider: React.FC<KeysAndSubsProviderProps> = ({ children }) => {
+  const { user } = useAppContext();
+
   const subscriptionsCallback = React.useCallback<FetchStateCallbackPromise<UserSubscription[]>>(
     (opts: APIOptions) => listUserSubscriptions()(opts),
     [],
   );
 
   const isMaasAdminCallback = React.useCallback<FetchStateCallbackPromise<boolean>>(
-    (opts: APIOptions) => getIsMaasAdmin()(opts).then((result) => result.allowed),
-    [],
+    (opts: APIOptions) =>
+      isMaaSPortalHost()
+        ? Promise.resolve(Boolean(user.isAdmin))
+        : getIsMaasAdmin()(opts).then((result) => result.allowed),
+    [user.isAdmin],
   );
 
   const hasAnyApiKeysCallback = React.useCallback<FetchStateCallbackPromise<boolean>>(
     (opts: APIOptions) =>
-      searchApiKeys()(opts, { pagination: { limit: 1 } }).then((result) => result.data.length > 0),
+      searchApiKeysForCurrentHost()(opts, {
+        pagination: { limit: 1 },
+      }).then((result) => result.data.length > 0),
     [],
   );
 

@@ -17,8 +17,10 @@ import {
 import { MultiSelection, SelectionOptions } from '@odh-dashboard/ui-core/components/MultiSelection';
 import FieldGroupHelpLabelIcon from '@odh-dashboard/ui-core/components/FieldGroupHelpLabelIcon';
 import { ProjectSectionType } from '@odh-dashboard/model-serving/shared/wizard-fields';
+import type { GatewayOption } from '@odh-dashboard/model-serving/shared/api/gatewayDiscovery';
+import { useGetGatewayOptions } from '@odh-dashboard/model-serving/shared/hooks/useGatewayOptions';
 import { isLLMInferenceServiceActive } from '../../formUtils';
-import { GatewayOption, useGetGatewayOptions } from '../../api/services/gatewayDiscovery';
+import { LLMD_GATEWAY_FIELD_ID } from '../../const';
 
 export type GatewaySelectDependencies = {
   project: ProjectSectionType;
@@ -64,6 +66,16 @@ const parseGatewayKey = (key: string): GatewayOption | undefined => {
 };
 
 const EMPTY_SELECTIONS: GatewayOption[] = [];
+
+/** UX-approved gateway field microcopy (RHOAIENG-96902). */
+export const GATEWAY_API_FAILURE_MESSAGE =
+  'Unable to fetch resources. Contact your administrator to ensure that the model-serving-api service is accessible.';
+export const GATEWAY_MAAS_MISSING_MESSAGE =
+  'The MaaS gateway could not be found. Contact your administrator, or deploy this model for project members instead.';
+export const GATEWAY_MISSING_SELECTION_MESSAGE =
+  'One or more selected gateways could not be found. Deselect the missing gateways, or contact your administrator for help.';
+export const GATEWAY_FIELD_DESCRIPTION =
+  'Select one or more gateways through which users can access the model deployment.';
 
 const GatewaySelectFieldComponent: GatewaySelectFieldType['component'] = ({
   value,
@@ -175,9 +187,14 @@ const GatewaySelectFieldComponent: GatewaySelectFieldType['component'] = ({
     selectedGatewayKeys,
   ]);
 
+  // Match other wizard selects: disable when discovery returned nothing to choose.
+  // Keep enabled if missing selections are preserved as chips so the user can deselect them.
+  const hasNoOptions = Boolean(externalData?.loaded && options.length === 0);
+  const selectDisabled = Boolean(isDisabled || hasNoOptions);
+
   const selectEl = (
     <MultiSelection
-      ariaLabel="Gateway selection"
+      ariaLabel="Gateway"
       value={options}
       setValue={(newOptions) => {
         const nextSelections = newOptions
@@ -189,17 +206,22 @@ const GatewaySelectFieldComponent: GatewaySelectFieldType['component'] = ({
           .filter((gateway): gateway is GatewayOption => gateway !== undefined);
         onChange({ selections: nextSelections });
       }}
-      placeholder="Select gateways"
+      // Hide placeholder once chips are present (UX: avoid "Select gateways" next to chips)
+      placeholder={selections.length > 0 ? '' : 'Select gateways'}
       toggleTestId="gateway-select"
-      isDisabled={isDisabled}
+      isDisabled={selectDisabled}
       hasCheckbox
     />
   );
 
+  const missingSelectionMessage = isDisabled
+    ? GATEWAY_MAAS_MISSING_MESSAGE
+    : GATEWAY_MISSING_SELECTION_MESSAGE;
+
   return (
     <FormGroup
       fieldId="gateway-select"
-      label="Gateway selection"
+      label="Gateway"
       labelHelp={
         labelHelpPopover ? (
           <FieldGroupHelpLabelIcon
@@ -213,9 +235,7 @@ const GatewaySelectFieldComponent: GatewaySelectFieldType['component'] = ({
     >
       <Stack hasGutter>
         <StackItem>
-          <Content component="p">
-            Select one or more gateways through which users can access the model deployment
-          </Content>
+          <Content component="p">{GATEWAY_FIELD_DESCRIPTION}</Content>
         </StackItem>
         <StackItem>
           {disabledTooltip && isDisabled ? (
@@ -235,10 +255,7 @@ const GatewaySelectFieldComponent: GatewaySelectFieldType['component'] = ({
           {!isDisabled && externalData?.loadError && (
             <FormHelperText>
               <HelperText>
-                <HelperTextItem variant="warning">
-                  {externalData.loadError.message}
-                  &nbsp;Ensure &quot;model-serving-api&quot; service is healthy and accessible.
-                </HelperTextItem>
+                <HelperTextItem variant="warning">{GATEWAY_API_FAILURE_MESSAGE}</HelperTextItem>
               </HelperText>
             </FormHelperText>
           )}
@@ -255,11 +272,7 @@ const GatewaySelectFieldComponent: GatewaySelectFieldType['component'] = ({
           {!externalData?.loadError && missingSelectedKeys.length > 0 && (
             <FormHelperText>
               <HelperText>
-                <HelperTextItem variant="warning">
-                  {missingSelectedKeys.length === 1
-                    ? 'A selected gateway was not found. The deployment may not work as expected.'
-                    : 'One or more selected gateways were not found. The deployment may not work as expected.'}
-                </HelperTextItem>
+                <HelperTextItem variant="warning">{missingSelectionMessage}</HelperTextItem>
               </HelperText>
             </FormHelperText>
           )}
@@ -287,7 +300,7 @@ const getGatewayReviewSection = (value: GatewaySelectFieldData): WizardReviewSec
   ];
 };
 export const GatewaySelectField: GatewaySelectFieldType = {
-  id: 'llmd-serving/gateway',
+  id: LLMD_GATEWAY_FIELD_ID,
   parentId: 'networking',
   step: 'advancedOptions',
   type: 'addition',

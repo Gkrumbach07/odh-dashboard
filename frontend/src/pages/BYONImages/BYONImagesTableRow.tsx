@@ -9,13 +9,13 @@ import {
   TimestampTooltipVariant,
   Truncate,
 } from '@patternfly/react-core';
+import { PreInstalledName } from '@odh-dashboard/k8s-core';
 import { BYONImage } from '#~/types';
 import { relativeTime } from '#~/utilities/time';
 import { getImageTierColor } from '#~/pages/projects/screens/spawner/imageSelector/imageTierUtils';
 import BYONImageHardwareProfiles from '#~/pages/BYONImages/BYONImageHardwareProfiles';
 import { TableRowTitleDescription } from '#~/components/table';
 import { useHardwareProfilesByFeatureVisibility } from '#~/pages/hardwareProfiles/useHardwareProfilesByFeatureVisibility';
-import { PreInstalledName } from '#~/concepts/k8s/utils';
 import { useDashboardNamespace } from '#~/redux/selectors';
 import { updateBYONImageStream, patchOOTBImageStreamHidden } from '#~/api/k8s/imageStreams';
 import ImageErrorStatus from './ImageErrorStatus';
@@ -90,6 +90,11 @@ const BYONImagesTableRow: React.FC<BYONImagesTableRowProps> = ({
             <Label data-testid="image-tier-label" color={getImageTierColor(tier)}>
               {upperFirst(tier)}
             </Label>
+            {obj.deprecated ? (
+              <Label data-testid="deprecated-image-label" color="yellow">
+                Deprecated
+              </Label>
+            ) : null}
           </LabelGroup>
         </Td>
         <Td dataLabel="Enable" modifier="nowrap">

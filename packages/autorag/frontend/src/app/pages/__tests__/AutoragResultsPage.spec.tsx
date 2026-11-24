@@ -5,9 +5,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { MemoryRouter } from 'react-router';
-import { fireMiscTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
+
 import AutoragResultsPage, {
   buildResponsesTemplate,
+  getResponsesTemplateForPattern,
   normalizeResponsesTemplate,
 } from '~/app/pages/AutoragResultsPage';
 import type { AutoRAGResponsesTemplate, AutoragPattern } from '~/app/types/autoragPattern';
@@ -21,13 +22,14 @@ import type { AutoragRuntimeParameters, PipelineRun } from '~/app/types';
 import { AUTORAG_EVENTS } from '~/app/utilities/tracking';
 import { downloadBlob } from '~/app/utilities/utils';
 import { canUseResponsesForPattern } from '~/app/utilities/responses';
+import { TrackingProvider } from '~/__tests__/unit/testUtils/TrackingProvider';
 
-jest.mock('@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils', () => ({
-  fireFormTrackingEvent: jest.fn(),
-  fireMiscTrackingEvent: jest.fn(),
-}));
+const trackEventMock = jest.fn();
+const TrackingWrapper: React.FC<React.PropsWithChildren> = ({ children }) => (
+  <TrackingProvider trackEvent={trackEventMock}>{children}</TrackingProvider>
+);
+const renderWithTracking = (ui: React.ReactElement) => render(ui, { wrapper: TrackingWrapper });
 
-const fireMiscTrackingEventMock = jest.mocked(fireMiscTrackingEvent);
 const downloadBlobMock = jest.mocked(downloadBlob);
 
 // ============================================================================
@@ -151,18 +153,27 @@ jest.mock('@odh-dashboard/autox-core/ui/components/feature', () => ({
     isTerminating,
     onConfirm,
     onClose,
+    onCancel,
   }: {
     isOpen: boolean;
     isTerminating: boolean;
     onConfirm: () => void;
     onClose: () => void;
+    onCancel?: () => void;
   }) =>
     isOpen ? (
       <div data-testid="stop-run-modal">
         <button data-testid="confirm-stop-run-button" onClick={onConfirm} disabled={isTerminating}>
           Stop
         </button>
-        <button data-testid="cancel-stop-run-button" onClick={onClose} disabled={isTerminating}>
+        <button
+          data-testid="cancel-stop-run-button"
+          onClick={() => {
+            onCancel?.();
+            onClose();
+          }}
+          disabled={isTerminating}
+        >
           Cancel
         </button>
       </div>
@@ -323,7 +334,86 @@ describe('buildResponsesTemplate', () => {
 
     expect(buildResponsesTemplate(pattern, 'run-123').tools[0].ranking_options).toEqual({
       ranker: 'rrf',
-      alpha: 0.5,
+      ranker_k: 60,
+    });
+  });
+
+  it('should omit ranking options for a Neo4j hybrid pattern (graph retrieval does not support hybrid ranking)', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        store_binding: {
+          ...mockPatterns['pattern-1'].settings.store_binding,
+          provider_type: 'neo4j',
+        },
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+          ranker_strategy: 'weighted',
+          ranker_alpha: 0.5,
+        },
+      },
+    } as AutoragPattern;
+
+    expect(buildResponsesTemplate(pattern, 'run-123').tools[0].ranking_options).toBeUndefined();
+  });
+
+  it('should reject a Milvus RRF ranker_k at the exclusive maximum', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+          ranker_k: 16384,
+        },
+      },
+    } as AutoragPattern;
+
+    expect(() => buildResponsesTemplate(pattern, 'run-123')).toThrow(
+      'Milvus RRF ranker_k must be greater than 0 and less than 16384',
+    );
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, null])(
+    'should reject an invalid configured Milvus RRF ranker_k %p',
+    (rankerK) => {
+      const pattern = {
+        ...mockPatterns['pattern-1'],
+        settings: {
+          ...mockPatterns['pattern-1'].settings,
+          retrieval: {
+            ...mockPatterns['pattern-1'].settings.retrieval,
+            search_mode: 'hybrid',
+            ranker_k: rankerK,
+          },
+        },
+      } as AutoragPattern;
+
+      expect(() => buildResponsesTemplate(pattern, 'run-123')).toThrow(
+        'Milvus RRF ranker_k must be greater than 0 and less than 16384',
+      );
+    },
+  );
+
+  it('should preserve a valid Milvus RRF ranker_k below the exclusive maximum', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+          ranker_k: 16383.999,
+        },
+      },
+    } as AutoragPattern;
+
+    expect(buildResponsesTemplate(pattern, 'run-123').tools[0].ranking_options).toEqual({
+      ranker: 'rrf',
+      ranker_k: 16383.999,
     });
   });
 
@@ -335,19 +425,137 @@ describe('buildResponsesTemplate', () => {
         retrieval: {
           ...mockPatterns['pattern-1'].settings.retrieval,
           search_mode: 'hybrid',
+          ranker_strategy: 'weighted',
           ranker_alpha: 0,
         },
       },
     } as AutoragPattern;
 
     expect(buildResponsesTemplate(pattern, 'run-123').tools[0].ranking_options).toEqual({
-      ranker: 'rrf',
+      ranker: 'weighted',
       alpha: 0,
     });
+  });
+
+  it('should default weighted alpha when it is absent', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+          ranker_strategy: 'weighted',
+        },
+      },
+    } as AutoragPattern;
+
+    expect(buildResponsesTemplate(pattern, 'run-123').tools[0].ranking_options).toEqual({
+      ranker: 'weighted',
+      alpha: 0.5,
+    });
+  });
+
+  it('should accept the inclusive upper alpha boundary', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+          ranker_strategy: 'weighted',
+          ranker_alpha: 1,
+        },
+      },
+    } as AutoragPattern;
+
+    expect(buildResponsesTemplate(pattern, 'run-123').tools[0].ranking_options).toEqual({
+      ranker: 'weighted',
+      alpha: 1,
+    });
+  });
+
+  it.each([-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'should reject an invalid configured ranking alpha %p',
+    (alpha) => {
+      const pattern = {
+        ...mockPatterns['pattern-1'],
+        settings: {
+          ...mockPatterns['pattern-1'].settings,
+          retrieval: {
+            ...mockPatterns['pattern-1'].settings.retrieval,
+            search_mode: 'hybrid',
+            ranker_strategy: 'weighted',
+            ranker_alpha: alpha,
+          },
+        },
+      } as AutoragPattern;
+
+      expect(() => buildResponsesTemplate(pattern, 'run-123')).toThrow(
+        'Ranking alpha must be between 0 and 1',
+      );
+    },
+  );
+
+  it('should keep pgvector RRF alpha when building a hybrid template', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        store_binding: { provider_type: 'pgvector' as const, collection_name: 'chunks' },
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+          ranker_alpha: 0.3,
+        },
+      },
+    } as AutoragPattern;
+
+    expect(buildResponsesTemplate(pattern, 'run-123').tools[0].ranking_options).toEqual({
+      ranker: 'rrf',
+      alpha: 0.3,
+    });
+  });
+
+  it('should reject unknown pgvector ranking strategies', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        store_binding: { provider_type: 'pgvector' as const, collection_name: 'chunks' },
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+          ranker_strategy: 'unknown',
+        },
+      },
+    } as AutoragPattern;
+
+    expect(() => buildResponsesTemplate(pattern, 'run-123')).toThrow(
+      'Unsupported retrieval ranker: unknown',
+    );
   });
 });
 
 describe('normalizeResponsesTemplate', () => {
+  it('should strip ranking options from a persisted Neo4j template', () => {
+    const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const persistedTemplate = {
+      ...template,
+      tools: [
+        {
+          ...template.tools[0],
+          ranking_options: { ranker: 'weighted' as const, alpha: 0.5 },
+        },
+      ],
+    } as typeof template;
+
+    expect(
+      normalizeResponsesTemplate(persistedTemplate, 'neo4j').tools[0].ranking_options,
+    ).toBeUndefined();
+  });
+
   it('should remove legacy ranking fields from a persisted response template', () => {
     const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
     const legacyTemplate = {
@@ -356,23 +564,248 @@ describe('normalizeResponsesTemplate', () => {
         {
           ...template.tools[0],
           ranking_options: {
-            ranker: 'legacy-ranker',
+            ranker: 'rrf',
             alpha: 0.25,
-            impact_factor: 0.75,
+            impact_factor: 42,
           },
         },
       ],
     } as unknown as typeof template;
 
-    expect(normalizeResponsesTemplate(legacyTemplate)).toEqual({
+    expect(normalizeResponsesTemplate(legacyTemplate, 'milvus')).toEqual({
       ...template,
       tools: [
         {
           ...template.tools[0],
-          ranking_options: { ranker: 'rrf', alpha: 0.25 },
+          ranking_options: { ranker: 'rrf', ranker_k: 42 },
         },
       ],
     });
+  });
+
+  it('should retain pgvector RRF alpha when normalizing a persisted template', () => {
+    const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const withRanking = {
+      ...template,
+      tools: [{ ...template.tools[0], ranking_options: { ranker: 'rrf' as const, alpha: 0.2 } }],
+    };
+
+    expect(normalizeResponsesTemplate(withRanking, 'pgvector').tools[0].ranking_options).toEqual({
+      ranker: 'rrf',
+      alpha: 0.2,
+    });
+  });
+
+  it('should default pgvector RRF alpha when it is absent', () => {
+    const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const withoutAlpha = {
+      ...template,
+      tools: [{ ...template.tools[0], ranking_options: { ranker: 'rrf' as const } }],
+    };
+
+    expect(normalizeResponsesTemplate(withoutAlpha, 'pgvector').tools[0].ranking_options).toEqual({
+      ranker: 'rrf',
+      alpha: 0.5,
+    });
+  });
+
+  it('should accept persisted pgvector alpha at the upper boundary', () => {
+    const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const withAlpha = {
+      ...template,
+      tools: [{ ...template.tools[0], ranking_options: { ranker: 'rrf' as const, alpha: 1 } }],
+    };
+
+    expect(normalizeResponsesTemplate(withAlpha, 'pgvector').tools[0].ranking_options).toEqual({
+      ranker: 'rrf',
+      alpha: 1,
+    });
+  });
+
+  it('should default Milvus RRF ranker_k when persisted ranking fields are absent', () => {
+    const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const withoutRankingFields = {
+      ...template,
+      tools: [{ ...template.tools[0], ranking_options: { ranker: 'rrf' as const } }],
+    };
+
+    expect(
+      normalizeResponsesTemplate(withoutRankingFields, 'milvus').tools[0].ranking_options,
+    ).toEqual({
+      ranker: 'rrf',
+      ranker_k: 60,
+    });
+  });
+
+  it('should reject an invalid persisted Milvus RRF ranker_k', () => {
+    const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const invalidTemplate = {
+      ...template,
+      tools: [
+        { ...template.tools[0], ranking_options: { ranker: 'rrf' as const, ranker_k: 16384 } },
+      ],
+    };
+
+    expect(() => normalizeResponsesTemplate(invalidTemplate, 'milvus')).toThrow(
+      'Invalid persisted Milvus RRF ranker_k',
+    );
+  });
+
+  it('should reject an invalid legacy Milvus impact_factor', () => {
+    const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const invalidTemplate = {
+      ...template,
+      tools: [
+        { ...template.tools[0], ranking_options: { ranker: 'rrf' as const, impact_factor: 16384 } },
+      ],
+    };
+
+    expect(() => normalizeResponsesTemplate(invalidTemplate, 'milvus')).toThrow(
+      'Invalid persisted Milvus RRF impact_factor',
+    );
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'should reject an invalid persisted Milvus RRF value %p',
+    (value) => {
+      const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+      const invalidTemplate = {
+        ...template,
+        tools: [
+          { ...template.tools[0], ranking_options: { ranker: 'rrf' as const, ranker_k: value } },
+        ],
+      };
+
+      expect(() => normalizeResponsesTemplate(invalidTemplate, 'milvus')).toThrow(
+        'Invalid persisted Milvus RRF ranker_k',
+      );
+    },
+  );
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'should reject an invalid persisted Milvus impact_factor %p',
+    (value) => {
+      const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+      const invalidTemplate = {
+        ...template,
+        tools: [
+          {
+            ...template.tools[0],
+            ranking_options: { ranker: 'rrf' as const, impact_factor: value },
+          },
+        ],
+      };
+
+      expect(() => normalizeResponsesTemplate(invalidTemplate, 'milvus')).toThrow(
+        'Invalid persisted Milvus RRF impact_factor',
+      );
+    },
+  );
+
+  it('should ignore Milvus-only RRF fields when normalizing pgvector templates', () => {
+    const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const pgvectorTemplate = {
+      ...template,
+      tools: [
+        {
+          ...template.tools[0],
+          ranking_options: {
+            ranker: 'rrf' as const,
+            ranker_k: 16384,
+            impact_factor: Number.POSITIVE_INFINITY,
+            alpha: 0.2,
+          },
+        },
+      ],
+    };
+
+    expect(
+      normalizeResponsesTemplate(pgvectorTemplate, 'pgvector').tools[0].ranking_options,
+    ).toEqual({
+      ranker: 'rrf',
+      alpha: 0.2,
+    });
+  });
+
+  it.each([-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'should reject an invalid persisted ranking alpha %p',
+    (alpha) => {
+      const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+      const invalidTemplate = {
+        ...template,
+        tools: [
+          {
+            ...template.tools[0],
+            ranking_options: { ranker: 'weighted' as const, alpha },
+          },
+        ],
+      };
+
+      expect(() => normalizeResponsesTemplate(invalidTemplate, 'milvus')).toThrow(
+        'Invalid persisted ranking alpha',
+      );
+    },
+  );
+
+  it('should preserve a valid persisted template when the generated fallback is invalid', () => {
+    const persistedTemplate = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+          ranker_k: 16384,
+        },
+      },
+      inference: { responses_template: persistedTemplate },
+    } as AutoragPattern;
+
+    expect(getResponsesTemplateForPattern(pattern, 'milvus', 'run-123')).toEqual(persistedTemplate);
+  });
+
+  it('should prefer a valid persisted template when both candidates are usable', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        retrieval: {
+          ...mockPatterns['pattern-1'].settings.retrieval,
+          search_mode: 'hybrid',
+        },
+      },
+    } as AutoragPattern;
+    const persistedTemplate = {
+      ...buildResponsesTemplate(pattern, 'run-123'),
+      tools: [
+        {
+          ...buildResponsesTemplate(pattern, 'run-123').tools[0],
+          ranking_options: { ranker: 'rrf' as const, ranker_k: 42 },
+        },
+      ],
+    };
+    const patternWithPersistedTemplate = {
+      ...pattern,
+      inference: { responses_template: persistedTemplate },
+    };
+
+    expect(
+      getResponsesTemplateForPattern(patternWithPersistedTemplate, 'milvus', 'run-123')?.tools[0]
+        .ranking_options,
+    ).toEqual({ ranker: 'rrf', ranker_k: 42 });
+  });
+
+  it('should return no template when both persisted and generated templates are unusable', () => {
+    const pattern = {
+      ...mockPatterns['pattern-1'],
+      settings: {
+        ...mockPatterns['pattern-1'].settings,
+        generation: { ...mockPatterns['pattern-1'].settings.generation, model_id: '' },
+      },
+    } as AutoragPattern;
+
+    expect(getResponsesTemplateForPattern(pattern, 'milvus', 'run-123')).toBeUndefined();
   });
 });
 
@@ -403,7 +836,7 @@ const createTestQueryClient = () =>
 
 const renderPage = () => {
   const queryClient = createTestQueryClient();
-  return render(
+  return renderWithTracking(
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
         <AutoragResultsPage />
@@ -422,11 +855,7 @@ const expectHeaderActions = (conditionalAction?: 'stop' | 'retry') => {
   ].filter((id): id is string => id !== undefined);
 
   const actions = actionIds.map((id) => screen.getByTestId(id));
-  actions.forEach((action) =>
-    expect(action).toHaveClass(
-      action.dataset.testid === 'run-details-button' ? 'pf-m-link' : 'pf-m-secondary',
-    ),
-  );
+  actions.forEach((action) => expect(action).toHaveClass('pf-m-link'));
   actions.slice(0, -1).forEach((action, index) => {
     expect(action.compareDocumentPosition(actions[index + 1])).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
@@ -614,7 +1043,7 @@ describe('AutoragResultsPage', () => {
         tools: [
           {
             ...legacyTemplate.tools[0],
-            ranking_options: { ranker: 'rrf', alpha: 0.5 },
+            ranking_options: { ranker: 'weighted', alpha: 0.5 },
           },
         ],
       });
@@ -716,6 +1145,40 @@ describe('AutoragResultsPage', () => {
           optimization_max_rag_patterns: 10,
         },
       });
+    });
+
+    it('should reject unsupported persisted ranking strategies', () => {
+      const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+      const invalidTemplate = {
+        ...template,
+        tools: [
+          {
+            ...template.tools[0],
+            ranking_options: { ranker: 'unsupported' },
+          },
+        ],
+      } as unknown as typeof template;
+
+      expect(() => normalizeResponsesTemplate(invalidTemplate, 'milvus')).toThrow(
+        'Unsupported persisted retrieval ranker',
+      );
+    });
+
+    it('should reject weighted pgvector templates', () => {
+      const template = buildResponsesTemplate(mockPatterns['pattern-1'], 'run-123');
+      const withRanking = {
+        ...template,
+        tools: [
+          {
+            ...template.tools[0],
+            ranking_options: { ranker: 'weighted' as const, alpha: 0.3 },
+          },
+        ],
+      };
+
+      expect(() => normalizeResponsesTemplate(withRanking, 'pgvector')).toThrow(
+        'Weighted ranking is not supported for pgvector',
+      );
     });
 
     it('should render a canonical run without an OGX secret', () => {
@@ -1157,6 +1620,19 @@ describe('AutoragResultsPage', () => {
       expect(screen.getByTestId('stop-run-modal')).toBeInTheDocument();
     });
 
+    it('should track results-page stop cancellation once without a success field', async () => {
+      setupWithRunState('RUNNING');
+      renderPage();
+      trackEventMock.mockClear();
+      await userEvent.click(screen.getByTestId('stop-run-button'));
+      expect(trackEventMock).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByTestId('cancel-stop-run-button'));
+      expect(trackEventMock.mock.calls).toEqual([
+        ['AutoRAG Run Stopped', { outcome: 'cancel', source: 'resultsPage' }],
+      ]);
+      expect(screen.queryByTestId('stop-run-modal')).not.toBeInTheDocument();
+    });
+
     it('should call terminate mutation when stop is confirmed', async () => {
       setupWithRunState('RUNNING');
       const mockMutateAsync = jest.fn().mockResolvedValue(undefined);
@@ -1258,7 +1734,7 @@ describe('AutoragResultsPage', () => {
         isPending: false,
       });
 
-      const { rerender } = render(
+      const { rerender } = renderWithTracking(
         <MemoryRouter>
           <QueryClientProvider client={createTestQueryClient()}>
             <AutoragResultsPage />
@@ -1423,7 +1899,7 @@ describe('AutoragResultsPage', () => {
       expect(mockNotification.warning).toHaveBeenCalledTimes(1);
       expect(mockNotification.warning).toHaveBeenCalledWith(
         '2 of 4 patterns could not be loaded',
-        'The following patterns failed to load: BrokenPattern1, BrokenPattern2',
+        'The following patterns failed to load: BrokenPattern\u00a01, BrokenPattern\u00a02',
       );
     });
 
@@ -1458,7 +1934,7 @@ describe('AutoragResultsPage', () => {
 
       const testQueryClient = createTestQueryClient();
 
-      const { rerender } = render(
+      const { rerender } = renderWithTracking(
         <MemoryRouter>
           <QueryClientProvider client={testQueryClient}>
             <AutoragResultsPage />
@@ -1736,10 +2212,9 @@ describe('AutoragResultsPage', () => {
           expect.objectContaining({ signal: expect.any(AbortSignal) }),
         );
         expect(downloadBlobMock).toHaveBeenCalledWith(blob, 'starter_kit.zip');
-        expect(fireMiscTrackingEventMock).toHaveBeenCalledWith(
-          AUTORAG_EVENTS.STARTER_KIT_DOWNLOADED,
-          { downloadType: 'starterKit' },
-        );
+        expect(trackEventMock).toHaveBeenCalledWith(AUTORAG_EVENTS.STARTER_KIT_DOWNLOADED, {
+          downloadType: 'starterKit',
+        });
       });
     });
 
@@ -1751,7 +2226,7 @@ describe('AutoragResultsPage', () => {
       await userEvent.click(screen.getByTestId('starter-kit-download-button'));
 
       expect(await screen.findByText('Starter kit download failed')).toBeInTheDocument();
-      expect(fireMiscTrackingEventMock).not.toHaveBeenCalledWith(
+      expect(trackEventMock).not.toHaveBeenCalledWith(
         AUTORAG_EVENTS.STARTER_KIT_DOWNLOADED,
         expect.anything(),
       );
@@ -1837,7 +2312,7 @@ describe('AutoragResultsPage', () => {
       await pendingDownload.catch(() => undefined);
 
       expect(downloadBlobMock).not.toHaveBeenCalled();
-      expect(fireMiscTrackingEventMock).not.toHaveBeenCalledWith(
+      expect(trackEventMock).not.toHaveBeenCalledWith(
         AUTORAG_EVENTS.STARTER_KIT_DOWNLOADED,
         expect.anything(),
       );
@@ -1928,7 +2403,7 @@ describe('AutoragResultsPage', () => {
 
       renderPage();
 
-      expect(fireMiscTrackingEventMock).toHaveBeenCalledWith(AUTORAG_EVENTS.RESULTS_VIEWED, {
+      expect(trackEventMock).toHaveBeenCalledWith(AUTORAG_EVENTS.RESULTS_VIEWED, {
         entrySource: 'experimentsList',
       });
     });
@@ -1945,7 +2420,7 @@ describe('AutoragResultsPage', () => {
 
       renderPage();
 
-      expect(fireMiscTrackingEventMock).toHaveBeenCalledWith(AUTORAG_EVENTS.RESULTS_VIEWED, {
+      expect(trackEventMock).toHaveBeenCalledWith(AUTORAG_EVENTS.RESULTS_VIEWED, {
         entrySource: 'other',
       });
     });
@@ -1968,7 +2443,7 @@ describe('AutoragResultsPage', () => {
         </MemoryRouter>,
       );
 
-      expect(fireMiscTrackingEventMock).toHaveBeenCalledTimes(1);
+      expect(trackEventMock).toHaveBeenCalledTimes(1);
     });
 
     it('should not fire while the pipeline run has not yet loaded', () => {
@@ -1982,7 +2457,7 @@ describe('AutoragResultsPage', () => {
 
       renderPage();
 
-      expect(fireMiscTrackingEventMock).not.toHaveBeenCalled();
+      expect(trackEventMock).not.toHaveBeenCalled();
     });
   });
 });

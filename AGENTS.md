@@ -84,6 +84,8 @@ pnpm run type-check
 
 **[Multi-Agent Workflows](docs/multi-agent-workflows.md)** covers running parallel agent sessions locally (git worktrees, Agent Teams, terminal layout) and remotely (Ambient platform).
 
+**[Architecture Decision Records](docs/adr/)** preserve the reasoning behind architectural choices. Use the [ADR template](docs/adr/template.md) and [writing workflow](.claude/skills/writing-adrs/SKILL.md) for new decisions.
+
 ## Package-Specific Guidelines
 
 Some packages have their own AGENTS.md with package-specific guidance. Check the package directory for its own AGENTS.md file.
@@ -97,6 +99,7 @@ Rules live in `.claude/rules/`. Read the relevant rule file before starting the 
 | Rule                        | File                          | Trigger                                                                        |
 | --------------------------- | ----------------------------- | ------------------------------------------------------------------------------ |
 | **Architecture**            | `architecture.md`             | When making structural changes, adding packages, modifying package boundaries, or working on distributions |
+| **ADRs**                    | `adrs.md`                     | When creating, reviewing, or superseding architecture decision records in `docs/adr/` |
 | **BFF Go**                  | `bff-go.md`                   | When working on Go BFF code in `packages/*/bff/` or `distributions/core-bff/bff/` |
 | **Contract Tests**          | `contract-tests.md`           | When working on contract tests or BFF API validation                           |
 | **Conventions**             | `conventions.md`              | When writing or reviewing TypeScript, React, or backend code                   |
@@ -129,12 +132,12 @@ Skills provide multi-step workflows. They live in `.claude/skills/`. Read the re
 | **Docs Create**                    | `skills/docs-create/`                  | Creating a new documentation file from a description                           |
 | **Docs Create Package**            | `skills/docs-create-package/`          | Scaffolding a package doc and registering it in BOOKMARKS.md                   |
 | **Docs Update**                    | `skills/docs-update/`                  | Updating existing docs after code changes                                      |
+| **Writing ADRs**                  | `skills/writing-adrs/`                | Writing, reviewing, or superseding architecture decision records              |
 | **Upstream Sync Status**           | `skills/upstream-sync-status/`         | Checking whether a package's upstream copy is up to date (pass package name or be prompted) |
 | **Upstream Sync**                  | `skills/upstream-sync/`                | Syncing upstream changes for a package and opening a PR (pass package name or be prompted)  |
 | **Upstream Sync Local**            | `skills/upstream-sync-local/`          | Syncing upstream changes from a local repository clone (pass package name, local repo path, and branch) |
 | **Style Review**                   | `skills/style-review/`                 | Reviewing code for PF priority-order compliance, wrapper component usage, and class naming conventions per `css-patternfly.md` |
 | **RBAC Review**                    | `skills/rbac-review/`                  | Reviewing code for proper RBAC enforcement — catches missing SSAR gates, assumed access from `isAdmin`, and pages that break for limited-access users |
-| **Guidance Review**                | `skills/guidance-review/`              | Checking changed lines against the `.claude/rules` and ADRs whose `paths:` match them — also runs as a Fullsend review lane |
 | **Jira Triage**                   | `skills/jira-triage/`                  | Fetching Jira issues by filter criteria, running full triage on New issues (orchestrates all analysis skills), defining triage operations, and bulk-applying them |
 | **Jira Validate Priority/Severity** | `skills/jira-validate-priority-severity/` | Analyzing bugs for missing or incorrect severity and priority fields         |
 | **Jira Validate Description**     | `skills/jira-validate-description/`    | Validating issue descriptions for completeness per type, requesting missing information from reporters |
@@ -143,7 +146,7 @@ Skills provide multi-step workflows. They live in `.claude/skills/`. Read the re
 | **Jira Validate Area Label**      | `skills/jira-validate-area-label/`     | Validating or assigning `dashboard-area-*` labels based on multi-signal content analysis |
 | **Jira Assign Scrum Team**        | `skills/jira-assign-scrum-team/`       | Assigning a scrum team label based on area-to-scrum mapping during triage |
 | **Jira Eval Review**               | `skills/jira-eval-review/`             | Evaluating PR code changes against Jira acceptance criteria for per-criterion verdicts |
-| **Jira PR Review**                 | `skills/jira-pr-review/`               | Reviewing a PR against its Jira product ask and explicit acceptance criteria — used by `/preflight` |
+| **Jira PR Review**                 | `skills/jira-pr-review/`               | Reviewing a PR against its Jira product ask and explicit acceptance criteria |
 | **Product Ask Review**             | `skills/product-ask-review/`           | Evaluating whether a PR's stated work fulfills the current Jira product ask |
 | **Test Impact Review**             | `skills/test-impact-review/`           | Assurance-grade test impact: Automation, Efficiency, and Evidence depth |
 | **PR Description Review**          | `skills/pr-description-review/`        | Scoring a PR body for substance readiness: Problem, Solution, and Evidence |
@@ -153,10 +156,21 @@ Skills provide multi-step workflows. They live in `.claude/skills/`. Read the re
 | **Konflux Onboarding**             | `skills/konflux-onboarding/`           | Onboarding a component to Konflux CI/CD — Dockerfiles, standalone manifests, OpenShift CI, operator registration, DevOps coordination, RHOAI downstream setup |
 | **Prototype Spec**                 | `skills/prototype-spec/`               | Extracting PF component details from a UX prototype fork, scoped to a Jira ticket or epic |
 | **Prototype Tickets**              | `skills/prototype-tickets/`            | Drafting Jira tickets from a UX prototype fork — splits by feature area, generates ACs from prototype scenarios |
-| **CI Flake Classifier**            | `skills/ci-flake-classifier/`          | Classifying PR CI failures as flaky or genuine — cross-PR recurrence, rerun detection, symptom matching (also used by preflight) |
+| **CI Flake Classifier**            | `skills/ci-flake-classifier/`          | Classifying PR CI failures as flaky or genuine — cross-PR recurrence, rerun detection, symptom matching |
 | **Coverage Boost**                 | `skills/coverage-boost/`               | Parsing coverage reports to find uncovered lines, then generating targeted unit tests to boost coverage for a package or file |
 | **envtest Debug**                  | `skills/envtest-debug/`                | Debugging envtest integration test failures — analyzes output, identifies failure patterns, suggests fixes |
 | **Upstream Test Recommender**      | `skills/upstream-test-recommender/`    | Analyzing a `cypress_found_bug` Jira issue — identifies upstream repo, audits test infra, classifies bug, recommends test using repo's own tools. `--implement` generates test code. `--parity` runs backend/frontend test parity analysis |
 | **Upstream Test Audit**            | `skills/upstream-test-audit/`          | Batch analysis of all `cypress_found_bug` issues — generates HTML executive report with SVG charts, per-repo gap analysis, and team responsibility breakdown |
 
 **Important**: Always read the relevant rule or skill file before starting the task to ensure you follow the project's conventions and patterns.
+
+<!-- BEGIN:turborepo-agent-rules -->
+
+# This is NOT the Turborepo you know
+
+Turborepo configuration, task behavior, and CLI commands can vary between installed versions and may differ from your training data. Resolve the `turbo` package from this file's directory or relevant workspace; in monorepos, it may not be visible from the repository root. For example, run `node -p "require.resolve('turbo/package.json')"` from a workspace that depends on `turbo`.
+
+Read `docs/README.md` inside that installed package first, then read the relevant pages from its `docs/` directory before changing Turborepo configuration or commands. Heed deprecation notices. These bundled docs match the installed package version and are available without network access.
+
+This block is written and re-added by `turbo` before repository-scoped commands when an AI agent is detected. In the Turborepo source repository, its template is defined in `crates/turborepo-cli/src/cli/agent_guidance.rs`. Removing the managed block while updates are enabled means a later qualifying invocation will add it again. Set `"agentGuidance": false` in the root `turbo.json` or `turbo.jsonc` to opt out; this does not remove an existing block. Keep the block committed with your work to avoid an uncommitted change on the next agent invocation.
+<!-- END:turborepo-agent-rules -->

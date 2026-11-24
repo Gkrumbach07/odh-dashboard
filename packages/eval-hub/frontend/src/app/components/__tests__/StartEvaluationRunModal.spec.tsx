@@ -1,9 +1,10 @@
 /* eslint-disable camelcase */
 import * as React from 'react';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { fireFormTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
-import { TrackingOutcome } from '@odh-dashboard/ui-core';
+
+import { TrackingOutcome } from '@odh-dashboard/analytics/types';
+import { setupTrackingTest } from '~/__tests__/unit/testUtils/setupTrackingTest';
 import { mockEvaluationJob } from '~/__tests__/unit/testUtils/mockEvaluationData';
 import { createEvaluationJob } from '~/app/api/k8s';
 import StartEvaluationRunModal from '~/app/components/StartEvaluationRunModal';
@@ -11,21 +12,18 @@ import { EVAL_HUB_EVENTS } from '~/app/tracking/evalhubTrackingConstants';
 import type {
   Collection,
   CollectionResolution,
-  HardwareProfile,
+  HardwareProfileInfo,
   KueueAvailability,
   SourceMode,
 } from '~/app/types';
+
+const { mockTrackEvent, render } = setupTrackingTest();
 
 const mockNavigate = jest.fn();
 const mockMlflowSelectorMounted = jest.fn();
 const mockMlflowSelectorUnmounted = jest.fn();
 const mockUseHardwareProfiles = jest.fn();
 const mockUseKueueAvailability = jest.fn();
-
-jest.mock('@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils', () => ({
-  fireFormTrackingEvent: jest.fn(),
-  fireMiscTrackingEvent: jest.fn(),
-}));
 
 jest.mock('@odh-dashboard/internal/concepts/mlflow', () => {
   const actualReact = jest.requireActual<typeof import('react')>('react');
@@ -101,7 +99,6 @@ jest.mock('~/app/hooks/useNotification', () => ({
 }));
 
 const mockCreateEvaluationJob = jest.mocked(createEvaluationJob);
-const mockFireFormTrackingEvent = jest.mocked(fireFormTrackingEvent);
 
 const collection: Collection = {
   resource: { id: 'source-suite' },
@@ -122,17 +119,14 @@ const clonedCollectionResolution: CollectionResolution = {
 const kueueAvailability: KueueAvailability = {
   enabled: true,
   scheduling_ready: true,
-  cluster_enabled: true,
-  namespace_managed: true,
-  local_queues_available: true,
-  local_queue_names: ['default'],
 };
 
-const hardwareProfile: HardwareProfile = {
+const hardwareProfile: HardwareProfileInfo = {
   name: 'default-profile',
   display_name: 'Default profile',
-  enabled: true,
-  local_queue_name: 'default',
+  scheduling_type: 'queue',
+  queue_name: 'default',
+  identifiers: [],
 };
 
 type Deferred<T> = {
@@ -163,6 +157,7 @@ const renderModal = (
     collection?: Collection;
     defaultSourceMode?: SourceMode;
     omitCollection?: boolean;
+    prerequisite?: string;
   } = {},
 ) => {
   const onClose = jest.fn();
@@ -181,6 +176,7 @@ const renderModal = (
         trackingSource="copy_suite"
         resolveCollection={resolveCollection}
         onClonePendingChange={onClonePendingChange}
+        prerequisite={options.prerequisite}
       />
     </MemoryRouter>,
   );
@@ -220,7 +216,76 @@ describe('StartEvaluationRunModal', () => {
     mockCreateEvaluationJob.mockReturnValue(() => Promise.resolve(mockEvaluationJob()));
   });
 
-  it('shows a required HardwareProfile before collapsed advanced configuration for Kueue', () => {
+  it('should track job create opened when the modal opens', () => {
+    renderModal();
+
+    expect(mockTrackEvent).toHaveBeenCalledTimes(1);
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      EVAL_HUB_EVENTS.JOB_CREATE_OPENED,
+      expect.objectContaining({
+        surface: 'copy_suite',
+        collection_type: 'custom',
+        provider_type: 'provider-a',
+      }),
+      expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
+    );
+  });
+
+  it('should render the prerequisite alert when a prerequisite is provided', () => {
+    renderModal(undefined, undefined, {
+      prerequisite: 'The model you are evaluating must support multiple tool/function calls.',
+    });
+
+    const alert = screen.getByTestId('start-evaluation-run-prerequisite');
+    expect(alert).toHaveTextContent(
+      'The model you are evaluating must support multiple tool/function calls.',
+    );
+  });
+
+  it('should not render the prerequisite alert without a prerequisite', () => {
+    renderModal();
+
+    expect(screen.queryByTestId('start-evaluation-run-prerequisite')).not.toBeInTheDocument();
+  });
+
+  it('should replace the form with skeletons while the LocalQueue request is in flight', () => {
+    mockUseHardwareProfiles.mockReturnValue({
+      profiles: [],
+      loaded: false,
+      error: undefined,
+    });
+    mockUseKueueAvailability.mockReturnValue({
+      availability: undefined,
+      loaded: false,
+      error: undefined,
+    });
+    renderModal();
+
+    expect(screen.getByTestId('start-evaluation-form-skeleton')).toBeInTheDocument();
+    expect(screen.queryByTestId('start-evaluation-form')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('hardware-profile-skeleton')).not.toBeInTheDocument();
+    expect(screen.getByTestId('start-evaluation-run-collection-name')).toBeInTheDocument();
+    expect(screen.getByTestId('start-evaluation-submit')).toBeDisabled();
+  });
+
+  it('should replace the skeletons with the form when the request errors', () => {
+    mockUseHardwareProfiles.mockReturnValue({
+      profiles: [],
+      loaded: true,
+      error: new Error('info request failed'),
+    });
+    mockUseKueueAvailability.mockReturnValue({
+      availability: undefined,
+      loaded: true,
+      error: undefined,
+    });
+    renderModal();
+
+    expect(screen.queryByTestId('start-evaluation-form-skeleton')).not.toBeInTheDocument();
+    expect(screen.getByTestId('start-evaluation-form')).toBeInTheDocument();
+  });
+
+  it('shows the HardwareProfile with its default option before collapsed advanced configuration for Kueue', () => {
     mockUseKueueAvailability.mockReturnValue({
       availability: kueueAvailability,
       loaded: true,
@@ -238,24 +303,21 @@ describe('StartEvaluationRunModal', () => {
     const advancedToggle = screen.getByTestId('start-evaluation-run-advanced-toggle');
 
     expect(hardwareProfileToggle).toBeInTheDocument();
-    expect(
-      screen.queryByText('Select a hardware profile to schedule this evaluation through Kueue.'),
-    ).not.toBeInTheDocument();
+    expect(hardwareProfileToggle).toHaveTextContent('Default (no hardware profile)');
     expect(
       hardwareProfileToggle.compareDocumentPosition(advancedToggle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
-  it('should preselect and hide evaluating when a collection has one evaluation target', () => {
+  it('should open in model mode without a source selector for an agent-only collection', () => {
     renderModal(undefined, undefined, {
       collection: { ...collection, evaluation_targets: ['agent'] },
-      defaultSourceMode: 'model',
     });
 
     expect(screen.queryByTestId('source-mode-toggle')).not.toBeInTheDocument();
-    expect(screen.getByTestId('agent-name-input')).toBeInTheDocument();
-    expect(screen.queryByTestId('model-picker-toggle')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-name-input')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-picker-toggle')).toBeInTheDocument();
   });
 
   it('should not render benchmark parameters in any modal view', () => {
@@ -270,26 +332,22 @@ describe('StartEvaluationRunModal', () => {
     expect(screen.queryByTestId('additional-args-upload')).not.toBeInTheDocument();
   });
 
-  it('should show evaluating when a collection has one unknown evaluation target', () => {
+  it('should not render a source selector for a collection with one unknown evaluation target', () => {
     renderModal(undefined, undefined, {
       collection: { ...collection, evaluation_targets: ['unknown'] },
-      defaultSourceMode: 'model',
     });
 
-    expect(screen.getByTestId('source-mode-toggle')).toHaveTextContent('Model');
+    expect(screen.queryByTestId('source-mode-toggle')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-picker-toggle')).toBeInTheDocument();
   });
 
-  it('should show evaluating when a collection has multiple evaluation targets', () => {
+  it('should not render a source selector for a collection with multiple evaluation targets', () => {
     renderModal(undefined, undefined, {
       collection: { ...collection, evaluation_targets: ['model', 'agent'] },
-      defaultSourceMode: 'agent',
     });
 
-    expect(screen.getByTestId('source-mode-toggle')).toHaveTextContent('Agent');
-    fireEvent.click(screen.getByTestId('source-mode-toggle'));
-
-    expect(screen.getByRole('option', { name: 'Model', hidden: true })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Agent', hidden: true })).toBeInTheDocument();
+    expect(screen.queryByTestId('source-mode-toggle')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-picker-toggle')).toBeInTheDocument();
   });
 
   it('should disable fields and prevent a deferred clone from submitting after cancel', async () => {
@@ -319,13 +377,14 @@ describe('StartEvaluationRunModal', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(cloneSignal?.aborted).toBe(true);
     expect(onClonePendingChange).toHaveBeenLastCalledWith(false);
-    expect(mockFireFormTrackingEvent).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       EVAL_HUB_EVENTS.EVALUATION_RUN_STARTED,
       expect.objectContaining({
         source: 'copy_suite',
         evaluationName: 'Copied suite',
         outcome: TrackingOutcome.cancel,
       }),
+      expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
     );
 
     await act(async () => {
@@ -379,9 +438,10 @@ describe('StartEvaluationRunModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(mockFireFormTrackingEvent).toHaveBeenCalledWith(
+    expect(mockTrackEvent).toHaveBeenCalledWith(
       EVAL_HUB_EVENTS.EVALUATION_RUN_STARTED,
       expect.objectContaining({ outcome: TrackingOutcome.cancel }),
+      expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
     );
 
     await act(async () => {
@@ -390,6 +450,44 @@ describe('StartEvaluationRunModal', () => {
     });
 
     expect(mockCreateEvaluationJob).not.toHaveBeenCalled();
+  });
+
+  it('should submit without hardware_config after clearing a selection retained by a failed info refetch', async () => {
+    let infoFailed = false;
+    mockUseKueueAvailability.mockReturnValue({
+      availability: kueueAvailability,
+      loaded: true,
+      error: undefined,
+    });
+    mockUseHardwareProfiles.mockImplementation(() => ({
+      profiles: [hardwareProfile],
+      loaded: true,
+      error: infoFailed ? new Error('info request failed') : undefined,
+    }));
+
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('hardware-profile-toggle'));
+    fireEvent.click(within(screen.getByRole('listbox')).getByText('Default profile'));
+
+    infoFailed = true;
+    // Any form-value change re-renders the form so the failed refetch state propagates.
+    fireEvent.change(screen.getByTestId('evaluation-name-input'), {
+      target: { value: 'Retained selection run' },
+    });
+
+    expect(screen.getByTestId('hardware-profile-toggle')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('hardware-profile-clear-selection'));
+
+    await selectClusterModel();
+    fireEvent.click(screen.getByTestId('start-evaluation-submit'));
+
+    await waitFor(() => expect(mockCreateEvaluationJob).toHaveBeenCalledTimes(1));
+    expect(mockCreateEvaluationJob).toHaveBeenCalledWith(
+      '',
+      'test-namespace',
+      expect.not.objectContaining({ hardware_config: expect.anything() }),
+    );
   });
 
   it('should submit the evaluation using the cloned collection', async () => {
@@ -474,9 +572,10 @@ describe('StartEvaluationRunModal', () => {
     });
 
     expect(mockNavigate).not.toHaveBeenCalled();
-    expect(mockFireFormTrackingEvent).not.toHaveBeenCalledWith(
+    expect(mockTrackEvent).not.toHaveBeenCalledWith(
       EVAL_HUB_EVENTS.EVALUATION_RUN_STARTED,
       expect.objectContaining({ outcome: TrackingOutcome.submit, success: true }),
+      expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
     );
   });
 });

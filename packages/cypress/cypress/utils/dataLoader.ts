@@ -1,4 +1,5 @@
 import yaml from 'js-yaml';
+import { getClusterArchitecture, type ClusterArchitecture } from './oc_commands/baseCommands';
 import type {
   DataScienceProjectData,
   PVCReplacements,
@@ -24,6 +25,7 @@ import type {
   KueueWorkbenchTestData,
   KueueWorkbenchLifecycleTestData,
   KueueQuotaUsageNavigationTestData,
+  InfrastructureWorkloadsTestData,
   PromptManagementTestData,
   MlflowAgentObservabilityTestData,
   MlflowExperimentsTestData,
@@ -35,20 +37,6 @@ import type {
   RuntimeLibraryTemplateTestData,
   RuntimeLibraryAcceleratorTestData,
 } from '../types';
-
-export const resolveFixture = (fixturePath: string): Cypress.Chainable<string> => {
-  const fileMapping = Cypress.env('FILEMAPPING') as FileMapping | undefined;
-  const resolvedPath = fileMapping?.[fixturePath] ?? fixturePath;
-
-  if (resolvedPath !== fixturePath) {
-    cy.log(`Resolved fixture: ${fixturePath} → ${resolvedPath}`);
-  }
-
-  return cy.wrap(resolvedPath);
-};
-
-export const loadYamlFixture = (fixturePath: string): Cypress.Chainable<string> =>
-  resolveFixture(fixturePath).then((resolvedPath) => cy.fixture(resolvedPath, 'utf8'));
 
 export const loadRuntimeLibraryTemplateFixture = (
   fixturePath: string,
@@ -66,7 +54,7 @@ export const loadRuntimeLibraryAcceleratorFixture = (
 
 // Load fixture function that returns DataScienceProjectData
 export const loadDSPFixture = (fixturePath: string): Cypress.Chainable<DataScienceProjectData> =>
-  cy.fixture(fixturePath, 'utf8').then((yamlContent: string) => {
+  loadYamlFixture(fixturePath).then((yamlContent: string) => {
     const data = yaml.load(yamlContent) as DataScienceProjectData;
     return data;
   });
@@ -186,7 +174,7 @@ export const loadWBImagesFixture = (fixturePath: string): Cypress.Chainable<WBIm
 export const loadDeployOCIModelFixture = (
   fixturePath: string,
 ): Cypress.Chainable<DeployOCIModelData> =>
-  cy.fixture(fixturePath, 'utf8').then((yamlContent: string) => {
+  loadYamlFixture(fixturePath).then((yamlContent: string) => {
     const data = yaml.load(yamlContent) as DeployOCIModelData;
 
     return data;
@@ -270,6 +258,14 @@ export const loadKueueQuotaUsageNavigationFixture = (
     return data;
   });
 
+export const loadInfrastructureWorkloadsFixture = (
+  fixturePath: string,
+): Cypress.Chainable<InfrastructureWorkloadsTestData> =>
+  cy.fixture(fixturePath, 'utf8').then((yamlContent: string) => {
+    const data = yaml.load(yamlContent) as InfrastructureWorkloadsTestData;
+    return data;
+  });
+
 export const loadPromptManagementFixture = (
   fixturePath: string,
 ): Cypress.Chainable<PromptManagementTestData> =>
@@ -321,3 +317,36 @@ export const loadMlflowPipelineIntegrationFixture = (
 
     return data;
   });
+
+export const resolveFixture = (fixturePath: string): Cypress.Chainable<string> => {
+  const fileMapping = Cypress.env('FILEMAPPING') as FileMapping | undefined;
+  const mappedPath = fileMapping?.[fixturePath];
+
+  cy.log(`Original fixture=${fixturePath}`);
+
+  // Nothing to remap, so skip the cluster architecture lookup
+  if (!mappedPath) {
+    return cy.wrap(fixturePath);
+  }
+
+  const cachedArch = Cypress.env('CLUSTER_ARCH') as ClusterArchitecture | undefined;
+  const archChain = cachedArch
+    ? cy.wrap(cachedArch)
+    : getClusterArchitecture({ strict: true }).then((arch) => {
+        Cypress.env('CLUSTER_ARCH', arch);
+        return arch;
+      });
+
+  // FILEMAPPING applies on s390x clusters; any other architecture uses the base fixtures
+  return archChain.then((archType) => {
+    cy.log(`Using ARCH=${archType}`);
+    const resolvedPath = archType === 's390x' ? mappedPath : fixturePath;
+
+    cy.log(`Resolved fixture=${resolvedPath}`);
+
+    return cy.wrap(resolvedPath);
+  });
+};
+
+export const loadYamlFixture = (fixturePath: string): Cypress.Chainable<string> =>
+  resolveFixture(fixturePath).then((resolvedPath) => cy.fixture(resolvedPath, 'utf8'));

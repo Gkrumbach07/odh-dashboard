@@ -10,7 +10,7 @@ export type BranchExpandOptions = {
   modelsExpanded: boolean;
   /**
    * Succeeded run with a known best model — show model name + "winner" subtitle + star.
-   * Otherwise model terminus uses "Model N" + winner badge (no star).
+   * Otherwise the collapsed representative uses its model name + pending subtitle (no star).
    */
   winnerResolved: boolean;
   winnerModelLabel?: string;
@@ -20,38 +20,6 @@ export type BranchExpandOptions = {
 };
 
 const BRANCH_STARTED_STATUSES = new Set(['InProgress', 'Succeeded', 'Failed', 'Cancelled']);
-
-const normalizeMatchKey = (value: string): string => value.replace(/\s+/g, '').toLowerCase();
-
-/** Avoid short prefix false-positives (e.g. "lightgbm" vs "lightgbmxt_…"). */
-const MIN_PREFIX_MATCH_LEN = 12;
-
-/**
- * Exact match, or longer name starts with shorter (leaderboard keys often add
- * suffixes like `_FULL` that topology branch labels omit).
- */
-const valuesLooselyMatch = (left: string, right: string): boolean => {
-  if (left === right) {
-    return true;
-  }
-  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
-  if (shorter.length < MIN_PREFIX_MATCH_LEN) {
-    return false;
-  }
-  if (!longer.startsWith(shorter)) {
-    return false;
-  }
-  if (shorter.length === longer.length) {
-    return true;
-  }
-  const next = longer[shorter.length];
-  const prev = shorter[shorter.length - 1];
-  // Reject alphanumeric continuation (e.g. lightgbm vs lightgbmxt_FULL); allow delimiter suffixes (_v2).
-  if (/[a-z0-9]/i.test(next) && /[a-z0-9]/i.test(prev)) {
-    return false;
-  }
-  return true;
-};
 
 /** `{component}__model__branch-{N}` — excludes fan-in spacer ids that join termini with `|`. */
 export const isModelTerminusId = (nodeId: string): boolean => {
@@ -108,26 +76,26 @@ export const resolveModelRank = (
     return exactRank === 1 || exactRank === 2 || exactRank === 3 ? exactRank : undefined;
   }
 
-  const nodeValues = [modelNode.label, modelNode.id].filter(
+  const nodeValues = [modelNode.data?.modelKey, modelNode.label].filter(
     (value): value is string => typeof value === 'string' && value.length > 0,
   );
+  const matchingRanks = new Set<1 | 2 | 3>();
   for (const [key, rank] of Object.entries(modelRanks)) {
     if (rank !== 1 && rank !== 2 && rank !== 3) {
       continue;
     }
-    const normalizedKey = normalizeMatchKey(key);
-    if (nodeValues.some((value) => valuesLooselyMatch(normalizeMatchKey(value), normalizedKey))) {
-      return rank;
+    if (nodeValues.includes(key)) {
+      matchingRanks.add(rank);
     }
   }
-  return undefined;
+  return matchingRanks.size === 1 ? [...matchingRanks][0] : undefined;
 };
 
 export const matchesWinnerModel = (
   modelNode: PipelineNodeModelExpanded,
   options: Pick<BranchExpandOptions, 'winnerModelLabel' | 'winnerModelKey'>,
 ): boolean => {
-  const nodeValues = [modelNode.label, modelNode.id].filter(
+  const nodeValues = [modelNode.data?.modelKey, modelNode.label].filter(
     (value): value is string => typeof value === 'string' && value.length > 0,
   );
   const candidates = [options.winnerModelLabel, options.winnerModelKey].filter(
@@ -136,12 +104,7 @@ export const matchesWinnerModel = (
   if (nodeValues.length === 0 || candidates.length === 0) {
     return false;
   }
-  return candidates.some((candidate) => {
-    const normalizedCandidate = normalizeMatchKey(candidate);
-    return nodeValues.some((value) =>
-      valuesLooselyMatch(normalizeMatchKey(value), normalizedCandidate),
-    );
-  });
+  return candidates.some((candidate) => nodeValues.includes(candidate));
 };
 
 export const resolveWinnerBranchIndex = (
@@ -149,13 +112,21 @@ export const resolveWinnerBranchIndex = (
   branchIndices: number[],
   options: Pick<BranchExpandOptions, 'winnerModelLabel' | 'winnerModelKey'>,
 ): number | undefined => {
-  for (const index of branchIndices) {
-    const modelNode = getModelTerminus(branches.get(index) ?? []);
-    if (modelNode && matchesWinnerModel(modelNode, options)) {
-      return index;
+  if (typeof options.winnerModelKey === 'string' && options.winnerModelKey.length > 0) {
+    const exactMatches = branchIndices.filter((index) => {
+      const modelNode = getModelTerminus(branches.get(index) ?? []);
+      return modelNode?.data?.modelKey === options.winnerModelKey;
+    });
+    if (exactMatches.length > 0) {
+      return exactMatches.length === 1 ? exactMatches[0] : undefined;
     }
   }
-  return undefined;
+
+  const matchingBranchIndices = branchIndices.filter((index) => {
+    const modelNode = getModelTerminus(branches.get(index) ?? []);
+    return modelNode != null && matchesWinnerModel(modelNode, options);
+  });
+  return matchingBranchIndices.length === 1 ? matchingBranchIndices[0] : undefined;
 };
 
 /** Branch indices to lay out: all when expanded, else winner (or first) spine. */

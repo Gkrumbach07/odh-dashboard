@@ -8,6 +8,8 @@ const modularArchConfig: ModularArchConfig = {
   deploymentMode: DeploymentMode.Standalone,
   URL_PREFIX: `${process.env.BASE_PATH || ''}/maas`,
   BFF_API_VERSION: 'v1',
+  // TODO: Remove this placeholder when mod-arch-core supports a namespace-free standalone setup.
+  mandatoryNamespace: '__maas_grid__',
 };
 
 const PortalContextProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => (

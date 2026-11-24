@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert, Radio, Stack, StackItem, Title } from '@patternfly/react-core';
-import { useTrackEvent } from '@odh-dashboard/plugin-core/host-api';
+import { useTrackEvent } from '@odh-dashboard/analytics/react';
 import {
   fireConfigurationSelected,
   toConfigurationType,
@@ -31,9 +31,9 @@ const RuntimeImageInstallWizardTargetStep: React.FC<RuntimeImageInstallWizardTar
   return (
     <Stack hasGutter>
       <StackItem>
-        <Title headingLevel="h2">Choose install target</Title>
+        <Title headingLevel="h2">Runtime type</Title>
       </StackItem>
-      <StackItem>Select where this runtime image should be available after installation.</StackItem>
+      <StackItem>Select the type of runtime to create from this runtime image.</StackItem>
       {soleAvailableTarget && (
         <StackItem>
           <Alert

@@ -15,7 +15,7 @@ import { ChatbotFootnote, FileDetailsLabel, MessageBar } from '@patternfly/chatb
 import { FileRejection } from 'react-dropzone';
 import { OutlinedFileImageIcon, VolumeUpIcon, OutlinedFileAltIcon } from '@patternfly/react-icons';
 import { fireMiscTrackingEvent } from '@odh-dashboard/internal/concepts/analyticsTracking/segmentIOUtils';
-import { TrackingOutcome } from '@odh-dashboard/ui-core';
+import { TrackingOutcome } from '@odh-dashboard/analytics/types';
 import {
   VISION_UPLOAD_CONFIG,
   DOCUMENT_ATTACHMENT_CONFIG,
@@ -484,6 +484,7 @@ const ChatbotMessageInput: React.FC<ChatbotMessageInputProps> = ({
               onClose={imageUploadState.uploading ? undefined : onRemoveImage}
               hasTruncation
               variant="outline"
+              className="pf-chatbot__file-label pf-v6-u-w-100 gen-ai-chatbot-image-file-label"
               data-testid="vision-file-preview"
             />
           )}

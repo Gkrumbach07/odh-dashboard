@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -126,6 +127,93 @@ func TestGetNamespacesUsesProjectsWithoutNamespaceGets(t *testing.T) {
 	assert.Zero(t, namespaceGetRequests)
 }
 
+// TestCallerScopedReadersUseCallerTokenNamespaceAndSelectors verifies the production
+// reader boundary resolveTrustedHost depends on: GetService, GetServiceEndpointSlices,
+// and ListPods must issue their Kubernetes requests with the caller's bearer token,
+// scoped to the requested namespace, and carrying the expected label selectors.
+func TestCallerScopedReadersUseCallerTokenNamespaceAndSelectors(t *testing.T) {
+	const namespace = "my-ns"
+	var authorizations []string
+	var serviceRequests, sliceRequests, podRequests int
+	var sliceSelector, podSelector string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/api":
+			_ = json.NewEncoder(w).Encode(metav1.APIVersions{Versions: []string{"v1"}})
+		case "/api/v1":
+			_ = json.NewEncoder(w).Encode(metav1.APIResourceList{GroupVersion: "v1", APIResources: []metav1.APIResource{
+				{Name: "services", Kind: "Service", Namespaced: true},
+				{Name: "pods", Kind: "Pod", Namespaced: true},
+			}})
+		case "/apis":
+			gv := metav1.GroupVersionForDiscovery{GroupVersion: "discovery.k8s.io/v1", Version: "v1"}
+			_ = json.NewEncoder(w).Encode(metav1.APIGroupList{Groups: []metav1.APIGroup{{
+				Name:             "discovery.k8s.io",
+				Versions:         []metav1.GroupVersionForDiscovery{gv},
+				PreferredVersion: gv,
+			}}})
+		case "/apis/discovery.k8s.io/v1":
+			_ = json.NewEncoder(w).Encode(metav1.APIResourceList{GroupVersion: "discovery.k8s.io/v1", APIResources: []metav1.APIResource{
+				{Name: "endpointslices", Kind: "EndpointSlice", Namespaced: true},
+			}})
+		case "/api/v1/namespaces/" + namespace + "/services/my-model":
+			serviceRequests++
+			_ = json.NewEncoder(w).Encode(corev1.Service{
+				TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "my-model"},
+			})
+		case "/apis/discovery.k8s.io/v1/namespaces/" + namespace + "/endpointslices":
+			sliceRequests++
+			sliceSelector = r.URL.Query().Get("labelSelector")
+			_ = json.NewEncoder(w).Encode(discoveryv1.EndpointSliceList{
+				TypeMeta: metav1.TypeMeta{APIVersion: "discovery.k8s.io/v1", Kind: "EndpointSliceList"},
+				Items:    []discoveryv1.EndpointSlice{{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "my-model-x1"}}},
+			})
+		case "/api/v1/namespaces/" + namespace + "/pods":
+			podRequests++
+			podSelector = r.URL.Query().Get("labelSelector")
+			_ = json.NewEncoder(w).Encode(corev1.PodList{
+				TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PodList"},
+				Items:    []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "my-model-pod"}}},
+			})
+		default:
+			http.Error(w, "unexpected request: "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	kc := &TokenKubernetesClient{
+		Client: fake.NewClientBuilder().Build(),
+		Config: &rest.Config{Host: server.URL},
+		Logger: slog.Default(),
+	}
+	identity := &integrations.RequestIdentity{Token: "user-token"}
+	ctx := context.Background()
+
+	svc, err := kc.GetService(ctx, identity, namespace, "my-model")
+	require.NoError(t, err)
+	assert.Equal(t, "my-model", svc.Name)
+
+	slices, err := kc.GetServiceEndpointSlices(ctx, identity, namespace, "my-model")
+	require.NoError(t, err)
+	require.Len(t, slices, 1)
+
+	pods, err := kc.ListPods(ctx, identity, namespace, map[string]string{"app": "my-model"})
+	require.NoError(t, err)
+	require.Len(t, pods, 1)
+
+	assert.Equal(t, 1, serviceRequests)
+	assert.Equal(t, 1, sliceRequests)
+	assert.Equal(t, 1, podRequests)
+	assert.Equal(t, "kubernetes.io/service-name=my-model", sliceSelector)
+	assert.Equal(t, "app=my-model", podSelector)
+	for _, auth := range authorizations {
+		assert.Equal(t, "Bearer user-token", auth)
+	}
+}
+
 func TestGetExternalModelsConfigUsesRequestClient(t *testing.T) {
 	const namespace = "test-namespace"
 
@@ -165,6 +253,92 @@ registered_resources:
 	assert.Equal(t, "example-model", config.RegisteredResources.Models[0].ModelID)
 }
 
+func TestCreateOrUpdateExternalModelConfigMapRejectsDuplicateModelIDs(t *testing.T) {
+	const namespace = "test-namespace"
+
+	existingConfigYAML := `providers:
+  inference:
+  - provider_id: endpoint-1
+    provider_type: remote::openai
+    config:
+      base_url: https://example.com/v1
+registered_resources:
+  models:
+  - provider_id: endpoint-1
+    model_id: example-model
+    model_type: llm
+    metadata:
+      display_name: Example model`
+
+	newRequest := func(modelID string) models.ExternalModelRequest {
+		return models.ExternalModelRequest{
+			ModelID:          modelID,
+			ModelDisplayName: "New model",
+			BaseURL:          "https://new-endpoint.com/v1",
+			ModelType:        models.ModelTypeLLM,
+		}
+	}
+
+	t.Run("duplicate model ID under another provider: rejected without modifying the ConfigMap", func(t *testing.T) {
+		client := fake.NewClientBuilder().WithObjects(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      constants.ExternalModelsConfigMapName,
+				Namespace: namespace,
+			},
+			Data: map[string]string{"config.yaml": existingConfigYAML},
+		}).Build()
+		kc := &TokenKubernetesClient{Client: client, Logger: slog.Default()}
+
+		err := kc.CreateOrUpdateExternalModelConfigMap(context.Background(), &integrations.RequestIdentity{Token: "user-token"}, namespace, "2", "", newRequest("example-model"))
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "'example-model' is already registered")
+		assert.Contains(t, err.Error(), "endpoint-1")
+
+		// The ConfigMap must be unchanged — no provider or model appended.
+		config, getConfigErr := kc.GetExternalModelsConfig(context.Background(), namespace)
+		require.NoError(t, getConfigErr)
+		require.Len(t, config.RegisteredResources.Models, 1)
+		require.Len(t, config.Providers.Inference, 1)
+	})
+
+	t.Run("re-submitting the same model ID under the same provider: rejected", func(t *testing.T) {
+		client := fake.NewClientBuilder().WithObjects(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      constants.ExternalModelsConfigMapName,
+				Namespace: namespace,
+			},
+			Data: map[string]string{"config.yaml": existingConfigYAML},
+		}).Build()
+		kc := &TokenKubernetesClient{Client: client, Logger: slog.Default()}
+
+		err := kc.CreateOrUpdateExternalModelConfigMap(context.Background(), &integrations.RequestIdentity{Token: "user-token"}, namespace, "1", "", newRequest("example-model"))
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "'example-model' is already registered")
+	})
+
+	t.Run("unique model ID: appended", func(t *testing.T) {
+		client := fake.NewClientBuilder().WithObjects(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      constants.ExternalModelsConfigMapName,
+				Namespace: namespace,
+			},
+			Data: map[string]string{"config.yaml": existingConfigYAML},
+		}).Build()
+		kc := &TokenKubernetesClient{Client: client, Logger: slog.Default()}
+
+		err := kc.CreateOrUpdateExternalModelConfigMap(context.Background(), &integrations.RequestIdentity{Token: "user-token"}, namespace, "2", "", newRequest("another-model"))
+
+		require.NoError(t, err)
+
+		config, getConfigErr := kc.GetExternalModelsConfig(context.Background(), namespace)
+		require.NoError(t, getConfigErr)
+		require.Len(t, config.RegisteredResources.Models, 2)
+		require.Len(t, config.Providers.Inference, 2)
+	})
+}
+
 func (c noMatchListClient) List(context.Context, client.ObjectList, ...client.ListOption) error {
 	return &apimeta.NoKindMatchError{
 		GroupKind: schema.GroupKind{Group: "trustyai.opendatahub.io", Kind: "NemoGuardrails"},
@@ -181,13 +355,18 @@ func (c errorListClient) List(context.Context, client.ObjectList, ...client.List
 }
 
 func TestGetNemoGuardrailsServiceURL(t *testing.T) {
-	t.Run("returns service URL for a NemoGuardrails CR", func(t *testing.T) {
+	t.Run("returns the ready endpoint in the shared workload namespace", func(t *testing.T) {
+		const endpoint = "https://test-namespace-nemoguardrails.redhat-ai-gateway-infra.svc.cluster.local"
 		guardrails := &unstructured.Unstructured{Object: map[string]interface{}{
 			"apiVersion": "trustyai.opendatahub.io/v1alpha1",
 			"kind":       "NemoGuardrails",
 			"metadata": map[string]interface{}{
-				"name":      "guardrails",
+				"name":      "nemoguardrails",
 				"namespace": testutil.TestNamespace,
+			},
+			"status": map[string]interface{}{
+				"phase":    constants.GuardrailsPhaseReady,
+				"endpoint": endpoint,
 			},
 		}}
 		kc := &TokenKubernetesClient{Client: fake.NewClientBuilder().WithObjects(guardrails).Build(), Logger: slog.Default()}
@@ -195,8 +374,94 @@ func TestGetNemoGuardrailsServiceURL(t *testing.T) {
 		url, err := kc.GetNemoGuardrailsServiceURL(context.Background(), nil, testutil.TestNamespace)
 
 		require.NoError(t, err)
-		assert.Equal(t, "https://guardrails."+testutil.TestNamespace+".svc.cluster.local:443", url)
+		assert.Equal(t, endpoint, url)
 	})
+
+	t.Run("uses each project's own endpoint", func(t *testing.T) {
+		newCR := func(namespace, endpoint string) *unstructured.Unstructured {
+			return &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "trustyai.opendatahub.io/v1alpha1",
+				"kind":       "NemoGuardrails",
+				"metadata": map[string]interface{}{
+					"name":      "nemoguardrails",
+					"namespace": namespace,
+				},
+				"status": map[string]interface{}{
+					"phase":    constants.GuardrailsPhaseReady,
+					"endpoint": endpoint,
+				},
+			}}
+		}
+		const firstEndpoint = "https://project-one-nemoguardrails.redhat-ai-gateway-infra.svc.cluster.local"
+		const secondEndpoint = "https://project-two-nemoguardrails.redhat-ai-gateway-infra.svc.cluster.local"
+		kc := &TokenKubernetesClient{
+			Client: fake.NewClientBuilder().WithObjects(
+				newCR("project-one", firstEndpoint),
+				newCR("project-two", secondEndpoint),
+			).Build(),
+			Logger: slog.Default(),
+		}
+
+		firstURL, firstErr := kc.GetNemoGuardrailsServiceURL(context.Background(), nil, "project-one")
+		secondURL, secondErr := kc.GetNemoGuardrailsServiceURL(context.Background(), nil, "project-two")
+
+		require.NoError(t, firstErr)
+		require.NoError(t, secondErr)
+		assert.Equal(t, firstEndpoint, firstURL)
+		assert.Equal(t, secondEndpoint, secondURL)
+	})
+
+	for _, tc := range []struct {
+		name    string
+		status  map[string]interface{}
+		wantErr bool
+	}{
+		{
+			name:   "returns no URL when the endpoint is missing",
+			status: map[string]interface{}{"phase": constants.GuardrailsPhaseReady},
+		},
+		{
+			name:   "returns no URL while the CR is progressing",
+			status: map[string]interface{}{"phase": "Progressing", "endpoint": "https://guardrails.example.com"},
+		},
+		{
+			name:    "rejects an invalid endpoint",
+			status:  map[string]interface{}{"phase": constants.GuardrailsPhaseReady, "endpoint": "ftp://guardrails.example.com"},
+			wantErr: true,
+		},
+		{
+			name:    "rejects an external ready endpoint",
+			status:  map[string]interface{}{"phase": constants.GuardrailsPhaseReady, "endpoint": "https://attacker.example"},
+			wantErr: true,
+		},
+		{
+			name:    "rejects a loopback ready endpoint",
+			status:  map[string]interface{}{"phase": constants.GuardrailsPhaseReady, "endpoint": "http://127.0.0.1:8080"},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			guardrails := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "trustyai.opendatahub.io/v1alpha1",
+				"kind":       "NemoGuardrails",
+				"metadata": map[string]interface{}{
+					"name":      "nemoguardrails",
+					"namespace": testutil.TestNamespace,
+				},
+				"status": tc.status,
+			}}
+			kc := &TokenKubernetesClient{Client: fake.NewClientBuilder().WithObjects(guardrails).Build(), Logger: slog.Default()}
+
+			url, err := kc.GetNemoGuardrailsServiceURL(context.Background(), nil, testutil.TestNamespace)
+
+			assert.Empty(t, url)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 
 	t.Run("returns no URL when no NemoGuardrails CR exists", func(t *testing.T) {
 		kc := &TokenKubernetesClient{Client: fake.NewClientBuilder().Build(), Logger: slog.Default()}
@@ -239,6 +504,41 @@ func TestGetNemoGuardrailsServiceURL(t *testing.T) {
 		assert.Empty(t, url)
 		require.ErrorIs(t, err, assert.AnError)
 	})
+}
+
+func TestIsOperatorManagedNemoEndpoint(t *testing.T) {
+	const namespace = "project-one"
+	const crName = "nemoguardrails"
+	const sharedEndpoint = "https://project-one-nemoguardrails.redhat-ai-gateway-infra.svc.cluster.local"
+
+	for _, tc := range []struct {
+		name      string
+		endpoint  string
+		namespace string
+		want      bool
+	}{
+		{name: "RHOAI shared Service", endpoint: sharedEndpoint, namespace: namespace, want: true},
+		{name: "ODH shared Service", endpoint: "https://project-one-nemoguardrails.odh-ai-gateway-infra.svc.cluster.local", namespace: namespace, want: true},
+		{name: "project local Service", endpoint: "https://nemoguardrails.project-one.svc.cluster.local", namespace: namespace, want: true},
+		{name: "truncated shared Service name", endpoint: "https://a-very-long-project-namespace-for-truncation-testing-1-149c729e.redhat-ai-gateway-infra.svc.cluster.local", namespace: "a-very-long-project-namespace-for-truncation-testing-123456", want: true},
+		{name: "external host", endpoint: "https://attacker.example", namespace: namespace},
+		{name: "loopback address", endpoint: "http://127.0.0.1:8080", namespace: namespace},
+		{name: "link local address", endpoint: "http://169.254.169.254", namespace: namespace},
+		{name: "wrong project", endpoint: "https://project-two-nemoguardrails.redhat-ai-gateway-infra.svc.cluster.local", namespace: namespace},
+		{name: "unrelated infrastructure Service", endpoint: "https://other.redhat-ai-gateway-infra.svc.cluster.local", namespace: namespace},
+		{name: "unrelated namespace", endpoint: "https://nemoguardrails.other-project.svc.cluster.local", namespace: namespace},
+		{name: "insecure scheme", endpoint: "http://project-one-nemoguardrails.redhat-ai-gateway-infra.svc.cluster.local", namespace: namespace},
+		{name: "userinfo", endpoint: "https://user@project-one-nemoguardrails.redhat-ai-gateway-infra.svc.cluster.local", namespace: namespace},
+		{name: "missing host", endpoint: "https:///v1/guardrail/checks", namespace: namespace},
+		{name: "explicit port", endpoint: sharedEndpoint + ":443", namespace: namespace},
+		{name: "path", endpoint: sharedEndpoint + "/other", namespace: namespace},
+		{name: "query", endpoint: sharedEndpoint + "?target=other", namespace: namespace},
+		{name: "fragment", endpoint: sharedEndpoint + "#other", namespace: namespace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isOperatorManagedNemoEndpoint(tc.endpoint, tc.namespace, crName))
+		})
+	}
 }
 
 func TestCanListOGXServers(t *testing.T) {
@@ -616,7 +916,7 @@ func TestRequiresPassthroughProvider(t *testing.T) {
 		{name: "custom endpoint LLM", model: models.InstallModel{ModelSourceType: models.ModelSourceTypeCustomEndpoint, ModelType: string(models.ModelTypeLLM)}, want: true},
 		{name: "namespace embedding", model: models.InstallModel{ModelSourceType: models.ModelSourceTypeNamespace, ModelType: string(models.ModelTypeEmbedding)}},
 		{name: "MaaS embedding", model: models.InstallModel{ModelSourceType: models.ModelSourceTypeMaaS, ModelType: string(models.ModelTypeEmbedding)}},
-		{name: "custom endpoint embedding", model: models.InstallModel{ModelSourceType: models.ModelSourceTypeCustomEndpoint, ModelType: string(models.ModelTypeEmbedding)}},
+		{name: "custom endpoint embedding", model: models.InstallModel{ModelSourceType: models.ModelSourceTypeCustomEndpoint, ModelType: string(models.ModelTypeEmbedding)}, want: true},
 		{name: "transcription", model: models.InstallModel{ModelSourceType: models.ModelSourceTypeMaaS, ModelType: string(models.ModelTypeTranscription)}},
 	}
 
@@ -1342,6 +1642,227 @@ registered_resources:
 		assert.Error(t, err)
 		assert.Empty(t, result)
 		assert.Contains(t, err.Error(), "cannot find external model")
+	})
+}
+
+// externalEmbeddingConfigMapYAML returns a gen-ai-aa-custom-model-endpoints ConfigMap body
+// declaring an embedding model. keyed controls only the presence of
+// custom_gen_ai.api_key.secretRef on the provider — the BFF's generated output must be
+// identical either way (RHOAIENG-100933: keyed and keyless take the same proxy-routed path).
+func externalEmbeddingConfigMapYAML(keyed bool) string {
+	credentials := ""
+	if keyed {
+		credentials = `
+        custom_gen_ai:
+          api_key:
+            secretRef:
+              name: "endpoint-api-key-1"
+              key: "api_key"
+`
+	}
+	return `
+providers:
+  inference:
+    - provider_id: "gemini-embedding-provider"
+      provider_type: "remote::passthrough"
+      config:
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai"` + credentials + `
+registered_resources:
+  models:
+    - model_id: "gemini-embedding-001"
+      provider_id: "gemini-embedding-provider"
+      model_type: "embedding"
+      metadata:
+        display_name: "Gemini Embedding"
+        embedding_dimension: 3072
+`
+}
+
+// externalEmbeddingVectorStore returns a validated vector store whose embedding model is
+// the custom-endpoint embedding model declared by externalEmbeddingConfigMapYAML.
+func externalEmbeddingVectorStore() ValidatedVectorStore {
+	return ValidatedVectorStore{
+		Provider: models.VectorIOProvider{
+			ProviderID:   "pgvector-provider",
+			ProviderType: "remote::pgvector",
+			Config: models.VectorIOProviderConfig{
+				Extra: map[string]interface{}{
+					"host": "pgvector2.pgvect.svc.cluster.local",
+					"db":   "vectordb",
+				},
+			},
+		},
+		RegisteredStore: models.RegisteredVectorStore{
+			VectorStoreID:      "vs-signoff-001",
+			ProviderID:         "pgvector-provider",
+			EmbeddingModel:     "gemini-embedding-001",
+			EmbeddingDimension: 3072,
+			VectorStoreName:    "Example Team Data",
+		},
+	}
+}
+
+func TestGenerateLlamaStackConfigWithExternalEmbeddingModels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	newConfigMap := func(yaml string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      constants.ExternalModelsConfigMapName,
+				Namespace: "test-namespace",
+			},
+			Data: map[string]string{"config.yaml": yaml},
+		}
+	}
+
+	installModels := []models.InstallModel{
+		{
+			ModelName:       "gemini-embedding-001",
+			ModelSourceType: models.ModelSourceTypeCustomEndpoint,
+			ModelType:       string(models.ModelTypeEmbedding),
+		},
+	}
+
+	t.Run("GatewayDomain set: registers embedding model under genai-bff-proxy, no direct provider", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(newConfigMap(externalEmbeddingConfigMapYAML(true))).
+			Build()
+
+		client := &TokenKubernetesClient{
+			Logger:    slog.Default(),
+			Client:    fakeClient,
+			EnvConfig: config.EnvConfig{GatewayDomain: "apps.cluster.example.com"},
+		}
+
+		result, err := client.generateLlamaStackConfig(context.Background(), "test-namespace", installModels, []ValidatedVectorStore{externalEmbeddingVectorStore()}, nil, "", nil)
+		require.NoError(t, err)
+
+		var cfg LlamaStackConfig
+		require.NoError(t, cfg.FromYAML(result))
+
+		// No direct provider entry for the ConfigMap provider — the model routes via genai-bff-proxy.
+		for _, p := range cfg.Providers.Inference {
+			assert.NotEqual(t, "gemini-embedding-provider", p.ProviderID,
+				"no direct provider entry should be created for the custom-endpoint embedding model")
+		}
+
+		// The model is registered under genai-bff-proxy with the embedding dimension preserved.
+		var registered *Model
+		for i := range cfg.RegisteredResources.Models {
+			if cfg.RegisteredResources.Models[i].ModelID == "gemini-embedding-001" {
+				registered = &cfg.RegisteredResources.Models[i]
+			}
+		}
+		require.NotNil(t, registered, "embedding model should be registered")
+		assert.Equal(t, constants.PassthroughProviderID, registered.ProviderID)
+		assert.Equal(t, string(models.ModelTypeEmbedding), registered.ModelType)
+		assert.Equal(t, 3072, registered.Metadata["embedding_dimension"])
+
+		// The vector store binds to the proxy-routed identifier.
+		require.Len(t, cfg.RegisteredResources.VectorStores, 1)
+		assert.Equal(t, constants.PassthroughProviderID+"/gemini-embedding-001",
+			cfg.RegisteredResources.VectorStores[0].EmbeddingModel)
+
+		// The genai-bff-proxy passthrough provider entry is present.
+		var proxyProvider *Provider
+		for i := range cfg.Providers.Inference {
+			if cfg.Providers.Inference[i].ProviderID == constants.PassthroughProviderID {
+				proxyProvider = &cfg.Providers.Inference[i]
+			}
+		}
+		require.NotNil(t, proxyProvider, "genai-bff-proxy provider should be present")
+		assert.Equal(t, constants.PassthroughProviderType, proxyProvider.ProviderType)
+	})
+
+	t.Run("keyed and keyless providers generate identical output", func(t *testing.T) {
+		generate := func(keyed bool) string {
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(newConfigMap(externalEmbeddingConfigMapYAML(keyed))).
+				Build()
+
+			client := &TokenKubernetesClient{
+				Logger:    slog.Default(),
+				Client:    fakeClient,
+				EnvConfig: config.EnvConfig{GatewayDomain: "apps.cluster.example.com"},
+			}
+
+			result, err := client.generateLlamaStackConfig(context.Background(), "test-namespace", installModels, []ValidatedVectorStore{externalEmbeddingVectorStore()}, nil, "", nil)
+			require.NoError(t, err)
+			return result
+		}
+
+		assert.Equal(t, generate(true), generate(false),
+			"keyed and keyless custom-endpoint embedding models must produce identical generated config")
+	})
+
+	t.Run("GatewayDomain empty: install fails fast with a clear error", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(newConfigMap(externalEmbeddingConfigMapYAML(true))).
+			Build()
+
+		client := &TokenKubernetesClient{
+			Logger: slog.Default(),
+			Client: fakeClient,
+		}
+
+		_, err := client.generateLlamaStackConfig(context.Background(), "test-namespace", installModels, []ValidatedVectorStore{externalEmbeddingVectorStore()}, nil, "", nil)
+		require.Error(t, err)
+		// Custom-endpoint embedding models require the genai-bff-proxy passthrough provider,
+		// so a missing GATEWAY_DOMAIN fails the install before any config is emitted.
+		assert.Contains(t, err.Error(), "GATEWAY_DOMAIN is not configured")
+		assert.Contains(t, err.Error(), "gemini-embedding-001")
+	})
+
+	t.Run("duplicate model_id across providers: install fails fast with a clear error", func(t *testing.T) {
+		// Proxy-routed registration keeps only the native model ID, so a model_id
+		// declared under two custom-endpoint providers cannot be resolved at query
+		// time (ResolveCustomEndpointModelProvider reports it as ambiguous). The
+		// install must reject the configuration instead of silently failing retrieval.
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(newConfigMap(`
+providers:
+  inference:
+    - provider_id: "gemini-embedding-provider"
+      provider_type: "remote::passthrough"
+      config:
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    - provider_id: "gemini-embedding-provider-eu"
+      provider_type: "remote::passthrough"
+      config:
+        base_url: "https://eu.example.com/v1"
+registered_resources:
+  models:
+    - model_id: "gemini-embedding-001"
+      provider_id: "gemini-embedding-provider"
+      model_type: "embedding"
+      metadata:
+        display_name: "Gemini Embedding"
+        embedding_dimension: 3072
+    - model_id: "gemini-embedding-001"
+      provider_id: "gemini-embedding-provider-eu"
+      model_type: "embedding"
+      metadata:
+        display_name: "Gemini Embedding (EU)"
+        embedding_dimension: 3072
+`)).
+			Build()
+
+		client := &TokenKubernetesClient{
+			Logger:    slog.Default(),
+			Client:    fakeClient,
+			EnvConfig: config.EnvConfig{GatewayDomain: "apps.cluster.example.com"},
+		}
+
+		_, err := client.generateLlamaStackConfig(context.Background(), "test-namespace", installModels, []ValidatedVectorStore{externalEmbeddingVectorStore()}, nil, "", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "gemini-embedding-001")
+		assert.Contains(t, err.Error(), "registered under 2 providers")
+		assert.Contains(t, err.Error(), "gemini-embedding-provider, gemini-embedding-provider-eu")
 	})
 }
 
@@ -2998,4 +3519,56 @@ func TestIsTrustedOfficeMIMETypesConfigMap(t *testing.T) {
 	binaryData := trusted.DeepCopy()
 	binaryData.BinaryData = map[string][]byte{"unexpected.py": []byte("import malicious_code")}
 	assert.False(t, isTrustedOfficeMIMETypesConfigMap(binaryData))
+}
+
+// TestCallerScopedClientCredentialSelection covers the credential-selection
+// branches of callerScopedClient: the fallback to the client's own credentials
+// when no identity token is available (local development), the reuse of the
+// existing client when the identity token is the token the client was already
+// constructed with, the construction of a distinct user-scoped client for a
+// different caller token, and the failure mode for an unusable cluster config.
+func TestCallerScopedClientCredentialSelection(t *testing.T) {
+	newKc := func(token string, host string) *TokenKubernetesClient {
+		return &TokenKubernetesClient{
+			Client: fake.NewClientBuilder().Build(),
+			Config: &rest.Config{Host: host},
+			Logger: slog.Default(),
+			Token:  integrations.NewBearerToken(token),
+		}
+	}
+
+	t.Run("nil identity falls back to the client's own credentials", func(t *testing.T) {
+		kc := newKc("sa-token", "https://test-cluster.example.com")
+		reader, err := kc.callerScopedClient(nil)
+		require.NoError(t, err)
+		assert.Same(t, kc.Client, reader)
+	})
+
+	t.Run("empty identity token falls back to the client's own credentials", func(t *testing.T) {
+		kc := newKc("sa-token", "https://test-cluster.example.com")
+		reader, err := kc.callerScopedClient(&integrations.RequestIdentity{})
+		require.NoError(t, err)
+		assert.Same(t, kc.Client, reader)
+	})
+
+	t.Run("identity token matching the client token reuses the existing client", func(t *testing.T) {
+		kc := newKc("sa-token", "https://test-cluster.example.com")
+		reader, err := kc.callerScopedClient(&integrations.RequestIdentity{Token: "sa-token"})
+		require.NoError(t, err)
+		assert.Same(t, kc.Client, reader)
+	})
+
+	t.Run("different caller token yields a distinct user-scoped client", func(t *testing.T) {
+		kc := newKc("sa-token", "https://test-cluster.example.com")
+		reader, err := kc.callerScopedClient(&integrations.RequestIdentity{Token: "user-token"})
+		require.NoError(t, err)
+		assert.NotSame(t, kc.Client, reader)
+	})
+
+	t.Run("unusable cluster config returns an error instead of a client", func(t *testing.T) {
+		kc := newKc("sa-token", "://invalid-host")
+		reader, err := kc.callerScopedClient(&integrations.RequestIdentity{Token: "user-token"})
+		require.Error(t, err)
+		assert.Nil(t, reader)
+	})
 }

@@ -1,9 +1,9 @@
 ---
 name: rhoaieng-jira-code
-description: Repository-specific scope, readiness and PR rules for Jira-sourced RHOAIENG code runs on odh-dashboard.
+description: Repository-specific scope, readiness and PR rules for Jira-sourced RHAI and RHOAIENG code runs on odh-dashboard.
 ---
 
-# RHOAIENG issue implementation
+# RHAI and RHOAIENG issue implementation
 
 Use the inherited `code-implementation` skill and its structured output contract.
 
@@ -13,7 +13,7 @@ Before implementing, read the live Jira issue through the inherited read-only
 Jira provider. Confirm all of these, and stop without changing code if any no
 longer holds:
 
-- It is in RHOAIENG and its type is Story, Task or Bug.
+- It is in RHAI or RHOAIENG and its type is Story, Task or Bug.
 - Its components include `AI Core Dashboard`.
 - It is not in the Done status category.
 - It has none of `opt-in-autofix`, `jira-autofix`, `jira-autofix-pending` or
@@ -57,16 +57,3 @@ not run in the PR description instead of skipping them silently.
 
 Add or update the tests the acceptance criteria call for: Jest unit tests for
 hooks and utilities, Cypress mocked tests for UI flows.
-
-## Pull request
-
-Target `main`. Write the PR description in the shape of
-`.github/pull_request_template.md`: `## Problem`, `## Solution` and
-`## Evidence` with real content, plus `## Justifications` only when needed.
-Put the Jira issue URL on the template's `Fixes:` line, list the implemented
-acceptance criteria under Solution, and under Evidence list the commands you
-ran and their results. Fullsend's review checks this structure.
-
-The inherited post-script pushes the branch, creates the PR and links it on the
-Jira issue. Do not push, create PRs, change Jira labels or status, or merge from
-the sandbox.

@@ -8,8 +8,14 @@ import {
   ModelAvailabilityFieldsData,
   type InitialWizardFormData,
 } from '@odh-dashboard/model-serving/shared/types/form-data';
-import type { DeploymentAssemblyFn } from '@odh-dashboard/model-serving/extension-points/deployment-wizard';
-import type { HardwareProfileConfig } from '@odh-dashboard/hardware-profiles/shared';
+import type {
+  DeploymentAssemblyFn,
+  DeploymentAssemblyResources,
+} from '@odh-dashboard/model-serving/extension-points/deployment-wizard';
+import type {
+  HardwareProfileBinding,
+  HardwareProfileConfig,
+} from '@odh-dashboard/hardware-profiles/shared';
 import { applyHardwareProfileConfig } from '@odh-dashboard/hardware-profiles/shared';
 import { setUpTokenAuth } from '@odh-dashboard/model-serving/concepts/auth';
 import { applyReplicas, LLMD_INFERENCE_SERVICE_HARDWARE_PROFILE_PATHS } from './hardware';
@@ -87,6 +93,7 @@ type CreateLLMInferenceServiceParams = {
   k8sName: string;
   modelLocationData: ModelLocationData;
   hardwareProfile: HardwareProfileConfig;
+  hardwareProfileBinding?: HardwareProfileBinding;
   createConnectionData?: CreateConnectionFieldData;
   displayName?: string;
   description?: string;
@@ -115,6 +122,7 @@ const assembleLLMInferenceService = (
     displayName,
     description,
     hardwareProfile,
+    hardwareProfileBinding,
     modelLocationData,
     createConnectionData,
     replicas = 1,
@@ -147,6 +155,7 @@ const assembleLLMInferenceService = (
     llmInferenceService,
     hardwareProfile,
     LLMD_INFERENCE_SERVICE_HARDWARE_PROFILE_PATHS,
+    hardwareProfileBinding,
   );
   llmInferenceService = applyReplicas(llmInferenceService, replicas);
   llmInferenceService = applyModelEnvVarsAndArgs(
@@ -204,7 +213,7 @@ const assembleLLMInferenceServiceConfig = (
 
 export const assembleLLMdDeployment = (
   wizardData: WizardFormData,
-  existingDeployment?: LLMdDeployment,
+  existingDeployment?: DeploymentAssemblyResources<LLMdDeployment>,
   applyFieldData?: DeploymentAssemblyFn<LLMdDeployment>,
   connectionSecretName?: string, // We really need to remove this, kept for backwards compatibility
 ): LLMdDeployment => {
@@ -230,6 +239,7 @@ export const assembleLLMdDeployment = (
         displayName: wizardData.state.k8sNameDesc.data.name,
         description: wizardData.state.k8sNameDesc.data.description,
         hardwareProfile: wizardData.state.hardwareProfileConfig.formData,
+        hardwareProfileBinding: wizardData.state.hardwareProfileConfig.existingBinding,
         modelLocationData: wizardData.state.modelLocationData.data ?? {
           type: ModelLocationType.NEW,
           fieldValues: {},

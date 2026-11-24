@@ -1,7 +1,8 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
-import { TrackingOutcome } from '@odh-dashboard/ui-core';
-import { useTrackEvent } from '@odh-dashboard/plugin-core/host-api';
+import { TrackingOutcome } from '@odh-dashboard/analytics/types';
+import { useTrackEvent } from '@odh-dashboard/analytics/react';
+import { MetadataAnnotation } from '@odh-dashboard/k8s-core';
 import { KUEUE_QUEUE_LABEL } from '@odh-dashboard/k8s-core/kueue/workloadStatus';
 import { RecursivePartial } from '@odh-dashboard/foundation';
 import { SupportedArea, useIsAreaAvailable } from '@odh-dashboard/plugin-core/areas';
@@ -38,8 +39,12 @@ export const getBaseModelDeployedTrackingProperties = (
     'platform.opendatahub.io/part-of'
   ]
     ? 'preinstalled'
+    : template?.metadata?.annotations?.[MetadataAnnotation.InstalledFromCatalog] === 'true'
+    ? 'created-from-catalog'
     : undefined;
+  const deploymentMethod = formState.deploymentMethod?.method;
   return {
+    deploymentMethod: deploymentMethod === '' ? undefined : deploymentMethod,
     modelType: formState.modelType.data?.type,
     runtime: serverTemplateName,
     servingRuntimeName: formState.modelServer?.data?.selection?.label,

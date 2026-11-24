@@ -1,11 +1,15 @@
 import * as React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { Table, Tbody } from '@patternfly/react-table';
+import { setupTrackingTest } from '~/__tests__/unit/testUtils/setupTrackingTest';
+
 import { mockEvaluationJob } from '~/__tests__/unit/testUtils/mockEvaluationData';
 import type { EvaluationJob } from '~/app/types';
 import EvaluationsTableRow from '~/app/components/EvaluationsTableRow';
 import { cancelEvaluationJob, deleteEvaluationJob } from '~/app/api/k8s';
+
+const { mockTrackEvent, render } = setupTrackingTest();
 
 const mockNavigate = jest.fn();
 jest.mock('react-router-dom', () => ({
@@ -25,15 +29,7 @@ const mockOnActionComplete = jest.fn();
 const mockOnShowStatus = jest.fn();
 const mockOnSelectionChange = jest.fn();
 
-const renderJob = (
-  job: EvaluationJob,
-  rowIndex = 0,
-  polledJobData?: EvaluationJob,
-  isKueueWorkloadStatusLoading = false,
-  // Enabled by default so the queued-display tests exercise the enabled path; the
-  // integration is disabled in production (RHOAIENG-99645).
-  isKueueEnabled = true,
-) =>
+const renderJob = (job: EvaluationJob, rowIndex = 0, polledJobData?: EvaluationJob) =>
   render(
     <MemoryRouter>
       <Table aria-label="test">
@@ -48,8 +44,6 @@ const renderJob = (
             onShowStatus={mockOnShowStatus}
             isSelected={false}
             onSelectionChange={mockOnSelectionChange}
-            isKueueWorkloadStatusLoading={isKueueWorkloadStatusLoading}
-            isKueueEnabled={isKueueEnabled}
           />
         </Tbody>
       </Table>
@@ -87,17 +81,20 @@ describe('EvaluationsTableRow', () => {
     expect(screen.getByTestId('evaluation-status-button')).toHaveTextContent('Running');
   });
 
-  it('should keep a pending job as Pending until Kueue reports a queued status', () => {
+  it('should render a pending job without a queue assignment as Pending', () => {
     renderRow({ state: 'pending' });
 
     expect(screen.getByTestId('evaluation-status')).toHaveTextContent('Pending');
   });
 
-  it('should show a neutral loading state while Kueue status is being checked', () => {
-    renderJob(mockEvaluationJob({ state: 'pending' }), 0, undefined, true);
+  it('should show Queued for a pending job assigned to a queue', () => {
+    const job = mockEvaluationJob({ state: 'pending' });
+    // eslint-disable-next-line camelcase -- API field name.
+    job.hardware_config = { queue: { name: 'default' } };
 
-    expect(screen.getByTestId('evaluation-status-loading')).toBeInTheDocument();
-    expect(screen.getByTestId('evaluation-status')).not.toHaveTextContent('Pending');
+    renderJob(job);
+
+    expect(screen.getByTestId('evaluation-status-button')).toHaveTextContent('Queued');
   });
 
   it('should preserve Queued when detail polling omits the queue assignment', () => {
@@ -111,14 +108,22 @@ describe('EvaluationsTableRow', () => {
     expect(screen.getByTestId('evaluation-status-button')).toHaveTextContent('Queued');
   });
 
-  it('should show Pending for a queue-assigned job when the Kueue integration is disabled', () => {
+  it('should pass the fallback queue to onShowStatus when detail polling omits the queue', () => {
     const job = mockEvaluationJob({ state: 'pending' });
     // eslint-disable-next-line camelcase -- API field name.
     job.hardware_config = { queue: { name: 'default' } };
+    const polledJob = mockEvaluationJob({ state: 'pending' });
 
-    renderJob(job, 0, undefined, false, false);
+    renderJob(job, 0, polledJob);
 
-    expect(screen.getByTestId('evaluation-status')).toHaveTextContent('Pending');
+    fireEvent.click(within(screen.getByTestId('evaluation-status-button')).getByRole('button'));
+
+    expect(mockOnShowStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // eslint-disable-next-line camelcase -- API field name.
+        hardware_config: expect.objectContaining({ queue: { name: 'default' } }),
+      }),
+    );
   });
 
   it('should open status using the latest polled job data', () => {
@@ -191,7 +196,6 @@ describe('EvaluationsTableRow', () => {
               onShowStatus={mockOnShowStatus}
               isSelected={false}
               onSelectionChange={mockOnSelectionChange}
-              isKueueEnabled
             />
           </Tbody>
         </Table>
@@ -424,6 +428,99 @@ describe('EvaluationsTableRow', () => {
       fireEvent.click(screen.getByTestId('evaluation-kebab').querySelector('button')!);
       fireEvent.click(screen.getByText('Reconfigure'));
       expect(mockNavigate).toHaveBeenCalledWith('/evaluation/test-ns/reconfigure/eval-job-retry');
+    });
+  });
+
+  describe('completion tracking', () => {
+    const renderTree = (job: EvaluationJob) => (
+      <MemoryRouter>
+        <Table aria-label="test">
+          <Tbody>
+            <EvaluationsTableRow
+              job={job}
+              rowIndex={0}
+              namespace="test-ns"
+              collectionNameMap={{}}
+              onActionComplete={mockOnActionComplete}
+              onShowStatus={mockOnShowStatus}
+              isSelected={false}
+              onSelectionChange={mockOnSelectionChange}
+            />
+          </Tbody>
+        </Table>
+      </MemoryRouter>
+    );
+
+    it('should track the status message code instead of raw error text when an evaluation fails', () => {
+      const runningJob = mockEvaluationJob({ state: 'running' });
+      const { rerender } = render(renderTree(runningJob));
+
+      const failedJob = mockEvaluationJob({
+        state: 'failed',
+        statusMessage: 'Benchmark arc_easy failed: user-provided-name already exists',
+      });
+      rerender(renderTree(failedJob));
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        'Evaluations Evaluation Completed',
+        expect.objectContaining({ runOutcome: 'failed', error: 'evaluation_job_updated' }),
+        expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
+      );
+      const trackedCall = mockTrackEvent.mock.calls.find(
+        ([eventName]) => eventName === 'Evaluations Evaluation Completed',
+      );
+      expect(JSON.stringify(trackedCall)).not.toContain('user-provided-name');
+    });
+
+    it('should track unknown_error when a failed evaluation has no message code', () => {
+      const runningJob = mockEvaluationJob({ state: 'running' });
+      const { rerender } = render(renderTree(runningJob));
+
+      const failedJob = mockEvaluationJob({ state: 'failed', statusMessage: 'Runtime crashed' });
+      // eslint-disable-next-line camelcase -- API field name.
+      delete failedJob.status.message?.message_code;
+      rerender(renderTree(failedJob));
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        'Evaluations Evaluation Completed',
+        expect.objectContaining({ runOutcome: 'failed', error: 'unknown_error' }),
+        expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
+      );
+    });
+
+    it('should omit the error category when the status message is empty', () => {
+      const runningJob = mockEvaluationJob({ state: 'running' });
+      const { rerender } = render(renderTree(runningJob));
+      const completedJob = mockEvaluationJob({ state: 'completed' });
+      completedJob.status.message = {};
+
+      rerender(renderTree(completedJob));
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        'Evaluations Evaluation Completed',
+        expect.objectContaining({ runOutcome: 'completed', error: undefined }),
+        expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
+      );
+    });
+
+    it('should replace an unrecognized message code with unknown_error', () => {
+      const marker = 'failed: private-resource-name';
+      const runningJob = mockEvaluationJob({ state: 'running' });
+      const { rerender } = render(renderTree(runningJob));
+      const failedJob = mockEvaluationJob({ state: 'failed', statusMessage: 'Runtime crashed' });
+      if (failedJob.status.message) {
+        // eslint-disable-next-line camelcase -- API field name.
+        failedJob.status.message.message_code = marker;
+      }
+
+      rerender(renderTree(failedJob));
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        'Evaluations Evaluation Completed',
+        expect.objectContaining({ runOutcome: 'failed', error: 'unknown_error' }),
+        expect.objectContaining({ pageContextPolicy: expect.any(Function) }),
+      );
+      expect(JSON.stringify(mockTrackEvent.mock.calls)).not.toContain(marker);
     });
   });
 });

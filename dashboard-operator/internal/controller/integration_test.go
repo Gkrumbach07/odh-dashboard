@@ -94,13 +94,15 @@ func TestMain(m *testing.M) {
 	}
 
 	ctx := context.Background()
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: integrationNamespace}}
-	if err := k8sClient.Create(ctx, ns); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create test namespace: %v\n", err)
-		if stopErr := testEnv.Stop(); stopErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to stop envtest: %v\n", stopErr)
+	for _, name := range []string{integrationNamespace, "openshift-console"} {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		if err := k8sClient.Create(ctx, ns); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create test namespace %s: %v\n", name, err)
+			if stopErr := testEnv.Stop(); stopErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to stop envtest: %v\n", stopErr)
+			}
+			os.Exit(1)
 		}
-		os.Exit(1)
 	}
 
 	code := m.Run()

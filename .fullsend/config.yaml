@@ -44,14 +44,10 @@ agents:
           challenger: openai/gpt-6.1-sol
           odh-sidecar-probe: openai/gpt-6-luna
           risk-assessment: openai/gpt-6-luna
-          user-experience: openai/gpt-6-luna
           correctness: openai/gpt-6.1-sol
           cross-repo-contracts: openai/gpt-6.1-sol
           docs-currency: openai/gpt-6-luna
           intent-coherence: openai/gpt-6.1-sol
-          investigator: openai/gpt-6-luna
-          # Rating's risk/confidence gates approval; tiny output, so pay for Sol.
-          rating: openai/gpt-6.1-sol
           security: openai/gpt-6.1-sol
           security-triage: openai/gpt-6-luna
           style-conventions: openai/gpt-6-luna

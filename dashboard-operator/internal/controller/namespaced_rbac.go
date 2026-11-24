@@ -37,14 +37,22 @@ func dashboardSAName(platform cluster.Platform) string {
 	}
 }
 
-// reconcileNamespacedRBAC creates or updates cross-namespace Roles and RoleBindings
-// for the dashboard SA in the notebooks and model-registry namespaces, then GCs
-// any resources left over in namespaces that are no longer in the desired set.
 func (r *DashboardReconciler) reconcileNamespacedRBAC(ctx context.Context, dashboard *v1alpha1.Dashboard) error {
 	saName := dashboardSAName(r.Platform)
 	saNamespace := r.ApplicationsNamespace
 
 	desired := map[string]bool{}
+	if r.Platform != cluster.XKS {
+		if err := r.applyNamespacedRBAC(ctx, saName, saNamespace, "openshift-console", "console-config", []rbacv1.PolicyRule{{
+			APIGroups:     []string{""},
+			Resources:     []string{"configmaps"},
+			ResourceNames: []string{"console-config"},
+			Verbs:         []string{"get"},
+		}}); err != nil {
+			return fmt.Errorf("console config RBAC in openshift-console: %w", err)
+		}
+		desired[namespacedRBACKey("openshift-console", "console-config")] = true
+	}
 
 	if ns := dashboard.Spec.NotebooksNamespace; ns != "" {
 		if err := r.applyNamespacedRBAC(ctx, saName, saNamespace, ns, "notebooks", notebooksRBACRules()); err != nil {

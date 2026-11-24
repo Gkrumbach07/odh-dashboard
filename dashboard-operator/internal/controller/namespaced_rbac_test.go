@@ -118,12 +118,11 @@ func TestReconcileNamespacedRBAC_BothNamespaces(t *testing.T) {
 	err := r.ReconcileNamespacedRBAC(context.Background(), dashboard)
 	require.NoError(t, err)
 
-	// Expect 2 Roles and 2 RoleBindings
 	roles := listRoles(t, cli)
-	assert.Len(t, roles, 2)
+	assert.Len(t, roles, 3)
 
 	rbs := listRoleBindings(t, cli)
-	assert.Len(t, rbs, 2)
+	assert.Len(t, rbs, 3)
 
 	// Verify notebooks Role is in the right namespace with the right rules
 	notebooksRole := getRole(t, cli, testNotebooksNS, "dashboard-notebooks-role")
@@ -148,8 +147,6 @@ func TestReconcileNamespacedRBAC_BothNamespaces(t *testing.T) {
 	assert.Equal(t, "rhods-dashboard", mrRB.Subjects[0].Name)
 }
 
-// TestReconcileNamespacedRBAC_OnlyNotebooks verifies only notebooks RBAC is created
-// when ModelRegistryNamespace is empty.
 func TestReconcileNamespacedRBAC_OnlyNotebooks(t *testing.T) {
 	r, cli := newReconciler(t, cluster.OpenDataHub)
 	dashboard := newRBACDashboard(testNotebooksNS, "")
@@ -158,19 +155,17 @@ func TestReconcileNamespacedRBAC_OnlyNotebooks(t *testing.T) {
 	require.NoError(t, err)
 
 	roles := listRoles(t, cli)
-	assert.Len(t, roles, 1)
-	assert.Equal(t, testNotebooksNS, roles[0].Namespace)
+	assert.Len(t, roles, 2)
+	getRole(t, cli, testNotebooksNS, "dashboard-notebooks-role")
 
 	rbs := listRoleBindings(t, cli)
-	assert.Len(t, rbs, 1)
+	assert.Len(t, rbs, 2)
 
 	// ODH platform uses odh-dashboard SA
 	rb := getRoleBinding(t, cli, testNotebooksNS, "dashboard-notebooks-rolebinding")
 	assert.Equal(t, "odh-dashboard", rb.Subjects[0].Name)
 }
 
-// TestReconcileNamespacedRBAC_OnlyModelRegistry verifies only model-registry RBAC
-// is created when NotebooksNamespace is empty.
 func TestReconcileNamespacedRBAC_OnlyModelRegistry(t *testing.T) {
 	r, cli := newReconciler(t, cluster.OpenDataHub)
 	dashboard := newRBACDashboard("", testModelRegistryNS)
@@ -179,15 +174,13 @@ func TestReconcileNamespacedRBAC_OnlyModelRegistry(t *testing.T) {
 	require.NoError(t, err)
 
 	roles := listRoles(t, cli)
-	assert.Len(t, roles, 1)
-	assert.Equal(t, testModelRegistryNS, roles[0].Namespace)
+	assert.Len(t, roles, 2)
+	getRole(t, cli, testModelRegistryNS, "dashboard-model-registry-role")
 
 	rbs := listRoleBindings(t, cli)
-	assert.Len(t, rbs, 1)
+	assert.Len(t, rbs, 2)
 }
 
-// TestReconcileNamespacedRBAC_NoNamespaces verifies nothing is created when both
-// namespace fields are empty.
 func TestReconcileNamespacedRBAC_NoNamespaces(t *testing.T) {
 	r, cli := newReconciler(t, cluster.OpenDataHub)
 	dashboard := newRBACDashboard("", "")
@@ -195,8 +188,50 @@ func TestReconcileNamespacedRBAC_NoNamespaces(t *testing.T) {
 	err := r.ReconcileNamespacedRBAC(context.Background(), dashboard)
 	require.NoError(t, err)
 
-	assert.Empty(t, listRoles(t, cli))
-	assert.Empty(t, listRoleBindings(t, cli))
+	assert.Len(t, listRoles(t, cli), 1)
+	assert.Len(t, listRoleBindings(t, cli), 1)
+}
+
+func TestReconcileNamespacedRBAC_ConsoleConfig(t *testing.T) {
+	for _, tc := range []struct {
+		platform cluster.Platform
+		saName   string
+	}{
+		{cluster.OpenDataHub, "odh-dashboard"},
+		{cluster.SelfManagedRhoai, "rhods-dashboard"},
+	} {
+		t.Run(string(tc.platform), func(t *testing.T) {
+			r, cli := newReconciler(t, tc.platform)
+			require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), newRBACDashboard("", "")))
+
+			role := getRole(t, cli, "openshift-console", "dashboard-console-config-role")
+			require.Equal(t, []rbacv1.PolicyRule{{
+				APIGroups:     []string{""},
+				Resources:     []string{"configmaps"},
+				ResourceNames: []string{"console-config"},
+				Verbs:         []string{"get"},
+			}}, role.Rules)
+
+			rb := getRoleBinding(t, cli, "openshift-console", "dashboard-console-config-rolebinding")
+			require.Equal(t, []rbacv1.Subject{{
+				Kind:      rbacv1.ServiceAccountKind,
+				Name:      tc.saName,
+				Namespace: testAppNamespace,
+			}}, rb.Subjects)
+			assert.Equal(t, "dashboard-console-config-role", rb.RoleRef.Name)
+		})
+	}
+}
+
+func TestReconcileNamespacedRBAC_XKSSkipsConsoleConfig(t *testing.T) {
+	r, cli := newReconciler(t, cluster.XKS)
+	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), newRBACDashboard(testNotebooksNS, "")))
+
+	roles := listRoles(t, cli)
+	require.Len(t, roles, 1)
+	assert.Equal(t, testNotebooksNS, roles[0].Namespace)
+	assert.Equal(t, "dashboard-notebooks-role", roles[0].Name)
+	assert.Len(t, listRoleBindings(t, cli), 1)
 }
 
 // TestReconcileNamespacedRBAC_Idempotent verifies that reconciling twice produces
@@ -208,9 +243,8 @@ func TestReconcileNamespacedRBAC_Idempotent(t *testing.T) {
 	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), dashboard))
 	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), dashboard))
 
-	// Should still be exactly 2 of each
-	assert.Len(t, listRoles(t, cli), 2)
-	assert.Len(t, listRoleBindings(t, cli), 2)
+	assert.Len(t, listRoles(t, cli), 3)
+	assert.Len(t, listRoleBindings(t, cli), 3)
 }
 
 // TestReconcileNamespacedRBAC_UpdateExistingRole verifies that reconcile updates
@@ -263,7 +297,7 @@ func TestReconcileNamespacedRBAC_GCStaleOnNamespaceChange(t *testing.T) {
 	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), dashboard))
 
 	// Verify old resources exist
-	assert.Len(t, listRoles(t, cli), 1)
+	assert.Len(t, listRoles(t, cli), 2)
 	getRole(t, cli, oldNS, "dashboard-notebooks-role")
 
 	// Second reconcile with new namespace
@@ -272,30 +306,29 @@ func TestReconcileNamespacedRBAC_GCStaleOnNamespaceChange(t *testing.T) {
 
 	// Old namespace resources should be gone
 	roles := listRoles(t, cli)
-	assert.Len(t, roles, 1, "should have exactly one role (in new namespace)")
-	assert.Equal(t, newNS, roles[0].Namespace)
+	assert.Len(t, roles, 2)
+	getRole(t, cli, newNS, "dashboard-notebooks-role")
+	getRole(t, cli, "openshift-console", "dashboard-console-config-role")
 
 	rbs := listRoleBindings(t, cli)
-	assert.Len(t, rbs, 1)
-	assert.Equal(t, newNS, rbs[0].Namespace)
+	assert.Len(t, rbs, 2)
+	getRoleBinding(t, cli, newNS, "dashboard-notebooks-rolebinding")
 }
 
-// TestReconcileNamespacedRBAC_GCStaleOnNamespaceRemoved verifies that when both
-// namespace fields are cleared, all managed resources are removed.
 func TestReconcileNamespacedRBAC_GCStaleOnNamespaceRemoved(t *testing.T) {
 	r, cli := newReconciler(t, cluster.OpenDataHub)
 	dashboard := newRBACDashboard(testNotebooksNS, testModelRegistryNS)
 
 	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), dashboard))
-	assert.Len(t, listRoles(t, cli), 2)
+	assert.Len(t, listRoles(t, cli), 3)
 
 	// Clear both namespaces
 	dashboard.Spec.NotebooksNamespace = ""
 	dashboard.Spec.ModelRegistryNamespace = ""
 	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), dashboard))
 
-	assert.Empty(t, listRoles(t, cli))
-	assert.Empty(t, listRoleBindings(t, cli))
+	assert.Len(t, listRoles(t, cli), 1)
+	assert.Len(t, listRoleBindings(t, cli), 1)
 }
 
 // TestCleanupNamespacedRBAC verifies that cleanup deletes all managed resources
@@ -305,7 +338,7 @@ func TestCleanupNamespacedRBAC(t *testing.T) {
 	dashboard := newRBACDashboard(testNotebooksNS, testModelRegistryNS)
 
 	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), dashboard))
-	assert.Len(t, listRoles(t, cli), 2)
+	assert.Len(t, listRoles(t, cli), 3)
 
 	err := r.CleanupNamespacedRBAC(context.Background())
 	require.NoError(t, err)
@@ -330,7 +363,7 @@ func TestGCStaleNamespacedRBAC_OnlyRemovesNonDesired(t *testing.T) {
 	dashboard := newRBACDashboard(testNotebooksNS, testModelRegistryNS)
 
 	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), dashboard))
-	assert.Len(t, listRoles(t, cli), 2)
+	assert.Len(t, listRoles(t, cli), 3)
 
 	// GC keeping only model-registry namespace (key is "ns/suffix", matching namespacedRBACKey)
 	desired := map[string]bool{testModelRegistryNS + "/model-registry": true}
@@ -353,7 +386,7 @@ func TestGCStaleNamespacedRBAC_EmptyDesiredDeletesAll(t *testing.T) {
 	dashboard := newRBACDashboard(testNotebooksNS, testModelRegistryNS)
 
 	require.NoError(t, r.ReconcileNamespacedRBAC(context.Background(), dashboard))
-	assert.Len(t, listRoles(t, cli), 2)
+	assert.Len(t, listRoles(t, cli), 3)
 
 	err := r.GCStaleNamespacedRBAC(context.Background(), map[string]bool{})
 	require.NoError(t, err)
@@ -483,7 +516,7 @@ func TestReconcileNamespacedRBAC_SameNamespaceBothComponents(t *testing.T) {
 	require.NoError(t, err)
 
 	roles := listRoles(t, cli)
-	assert.Len(t, roles, 2)
+	assert.Len(t, roles, 3)
 
 	// Both roles in the shared namespace
 	getRole(t, cli, sharedNS, "dashboard-notebooks-role")

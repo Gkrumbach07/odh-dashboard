@@ -621,6 +621,14 @@ func (r *DashboardReconciler) reconcileDeployment(
 		return ctrl.Result{}, fmt.Errorf("failed to repair Service port drift: %w", err)
 	}
 
+	rbacErr := r.reconcileNamespacedRBAC(ctx, dashboard)
+	if rbacErr != nil {
+		logger.Error(rbacErr, "Failed to reconcile namespaced RBAC")
+		cm.MarkTrue(string(common.ConditionTypeDegraded),
+			conditions.WithReason("NamespacedRBACFailed"),
+			conditions.WithError(rbacErr))
+	}
+
 	deployer := deploy.NewDeployer(
 		deploy.WithFieldOwner("dashboard-operator"),
 		deploy.WithLabel(labels.PlatformPartOf, strings.ToLower(v1alpha1.DashboardKind)),
@@ -665,15 +673,6 @@ func (r *DashboardReconciler) reconcileDeployment(
 	preserveModuleStatusTransitionTimes(dashboard.Status.ModuleStatuses, nextStatuses)
 	dashboard.Status.ModuleStatuses = nextStatuses
 	r.setMaaSPortalModuleCondition(cm, dashboard, nextStatuses)
-
-	// Reconcile cross-namespace RBAC (notebooks, model-registry)
-	rbacErr := r.reconcileNamespacedRBAC(ctx, dashboard)
-	if rbacErr != nil {
-		logger.Error(rbacErr, "Failed to reconcile namespaced RBAC")
-		cm.MarkTrue(string(common.ConditionTypeDegraded),
-			conditions.WithReason("NamespacedRBACFailed"),
-			conditions.WithError(rbacErr))
-	}
 
 	// A failed lookup leaves observability unknown, not disabled. Preserve its
 	// resources and Perses entry while reconciling the remaining federation entries.

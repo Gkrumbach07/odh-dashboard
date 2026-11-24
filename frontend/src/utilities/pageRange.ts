@@ -2,8 +2,8 @@
  * Returns the items shown on a given 1-based page.
  */
 export const getPageItems = <T>(items: T[], page: number, perPage: number): T[] => {
-  const start = page * perPage;
-  const end = start + perPage + 1;
+  const start = (page - 1) * perPage;
+  const end = start + perPage;
   return items.slice(start, end);
 };
 

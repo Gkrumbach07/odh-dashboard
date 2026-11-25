@@ -144,6 +144,8 @@ FAILURE_REASONS = ("tool-failure", "missing-context", "ambiguous-findings", "tok
 RISK_LEVELS = ("low", "medium", "high", "critical")
 CONFIDENCE_LEVELS = ("low", "medium", "high")
 CHALLENGER_ACTIONS = ("kept", "downgraded", "merged", "removed", "justified")
+HOST_CHALLENGER_ACTIONS = ("kept", "downgraded", "removed", "justified")
+HOST_REF_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}-[0-9]{1,4}")
 # Categories the stock orchestrator raises itself and never hands the challenger.
 UNCHALLENGED_CATEGORIES = frozenset({
     "sub-agent-failure", "protected-path", "provenance-warning", "scope-authorization-implicit",
@@ -382,6 +384,75 @@ def transcript_personas(path):
     return found or None
 
 
+def unreturned_personas(path):
+    """Personas whose sub-agent ended without a result, from the runner's records.
+
+    The stock agent drops an info-tier sub-agent-failure finding below the
+    severity threshold, so the result alone cannot show that a reviewer
+    failed. Two host-side records can: the usage ledger marks an errored
+    sub-agent, and a transcript that does not end in assistant text never
+    produced an answer. A record that cannot be read says nothing."""
+    failed = set()
+    try:
+        names = os.listdir(path) if path and os.path.isdir(path) else []
+    except OSError:
+        names = []
+    for name in names:
+        full = os.path.join(path, name)
+        if name == "review-subagents-usage.jsonl":
+            for record in read_jsonl(full):
+                persona = record.get("persona")
+                if record.get("isError") is True and isinstance(persona, str) and DIMENSION_RE.fullmatch(persona):
+                    failed.add(persona)
+            continue
+        match = TRANSCRIPT_RE.match(name)
+        if not match:
+            continue
+        last = None
+        for record in read_jsonl(full):
+            if record.get("type") == "message" and isinstance(record.get("message"), dict):
+                last = record["message"]
+        if last is None:
+            continue
+        content = last.get("content")
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else (content or [])
+        answered = last.get("role") == "assistant" and any(
+            isinstance(b, dict) and b.get("type") == "text" and str(b.get("text") or "").strip() for b in blocks)
+        if not answered:
+            failed.add(match.group(1))
+    return failed
+
+
+def read_jsonl(path):
+    records = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict):
+                    records.append(record)
+    except OSError:
+        pass
+    return records
+
+
+def product_ask_status(section):
+    """Overall product-ask status and needs_human, rolled up from issues[] like the renderer does."""
+    status = section.get("status")
+    needs_human = section.get("needs_human")
+    issues = section.get("issues")
+    if isinstance(issues, list) and issues:
+        rank = {"mismatch-unjustified": 3, "mismatch-justified": 2, "aligned": 1, "none": 0}
+        best = max((rank.get((i.get("status") if isinstance(i, dict) else None) or "none", 0) for i in issues), default=0)
+        status = {v: k for k, v in rank.items()}[best]
+        if any(isinstance(i, dict) and i.get("needs_human") for i in issues):
+            needs_human = True
+    return status, needs_human
+
+
 def load_policy(config_dir):
     """The lists of rating-policy.json the TODO recipe needs, with the host defaults."""
     policy = {
@@ -436,7 +507,13 @@ def build_todo(out, config_dir, labels):
     if out["confidence"]["level"] in policy["confidence_refuse_approve"]:
         add("judgement", f"A human must decide whether to approve: confidence is {out['confidence']['level']}. {out['confidence']['why']}")
     section = out.get("product_ask") or {}
-    if section.get("needs_human") or (section.get("status") == "mismatch-unjustified" and "needs_human" not in section):
+    ask_status, ask_needs_human = product_ask_status(section)
+    if ask_status == "mismatch-unjustified":
+        # The renderer stamps needs_human from policy for this status.
+        loaded = load_json(os.path.join(config_dir, "rating-policy.json")) if config_dir else None
+        rules = ((loaded or {}).get("product_ask") or {}).get("mismatch_unjustified") if isinstance(loaded, dict) else None
+        ask_needs_human = bool(rules.get("needs_human", True)) if isinstance(rules, dict) else True
+    if ask_needs_human:
         add("judgement", "Decide whether the PR can go ahead although it does not match the linked issue (see Product ask).")
     for finding in posted:
         if finding["severity"] in ("low", "info") and finding.get("actionable") is True:
@@ -487,6 +564,7 @@ def normalize(result_path, side_dir, manifest_path, transcripts_dir):
     raised = {}
     adapters = []
     host_findings = []
+    host_refs = {}
     for row in adapter_rows:
         entry = {"id": row["id"]}
         envelope = envelopes.get(row["id"])
@@ -504,7 +582,7 @@ def normalize(result_path, side_dir, manifest_path, transcripts_dir):
             continue
         categories = [c for c in (row.get("categories") or []) if text(c)]
         mine = []
-        for raw in envelope.get("findings") if isinstance(envelope.get("findings"), list) else []:
+        for position, raw in enumerate(envelope.get("findings") if isinstance(envelope.get("findings"), list) else [], 1):
             finding = clean_finding(raw, strict=True)
             if not finding:
                 continue
@@ -512,8 +590,10 @@ def normalize(result_path, side_dir, manifest_path, transcripts_dir):
                 finding["category"] = categories[0]
             finding["dimension"] = row["id"]
             finding.pop("id", None)
+            # The ref pre-review.sh gave this finding in host-findings.json.
+            host_refs[id(finding)] = f"{row['id']}-{position}"
             mine.append(finding)
-        raised[row["id"]] = mine
+        raised[row["id"]] = [dict(f) for f in mine]
         host_findings += mine
 
     # Challenger audit.
@@ -532,6 +612,39 @@ def normalize(result_path, side_dir, manifest_path, transcripts_dir):
                 if action == "merged" and not isinstance(raw.get("merged_into"), dict):
                     action = "merged-survivor"
                 adjudicated.append((finding, action, text(raw.get("challenger_reason"))))
+    # The challenger's decisions on host adapter findings, by ref. The host
+    # list stays the source of truth: a finding leaves it only on an explicit
+    # removed or justified decision that carries a reason, and anything the
+    # challenger omits or garbles stays as the adapter reported it.
+    host_removed = []
+    host_counts = {"kept": 0, "downgraded": 0}
+    if adjudicated is not None and isinstance(audit.get("host_adjudicated"), list):
+        decisions = {}
+        for raw in audit["host_adjudicated"]:
+            if not isinstance(raw, dict) or not isinstance(raw.get("ref"), str):
+                continue
+            ref = raw["ref"].strip()
+            action = raw.get("challenger_action")
+            if HOST_REF_RE.fullmatch(ref) and ref not in decisions and action in HOST_CHALLENGER_ACTIONS:
+                decisions[ref] = (action, text(raw.get("challenger_reason")), raw.get("severity"))
+        remaining = []
+        for finding in host_findings:
+            action, reason, severity = decisions.get(host_refs.get(id(finding)), (None, "", None))
+            if action in ("removed", "justified") and reason:
+                entry = dict(finding)
+                entry["challenger_action"] = action
+                entry["removal_reason"] = reason
+                host_removed.append(entry)
+                continue
+            if action == "downgraded" and reason and severity in SEVERITIES \
+                    and SEVERITIES.index(severity) > SEVERITIES.index(finding["severity"]):
+                finding["severity"] = severity
+                host_counts["downgraded"] += 1
+            elif action is not None:
+                host_counts["kept"] += 1
+            remaining.append(finding)
+        host_findings = remaining
+
     # Readiness checks, product ask and rating, each from its persona's side file.
     reported = set()
     checks = []
@@ -589,6 +702,21 @@ def normalize(result_path, side_dir, manifest_path, transcripts_dir):
         if not (f["category"] == "sub-agent-failure" and f["severity"] == "info"
                 and finding_dimensions(f) and all(d in reported for d in finding_dimensions(f)))
     ]
+    # A findings reviewer that ended without a result, whose failure finding
+    # the agent dropped below the severity threshold: put the finding back.
+    unreturned = unreturned_personas(transcripts_dir)
+    already_failed = {d for f in agent_findings if f["category"] == "sub-agent-failure" for d in finding_dimensions(f)}
+    heard_from = {d for f in agent_findings + (as_raised or []) if f["category"] != "sub-agent-failure"
+                  for d in finding_dimensions(f)}
+    for row in reviewer_rows:
+        rid = row["id"]
+        if output_kind(row) == "findings" and rid in unreturned and rid not in already_failed and rid not in heard_from:
+            agent_findings.append({
+                "severity": "info", "category": "sub-agent-failure", "file": "N/A",
+                "description": f"The {rid} sub-agent did not return findings: its run ended without a result.",
+                "actionable": False, "dimension": rid,
+            })
+            notes.append(f"The {row_label(row)} reviewer did not return a result, so its part of the review is missing.")
     failed_dimensions = set()
     for finding in agent_findings:
         if finding["category"] == "sub-agent-failure":
@@ -624,13 +752,14 @@ def normalize(result_path, side_dir, manifest_path, transcripts_dir):
                 if reason:
                     entry["removal_reason"] = reason
                 removed.append(entry)
+        removed += host_removed
         challenger = {
             "status": "ran",
-            "input": len(as_raised),
-            "kept": count("kept", "merged-survivor"),
+            "input": len(as_raised) + len(host_removed) + host_counts["kept"] + host_counts["downgraded"],
+            "kept": count("kept", "merged-survivor") + host_counts["kept"],
             "removed": len(removed),
             "merged": count("merged"),
-            "downgraded": count("downgraded"),
+            "downgraded": count("downgraded") + host_counts["downgraded"],
             "removed_findings": removed,
         }
     elif audit_present:
@@ -638,9 +767,15 @@ def normalize(result_path, side_dir, manifest_path, transcripts_dir):
         challenger = {"status": "ran"}
         notes.append("The challenger's audit could not be read, so what it removed or justified is not shown.")
     elif not challengeable:
-        challenger = {"status": "skipped", "reason": (
-            "no reviewer findings to adjudicate (host adapter findings are not challenged)"
-            if host_findings else "no findings to adjudicate")}
+        # "no finding…" claims an empty set, which the renderer checks against
+        # the findings shown; say what was left out when the set was not empty.
+        if agent_findings:
+            reason = "the only reviewer findings are ones the orchestrator raises itself, which are not challenged"
+        elif host_findings:
+            reason = "no reviewer findings to adjudicate (host adapter findings are challenged only alongside them)"
+        else:
+            reason = "no findings to adjudicate"
+        challenger = {"status": "skipped", "reason": reason}
     else:
         challenger = {"status": "skipped", "reason": (
             "no challenger audit was recorded (low time budget, or the audit was not written)")}
@@ -4381,7 +4516,7 @@ Draft202012Validator(json.load(open(sys.argv[1], encoding='utf-8'))).validate(js
   norm_run
   norm_expect "CodeRabbit finding alone counts toward the verdict without a challenger contradiction" \
     '.action == "request-changes" and .confidence.level == "high"' \
-    '^Skipped — no reviewer findings to adjudicate \(host adapter findings are not challenged\)\.$'
+    '^Skipped — no reviewer findings to adjudicate \(host adapter findings are challenged only alongside them\)\.$'
 
   # A side-file persona reported as failed although its side file is valid ran;
   # without the side file the failure stands.
@@ -4482,6 +4617,80 @@ Draft202012Validator(json.load(open(sys.argv[1], encoding='utf-8'))).validate(js
      and ([.producers.skipped[] | select(.id == "correctness" or .id == "rbac-review") | .reason] == ["not selected", "not selected"])' \
     '^\| Security \| findings \| ✅ \| No findings\. \|' '^\| Correctness \| findings \| ➖ \| not selected \|' \
     '^\| PR description \| check \| ➖ \| ran but did not report \|'
+
+  # A findings reviewer that ended without a result is a failure even when the
+  # agent dropped its info-tier failure finding: the usage ledger or the
+  # transcript's last message shows it.
+  norm_setup unreturned
+  mkdir -p "${case_dir}/transcripts"
+  answered='{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"[]"}]}}'
+  printf '%s\n' "${answered}" > "${case_dir}/transcripts/review-sub1-security-2026-11-24T20-19-17-256Z_01a2.jsonl"
+  printf '%s\n' "${answered}" '{"type":"message","message":{"role":"toolResult","content":[{"type":"text","text":"x"}]}}' \
+    > "${case_dir}/transcripts/review-sub2-style-conventions-2026-11-24T20-19-17-350Z_01a2.jsonl"
+  printf '%s\n' "${answered}" > "${case_dir}/transcripts/review-sub3-docs-currency-2026-11-24T20-19-18-350Z_01a2.jsonl"
+  printf '%s\n' '{"seq":3,"persona":"docs-currency","stopReason":"error","isError":true}' '{"seq":1,"persona":"security","stopReason":"stop","isError":false}' \
+    > "${case_dir}/transcripts/review-subagents-usage.jsonl"
+  norm_run
+  norm_expect "a reviewer that ended without a result is shown as failed" \
+    '(.producers.dispatched | index("security") and (index("style-conventions") | not) and (index("docs-currency") | not))
+     and ([.producers.skipped[] | select(.id == "style-conventions" or .id == "docs-currency") | .reason] | unique == ["did not return a result (sub-agent failure)"])
+     and (.inspected.could_not_verify | map(select(test("did not return a result"))) | length == 2)' \
+    '^\| Docs currency \| findings \| ➖ \| did not return a result \(sub-agent failure\) \|'
+  if [[ "$(jq -c '[.findings[] | select(.category == "sub-agent-failure") | .dimension] | sort' "${norm}")" != '["docs-currency","style-conventions"]' ]]; then
+    echo "FAIL normalize unreturned: the dropped failure findings were not put back" >&2
+    fail=1
+  fi
+
+  # The challenger's decisions on host findings: an explicit removed or
+  # justified with a reason takes a CodeRabbit finding out, a downgrade lowers
+  # it, and anything else (kept, no entry, no reason, unknown ref, a raise in
+  # severity) leaves it as reported.
+  norm_setup host-adjudicated
+  cr() { jq -cn --arg s "$1" --arg f "$2" --arg d "$3" '{severity: $s, category: "coderabbit", file: $f, line: "3", description: $d, actionable: true}'; }
+  jq -n --argjson f "[$(cr high a.ts "Duplicate of the reviewer finding."),$(cr high b.ts "Author justified this one."),$(cr high c.ts "Severity is inflated here."),$(cr medium d.ts "Removal without a reason given."),$(cr medium e.ts "The challenger left this out."),$(cr low f.ts "The challenger tried to raise this.")]" \
+    '[{id:"coderabbit",dimension:"coderabbit",kind:"cli-adapter",output:"findings",status:"ok",findings:$f}]' > "${case_dir}/config/.run/collected.json"
+  rev='{"severity":"medium","category":"logic-error","file":"a.ts","line":3,"description":"Index is off by one.","actionable":true,"dimension":"correctness"}'
+  jq --argjson f "${rev}" '.findings = [$f]' "${case_dir}/output/agent-result.json" > "${case_dir}/r.json" && mv "${case_dir}/r.json" "${case_dir}/output/agent-result.json"
+  jq -n --argjson f "${rev}" '{as_raised: [$f], adjudicated: [$f + {challenger_action: "kept", challenger_reason: "Confirmed in source."}],
+    host_adjudicated: [
+      {ref: "coderabbit-1", challenger_action: "removed", challenger_reason: "Same defect as the kept logic-error at a.ts:3."},
+      {ref: "coderabbit-2", challenger_action: "justified", challenger_reason: "The PR Justifications cover it and the diff agrees."},
+      {ref: "coderabbit-3", challenger_action: "downgraded", severity: "low", challenger_reason: "Only a test helper is affected."},
+      {ref: "coderabbit-4", challenger_action: "removed"},
+      {ref: "coderabbit-6", challenger_action: "downgraded", severity: "critical", challenger_reason: "Looks worse."},
+      {ref: "coderabbit-99", challenger_action: "removed", challenger_reason: "No such finding."},
+      {ref: "../etc", challenger_action: "removed", challenger_reason: "Bad ref."}]}' > "${case_dir}/output/odh/challenger.json"
+  norm_run
+  norm_expect "the challenger's decisions on CodeRabbit findings are applied" \
+    '([.findings[] | select(.dimension == "coderabbit") | [.file, .severity]] == [["c.ts","low"],["d.ts","medium"],["e.ts","medium"],["f.ts","low"]])
+     and ([.producers.challenger.removed_findings[] | [.file, .challenger_action]] == [["a.ts","removed"],["b.ts","justified"]])
+     and (.producers.challenger | .input == 6 and .kept == 3 and .removed == 2 and .downgraded == 1)
+     and (.producers.raised.coderabbit | length == 6 and .[2].severity == "high")' \
+    'Same defect as the kept logic-error'
+  if ! sticky_input_valid "${norm}"; then
+    echo "FAIL normalize host-adjudicated: sticky input is not schema-valid" >&2
+    fail=1
+  fi
+
+  # Findings the stock orchestrator never hands the challenger do not make an
+  # empty-set skip look contradictory.
+  norm_setup orchestrator-only
+  jq '.findings = [{severity: "medium", category: "scope-authorization-implicit", file: "a.ts", description: "The change relies on implied scope.", actionable: false}]' \
+    "${case_dir}/output/agent-result.json" > "${case_dir}/r.json" && mv "${case_dir}/r.json" "${case_dir}/output/agent-result.json"
+  norm_run
+  norm_expect "unchallenged findings do not read as a challenger contradiction" \
+    '(.producers.challenger.reason | startswith("the only reviewer findings")) and .confidence.level == "high"
+     and (.body | contains("was marked skipped") | not)'
+
+  # An issue-level unjustified mismatch reaches the TODO although the persona's
+  # top-level status says aligned.
+  norm_setup ask-rollup
+  printf '%s' '{"product_ask":{"status":"aligned","aligned":[],"mismatched":[],"needs_human":false,"issues":[{"key":"RHOAIENG-1","status":"mismatch-unjustified","mismatched":["The issue asks for a different page."]}]}}' \
+    > "${case_dir}/output/odh/product-ask-review.json"
+  norm_run
+  norm_expect "an issue-level unjustified mismatch adds a TODO item" \
+    '.product_ask.status == "mismatch-unjustified"
+     and ([.todo[]? | select(.category == "judgement") | .text] | any(startswith("Decide whether the PR can go ahead")))'
 
   if [[ "${fail}" -ne 0 ]]; then
     exit 1

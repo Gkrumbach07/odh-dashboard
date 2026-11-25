@@ -121,8 +121,9 @@ Layout, in order:
 4. `## Findings`, grouped by severity, then `### Justified (N)` when present.
    On `approve` with neither, the host renders "Looks good to me."
 5. `## Product ask`
-6. `## TODO` (omitted when empty). The host adds one item: the protected-path
-   notice when a changed file matches `REVIEW_PROTECTED_PATHS`.
+6. `## TODO` (omitted when empty). The host builds it from the findings,
+   checks and verdict, and adds the protected-path notice when a changed file
+   matches `REVIEW_PROTECTED_PATHS`.
 7. Collapsed **Review details**: Producers, Challenger (counts and the removed
    audit), Evidence inspected, Labels
 
@@ -310,9 +311,13 @@ GitHub.
   under Product ask.
 - **CodeRabbit.** [`fetch-coderabbit-context.sh`](scripts/fetch-coderabbit-context.sh)
   runs `coderabbit review --agent --deep --remote` and writes at most 50
-  normalized findings. They never enter the sandbox. `post-review.sh` merges
-  them into the findings under the `coderabbit` category; they count toward
-  the action by severity like any other finding.
+  normalized findings. `post-review.sh` merges them into the findings under
+  the `coderabbit` category; they count toward the action by severity like
+  any other finding. The challenger weighs them too: they are staged for it
+  as `host-findings.json`, and it can remove a duplicate or false positive,
+  mark one justified, or lower a severity. The host applies those decisions
+  and keeps any finding the challenger did not explicitly decide (contract
+  in [`personas/README.md`](personas/README.md)).
 - **PR images.** [`fetch-pr-images.sh`](scripts/fetch-pr-images.sh) captures
   GitHub-hosted images referenced by the PR body and issue comments and
   stages `pr-images.json` and `pr-images.tar.gz` for `test-impact-review`.
@@ -399,11 +404,12 @@ header documents the RHOAI MLflow values and the `recover` modes
 (`mark-only`, `resend`, `bridge-only`).
 
 **Which runs are traced.** Only runs of this repository's `fullsend.yaml` for
-`pull_request_target`, `issue_comment`, `issues`, `workflow_dispatch` or
-`schedule`, and other than `pull_request_target` only from the default
-branch. A run for any other event, `pull_request` included, is skipped. PR
-identity is resolved only for `pull_request_target` runs, so a `/fs-review`
-run is traced without PR identity, coverage or posted verdict.
+`pull_request`, `pull_request_target`, `issue_comment`, `issues`,
+`workflow_dispatch` or `schedule`. A `pull_request` run is traced only for a
+same-repo PR whose head leaves `fullsend.yaml` unchanged; the other events
+only from the default branch. PR identity is resolved for `pull_request` and
+`pull_request_target` runs, so a `/fs-review` run is traced without PR
+identity, coverage or posted verdict.
 
 | Span | Contents |
 | --- | --- |
@@ -448,13 +454,15 @@ its own orchestrator.
 - Rating runs in parallel with the other reviewers and does not see findings,
   checks, product ask or the challenger's output. The host applies the caps
   and floors afterwards.
-- CodeRabbit findings are merged on the host and do not pass through the
-  challenger.
+- CodeRabbit findings are merged on the host. The challenger weighs them
+  when it runs, but the stock orchestrator skips the challenger when the
+  reviewers raise nothing, so a PR with only CodeRabbit findings gets them
+  unchallenged. They are not deduplicated against each other.
 - Checks and product ask come from side files. When a reviewer does not
   write one, a check shows `could-not-verify`, and product ask is omitted with
   a note under Evidence inspected.
-- The orchestrator no longer synthesizes `## TODO`; only the host's
-  protected-path item appears there.
+- The orchestrator no longer synthesizes `## TODO`. The host builds it from
+  the findings, checks and verdict with a fixed recipe.
 - The local orchestrator `SKILL.md`, `agents/review.md`, the vendored stock
   personas, the meta-prompts and the `producers.json` ledger are gone.
 - Finding categories are the stock ones:

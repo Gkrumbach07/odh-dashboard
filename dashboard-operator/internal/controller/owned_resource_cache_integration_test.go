@@ -57,7 +57,7 @@ func TestIntegration_ManagerCacheScopesOwnedResources(t *testing.T) {
 	const externalNamespace = "cache-external"
 	directClient, err := client.New(cfg, client.Options{Scheme: s})
 	require.NoError(t, err)
-	for _, namespace := range []string{applicationsNamespace, externalNamespace} {
+	for _, namespace := range []string{applicationsNamespace, externalNamespace, "openshift-console"} {
 		require.NoError(t, directClient.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}))
 	}
 
